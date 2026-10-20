@@ -11,8 +11,10 @@ import {
   max,
   min,
   mix,
+  normalView,
   normalWorld,
   positionView,
+  positionViewDirection,
   positionWorld,
   positionWorldDirection,
   pow,
@@ -81,6 +83,11 @@ export interface RoomArt {
   orb: THREE.Object3D;
   /** Warm flash of the vidro (refusal, the drop arriving), linear. */
   orbGlow: FloatUniform;
+  /**
+   * 調べられる物に近づくと縁が淡く光る (UI/UX設計 > 画面ごとの設計 > ゲーム中): 0..1 per thing you can act on,
+   * eased by the room (0.2 s).
+   */
+  focus: { orb: FloatUniform; pedestal: FloatUniform; drop: FloatUniform };
   /** Light of the placed vidro. */
   orbLight: THREE.PointLight;
   /** The light drop (back layer). */
@@ -357,6 +364,14 @@ export function buildRoomArt(
   const panelGlass = glass('clear', { placement: 'near', thickness: 0.03 });
   const lampMilk = glass('milky', { glow: { color: 0xffbf80, intensity: 1.5 } });
   const cupMilk = glass('milky', { glow: { color: 0xffd2a0, intensity: 1.1 } });
+  const focus = { orb: uniform(0), pedestal: uniform(0), drop: uniform(0) };
+  // a soft warm rim, strongest edge-on, for whatever can be acted on right now
+  const rimLight = (strength: typeof focus.orb) =>
+    vec3(1.0, 0.82, 0.58).mul(
+      pow(float(1).sub(abs(dot(normalView, positionViewDirection))), 2.5).mul(strength),
+    );
+  const cupNode = cupMilk as THREE.MeshPhysicalNodeMaterial;
+  cupNode.emissiveNode = (cupNode.emissiveNode as THREE.Node<'vec3'>).add(rimLight(focus.pedestal).mul(1.6));
   const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
 
   // ---- the workshop (序章「工房」) ---------------------------------------------------------------
@@ -746,7 +761,7 @@ export function buildRoomArt(
     const glow = across
       .mul(waves.mul(0.6).add(drift.mul(0.4)))
       .mul(fadeEnds)
-      .mul(0.24);
+      .mul(0.4);
     veilMat.colorNode = vec4(vec3(1.0, 0.78, 0.5).mul(glow), 1);
     const veil = mesh(
       ribbon(
@@ -762,6 +777,31 @@ export function buildRoomArt(
     );
     veil.renderOrder = 4;
     put(veil, 'surface');
+    // and faint shimmering lines where its handrails will be: the outline of a bridge over the gap
+    const ghostMat = keep(
+      new THREE.MeshBasicNodeMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    ghostMat.fog = false;
+    const flow = sin(uv().x.mul(36).sub(veilTime.mul(2.2)))
+      .mul(0.5)
+      .add(0.5);
+    const ends = smoothstep(0, 0.1, uv().x).mul(smoothstep(1, 0.9, uv().x));
+    ghostMat.colorNode = vec4(vec3(1.0, 0.8, 0.52).mul(flow.mul(0.55).add(0.2).mul(ends).mul(0.9)), 1);
+    const ghosts: THREE.BufferGeometry[] = [];
+    for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02]) {
+      const pts = Array.from({ length: 25 }, (_, i) => {
+        const z = EDGE_Z - 0.05 + ((FAR.maxZ - EDGE_Z + 0.1) * i) / 24;
+        return new THREE.Vector3(x, deckHeight(z) + 0.88, z);
+      });
+      ghosts.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.012, 6, false));
+    }
+    const ghostRails = mesh(merged(ghosts), ghostMat);
+    ghostRails.renderOrder = 4;
+    put(ghostRails, 'surface');
   }
   // 光の雫 (虹色ガラス＋発光): a bright core inside an iridescent shell
   const drop = new THREE.Group();
@@ -778,7 +818,7 @@ export function buildRoomArt(
         28,
       );
     const coreMat = keep(new THREE.MeshBasicNodeMaterial());
-    coreMat.colorNode = vec4(2.4, 1.9, 1.25, 1);
+    coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(focus.drop.mul(0.5).add(1)), 1);
     drop.add(mesh(shape(0.55), coreMat));
     drop.add(mesh(shape(1), glass('iridescent', { role: 'drop', placement: 'near', thickness: 0.06 })));
     drop.position.set(...DROP);
@@ -795,7 +835,7 @@ export function buildRoomArt(
       thickness: 0.15,
     }).material;
     keep(orbMat);
-    orbMat.emissiveNode = vec3(1.0, 0.8, 0.52).mul(orbGlow);
+    orbMat.emissiveNode = vec3(1.0, 0.8, 0.52).mul(orbGlow).add(rimLight(focus.orb).mul(1.2));
     const ball = mesh(new THREE.SphereGeometry(HAND_ORB_RADIUS, 48, 32), orbMat);
     orb.add(ball);
     const bubbles = innerBubbleMesh(
@@ -937,6 +977,7 @@ export function buildRoomArt(
     sunDirection,
     orb,
     orbGlow,
+    focus,
     orbLight,
     drop,
     fogRange: { near: fogNear, far: fogFar },

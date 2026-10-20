@@ -113,6 +113,8 @@ const DROP_ARRIVAL_GLOW_SECONDS = 0.9;
 const MAX_EVENTS = 40;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
+/** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
+const FOCUS_SECONDS = 0.2;
 const STRINGS = {
   ja: {
     lock: 'クリックで視点を固定 ・ WASD 歩く ・ 右クリック 覗く ・ E 置く／拾う／調べる ・ Esc 解除',
@@ -346,6 +348,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const forward: [number, number, number] = [0, 0, -1];
   /** Seconds the one-line controls hint has been up since the mouse was last free. */
   let hintFor = 0;
+  let wasLocked = false;
+  /** Eased focus (0..1) of the things that can be acted on: their rims glow while targeted. */
+  const focusNow = { orb: 0, pedestal: 0, drop: 0 };
   const eye: [number, number, number] = [0, 0, 0];
   const fieldSpheres: FieldSphere[] = Array.from({ length: 3 }, () => ({
     center: PEDESTAL_ORB,
@@ -586,6 +591,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       peekInput.wantPeek = wantPeek;
       session.step(dt, peekInput);
       arrivalGlow = Math.max(0, arrivalGlow - dt);
+      // the hint comes back for a few seconds whenever the mouse is freed again
+      if (wasLocked && !input.locked) hintFor = 0;
+      wasLocked = input.locked;
       if (playing && !input.locked) hintFor += dt;
       const amount = opts.peekHold ?? session.peekAmount;
       if (amount > 0) {
@@ -615,6 +623,19 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       }
       chooseTarget();
       updatePrompt();
+      // 調べられる物に近づくと縁が淡く光る: 0.2 s in and out, like the prompt
+      const k = Math.min(1, dt / FOCUS_SECONDS);
+      const place = session.orbPlace;
+      const want = {
+        orb: playing && (target === 'bench' || (target === 'pedestal' && place === 'pedestal')) ? 1 : 0,
+        pedestal: playing && target === 'pedestal' ? 1 : 0,
+        drop: playing && target === 'drop' ? 1 : 0,
+      };
+      for (const key of ['orb', 'pedestal', 'drop'] as const) {
+        focusNow[key] +=
+          Math.sign(want[key] - focusNow[key]) * Math.min(k, Math.abs(want[key] - focusNow[key]));
+        art.focus[key].value = focusNow[key];
+      }
       handOrbCenter(amount, session.handPresence, time, orbCenter);
       frame.peek = amount;
       frame.visible = session.handPresence > 0.001;

@@ -274,8 +274,14 @@ for (const backend of backends) {
     expect(stop.bridgeColliders).toBe(0);
     await snap('dead-end');
 
-    // 覗く: right button held; speed ×0.5 and FOV −6° blend in; the back image is drawn
+    // 覗く: a few steps back from the edge, looking across the gap (pitch −0.15, as in layout.test.ts), the
+    // arched deck rises into the orb. Right button held; speed ×0.5 and FOV −6° blend in; the back image is drawn.
     const passes0 = stop.backPassFrames;
+    await page.keyboard.down('KeyS');
+    await page.waitForTimeout(1400);
+    await page.keyboard.up('KeyS');
+    const back = await waitRoom(page, 'r.speed < 0.03');
+    await look(page, -back.yaw, -0.15 - back.pitch);
     await page.mouse.down({ button: 'right' });
     const peeked = await waitRoom(page, 'r.peekAmount > 0.999');
     await page.waitForTimeout(400);
@@ -288,6 +294,9 @@ for (const backend of backends) {
     await page.mouse.up({ button: 'right' });
     const unpeeked = await waitRoom(page, 'r.peekAmount === 0');
     expect(unpeeked.fov).toBeCloseTo(70, 1);
+    // back to the edge
+    await lookAt(page, [0, 1.4, -30]);
+    await pushUntilStopped(page, 'KeyW');
 
     // 置く: face the pedestal and press E; the bridge materializes in 0.8 s and its colliders switch on
     await lookAt(page, pedestalOrb);
@@ -456,7 +465,7 @@ for (const backend of backends) {
     const inside = (r: RoomProbe) =>
       Math.hypot(r.position.x - cx, r.position.y - cy, r.position.z - cz) <= r.sphereRadius + 0.01;
     expect(end.position.z).toBeLessThan(end.layout.edgeZ - 0.2);
-    expect(push.every((r) => r.grounded && Math.abs(r.position.y) < 0.03)).toBe(true);
+    expect(push.every((r) => r.grounded && r.position.y > -0.03 && r.position.y < 0.45)).toBe(true);
     expect(push.filter((r) => r.onBackFooting).every(inside)).toBe(true);
     expect(end.speed).toBeLessThan(0.05);
 

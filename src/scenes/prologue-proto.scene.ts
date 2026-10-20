@@ -30,9 +30,10 @@ const unit = (v: string | null): number | null => {
 /**
  * Workaround (three r186, WebGL2): the timestamp query pool resets itself when it is full (1024 render
  * contexts) even in the middle of a nested render (a RenderPipeline pass, a shadow map), and the next
- * beginQuery then warns "a query is already active". main.ts only resolves the pool while it wants GPU
- * times, so here it is drained regularly from outside any render. Proposed for main.ts in S-06.md;
- * remove this once main.ts (S-08) resolves the pool itself.
+ * beginQuery then warns "a query is already active". Since S-08, main.ts turns three's per-pass timestamps
+ * off where the GPU span is the source (WebGPU); on WebGL2 they stay on and are only read while the stats
+ * or a bench want them, so here the pool is drained regularly from outside any render (checked after
+ * merging main b88d317: still 2 warnings in 45 s without this). S-11 fixes main.ts; remove this then.
  */
 const DRAIN_EVERY_FRAMES = 64;
 

@@ -88,13 +88,13 @@ describe('the prologue layout', () => {
 });
 
 describe('the bridge seen through the orb (体験の核 2: 行き止まりに見えた場所に、玉越しにだけ橋が架かっている)', () => {
-  /** Where a world point lands relative to the fully raised hand orb (1 = on its rim), from the dead end. */
-  function inOrb(point: Vec3, pitch: number): number {
+  /** Where a world point lands relative to the fully raised hand orb (1 = on its rim), seen from eyeZ. */
+  function inOrb(point: Vec3, pitch: number, eyeZ = deadEnd): number {
     const fov = FOV_DEFAULT + PEEK_FOV_DELTA_DEG;
     const aspect = 16 / 9;
     const tanY = Math.tan((fov * Math.PI) / 360);
     const dy = point[1] - EYE_HEIGHT;
-    const dz = point[2] - deadEnd;
+    const dz = point[2] - eyeZ;
     const depth = Math.sin(pitch) * dy - Math.cos(pitch) * dz;
     const up = Math.cos(pitch) * dy + Math.sin(pitch) * dz;
     const sx = 0.5 + (0.5 * (point[0] / depth)) / (tanY * aspect);
@@ -104,8 +104,14 @@ describe('the bridge seen through the orb (体験の核 2: 行き止まりに見
   }
   const mid = (BRIDGE.min[2] + BRIDGE.max[2]) / 2;
 
-  it('peeking across the gap from where the edge stops you, the middle of the deck is inside the orb', () => {
-    // looking across and down at the gap (−0.4 rad ≈ −23°). The parent review asked for −0.15; see S-06.md.
+  it('peeking across the gap on the last steps to the edge (pitch −0.15), the middle of the deck is inside the orb', () => {
+    // 2 m before the edge, where the edge, the pedestal and the gap are all in view (spawn 'dead-end')
+    const approach = SPAWNS['dead-end'].feet[2];
+    expect(inOrb([0, deckHeight(mid), mid], -0.15, approach)).toBeLessThan(0.85);
+  });
+
+  it('standing where the edge stops you, looking down across the gap (pitch −0.4), the deck is inside the orb', () => {
+    // At −0.15 from there it would need a rise of ~0.8 m (slopes over 40°): see S-06.md.
     expect(inOrb([0, deckHeight(mid), mid], -0.4)).toBeLessThan(0.85);
   });
 
