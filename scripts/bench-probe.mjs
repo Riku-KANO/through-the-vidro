@@ -37,14 +37,18 @@ try {
     const p = await page.evaluate(() => window.__vidro);
     const b = p?.bench;
     console.log(
-      `\n${q}  →  ${p?.status} ${p?.backend} ${p?.quality} ×${p?.renderScale} gpuReliable=${p?.gpuReliable}`,
+      `\n${q}  →  ${p?.status} ${p?.backend} ${p?.quality} ×${p?.renderScale} gpu=${p?.gpuSource} gpuReliable=${p?.gpuReliable}`,
     );
     if (b) {
+      const span = b.gpuSpan
+        ? ` span avg ${b.gpuSpan.avgMs.toFixed(2)} p95 ${b.gpuSpan.p95Ms.toFixed(2)} ms`
+        : ' span n/a';
       const gpu = b.gpu
-        ? ` gpu ts avg ${b.gpu.avgMs.toFixed(2)} p95 ${b.gpu.p95Ms.toFixed(2)} ms`
-        : ' gpu n/a';
+        ? `${span}, pass sum avg ${b.gpu.avgMs.toFixed(2)} p95 ${b.gpu.p95Ms.toFixed(2)} ms`
+        : `${span}, pass sum n/a`;
+      const cpu = b.cpuRenderMs ? `, cpu render avg ${b.cpuRenderMs.avgMs.toFixed(2)} ms` : '';
       console.log(
-        `  frame avg ${b.avgMs.toFixed(2)} p95 ${b.p95Ms.toFixed(2)} ms (${b.avgFps.toFixed(1)} fps)${gpu}  draws ${b.maxDrawCalls} tris ${b.maxTriangles}`,
+        `  frame avg ${b.avgMs.toFixed(2)} p95 ${b.p95Ms.toFixed(2)} ms (${b.avgFps.toFixed(1)} fps)${gpu}${cpu}  draws ${b.maxDrawCalls} tris ${b.maxTriangles}`,
       );
     }
     if (p?.qualityDecision)
