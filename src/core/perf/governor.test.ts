@@ -81,7 +81,8 @@ describe('PerfGovernor', () => {
 
   it('dynamic resolution lowers the scale under GPU overload', () => {
     const g = new PerfGovernor(opts({ dynres: true }));
-    const actions = simulate(g, 5, () => 30, 33.3);
+    // GPU-bound: the cost follows the pixel count (S-08: a cost that does not follow it stops dynamic resolution).
+    const actions = simulate(g, 5, (_l, s) => 30 * (s / 0.85) ** 2, 33.3);
     expect(actions.length).toBeGreaterThan(0);
     expect(actions.every((a) => a.kind === 'scale')).toBe(true);
     expect(g.scale).toBeLessThan(0.85);
@@ -136,8 +137,9 @@ describe('PerfGovernor', () => {
   it('keeps trusting real GPU overload under vsync, where frames alternate 16.7 / 33.3 ms', () => {
     const g = new PerfGovernor(opts({ dynres: true }));
     // GPU 22 ms: two refresh intervals for most frames, one for some; the mean matches the GPU time.
+    // GPU-bound, so the cost follows the pixel count.
     const quantized = (i: number) => (i % 3 === 0 ? FRAME : FRAME * 2);
-    simulate(g, 10, () => 22, quantized);
+    simulate(g, 10, (_l, s) => 22 * (s / 0.85) ** 2, quantized);
     expect(g.gpuReliable).toBe(true);
     expect(g.scale).toBeLessThan(0.85);
   });
@@ -180,6 +182,40 @@ describe('PerfGovernor', () => {
     expect(g.scale).toBe(0.85);
     expect(g.phase).toBe('steady');
     expect(g.verified).toBe(false);
+  });
+
+  it('returns to the preset scale when GPU time stops being trusted after lowering it', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    // Real overload that follows the resolution, with frames at 30 Hz: plausible.
+    simulate(g, 3, (_l, s) => 30 * (s / 0.85) ** 2, 33.3);
+    expect(g.scale).toBeLessThan(0.85);
+    // Then readings far above a steady 60 Hz frame: implausible, so the lowered scale has no basis any more.
+    const actions = simulate(g, 3, () => 60);
+    expect(g.gpuReliable).toBe(false);
+    expect(actions.at(-1)).toEqual({ kind: 'scale', scale: 0.85 });
+    expect(g.scale).toBe(0.85);
+    expect(g.dynresStopReason).toMatch(/implausible/);
+    expect(simulate(g, 5, () => 60)).toEqual([]);
+  });
+
+  it('stops dynamic resolution and restores the preset when GPU time does not follow the resolution', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    // 25 ms at any scale with frames at 30 Hz: plausible, but lowering the resolution does not help.
+    const actions = simulate(g, 10, () => 25, 33.3);
+    expect(actions.length).toBeGreaterThanOrEqual(4);
+    expect(actions.at(-1)).toEqual({ kind: 'scale', scale: 0.85 });
+    expect(g.scale).toBe(0.85);
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(g.gpuReliable).toBe(true);
+    // For the rest of the session, also after a quality switch.
+    expect(simulate(g, 20, () => 25, 33.3)).toEqual([]);
+  });
+
+  it('without the response check (test hook), keeps stepping down to the floor whatever the GPU time does', () => {
+    const g = new PerfGovernor(opts({ dynres: true, dynresRequireResponse: false }));
+    simulate(g, 15, () => 25, 33.3);
+    expect(g.scale).toBe(0.51);
+    expect(g.dynresStopReason).toBeNull();
   });
 
   it('a forced level replaces the recommendation but is still verified', () => {

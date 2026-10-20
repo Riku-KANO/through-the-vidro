@@ -29,6 +29,11 @@ export interface BenchResult extends FrameStats {
   gpu: GpuStats | null;
   /** GPU frame span (first pass start → last pass end, S-08); null without WebGPU timestamp queries. */
   gpuSpan: GpuStats | null;
+  /**
+   * CPU time of the scene's render() in JS (encoding and submitting the passes), on the frames whose GPU time is
+   * sampled. Tells a span stretched by waiting for submits from one stretched by the GPU itself (S-08).
+   */
+  cpuRenderMs: GpuStats | null;
   maxDrawCalls: number;
   maxTriangles: number;
   budgetViolations: ReturnType<typeof checkBudget>;
@@ -53,6 +58,10 @@ export interface VidroProbe {
   gpuReliable: boolean;
   /** Latest GPU time (ms) from gpuSource, as fed to the governor; null before the first reading. */
   gpuMs: number | null;
+  /** Latest CPU time of render() (ms) on a frame whose GPU time was sampled; null before the first. */
+  cpuRenderMs: number | null;
+  /** Why dynamic resolution stopped during the session (back at the preset scale); null while it runs. */
+  dynresStopped: string | null;
   /** Set once ?quality=auto has measured its window. */
   qualityDecision: QualityDecision | null;
   /** Whether the auto-selected preset held its headroom when re-measured (null = not verified). */
@@ -90,6 +99,8 @@ const probe: VidroProbe = {
   gpuTimingTrusted: false,
   gpuReliable: false,
   gpuMs: null,
+  cpuRenderMs: null,
+  dynresStopped: null,
   qualityDecision: null,
   qualityVerified: null,
   errors: [],
@@ -146,8 +157,7 @@ async function main(): Promise<void> {
     await createRenderer(app, {
       forceWebGL: params.forceWebGL,
       renderScale: QUALITY_PRESETS[params.quality].renderScale,
-      // ?gpuSpan=0 turns the frame span off (A/B of its cost; the governor falls back to the per-pass rule).
-      frameSpan: params.raw.get('gpuSpan') !== '0',
+      frameSpan: params.gpuSpan,
     });
   probe.backend = backend;
   probe.gpuName = gpuName;
@@ -250,6 +260,7 @@ async function main(): Promise<void> {
     dynres: params.dynres,
     gpuTiming: gpuTimingTrusted || (params.gpuTrust && gpuTiming),
     dynresTargetMs: params.dynresTargetMs ?? undefined,
+    dynresRequireResponse: params.dynresResponse,
     forceLevel: params.autoForce ?? undefined,
   });
 
@@ -260,6 +271,10 @@ async function main(): Promise<void> {
   const spanTimer = spanDevice ? new GpuSpanTimer(spanDevice) : null;
   const benchGpu: number[] = [];
   const benchSpan: number[] = [];
+  const benchCpu: number[] = [];
+  // three's per-pass timestamps cost a query pair per pass and a readback every 1024 passes (inside render()).
+  // Where the span drives decisions they are only a bench reference, so they run only while a bench records.
+  const backendTiming = renderer.backend as { trackTimestamp?: boolean };
   let benchRecording = false;
   let gpuInFlight = false;
   let gpuEpoch = 0;
@@ -325,14 +340,21 @@ async function main(): Promise<void> {
     current.update(dt, t);
     const sampleGpu =
       (governor.gpuReliable || stats.visible || benchRecording) && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
+    const wantPasses = gpuTiming && params.gpuPasses && (gpuSource === 'passes' || benchRecording);
+    backendTiming.trackTimestamp = wantPasses;
     // The span brackets only the rendering: CPU work in update() is not GPU time.
     const timingSpan = sampleGpu && (spanTimer?.begin() ?? false);
     if (timingSpan) spanEpoch = governor.epoch;
+    const cpuStart = sampleGpu ? performance.now() : 0;
     if (current.render) current.render();
     else renderer.render(current.scene, current.camera);
+    if (sampleGpu) {
+      probe.cpuRenderMs = performance.now() - cpuStart;
+      if (benchRecording) benchCpu.push(probe.cpuRenderMs);
+    }
     if (timingSpan) spanTimer?.end()?.then(onSpan);
 
-    if (sampleGpu && gpuTiming && !gpuInFlight && (gpuSource === 'passes' || benchRecording)) {
+    if (sampleGpu && wantPasses && !gpuInFlight) {
       gpuInFlight = true;
       gpuEpoch = governor.epoch;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
@@ -348,6 +370,7 @@ async function main(): Promise<void> {
     const action = governor.frame(dtMs);
     probe.qualityVerified = governor.verified;
     probe.gpuReliable = governor.gpuReliable;
+    probe.dynresStopped = governor.dynresStopReason;
     if (governor.decision && !probe.qualityDecision) probe.qualityDecision = governor.decision;
     if (action?.kind === 'scale') applyScale(action.scale);
     if (action?.kind === 'quality') switchQuality(action.level);
@@ -364,6 +387,7 @@ async function main(): Promise<void> {
           seconds: params.benchSeconds,
           gpu: summarizeGpuTimes(benchGpu),
           gpuSpan: summarizeGpuTimes(benchSpan),
+          cpuRenderMs: summarizeGpuTimes(benchCpu),
           maxDrawCalls,
           maxTriangles,
           budgetViolations: checkBudget({ drawCalls: maxDrawCalls, triangles: maxTriangles }),

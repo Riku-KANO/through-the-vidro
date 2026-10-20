@@ -89,6 +89,7 @@ try {
           frameP95Ms: b?.p95Ms ?? null,
           spanAvgMs: b?.gpuSpan?.avgMs ?? null,
           spanP95Ms: b?.gpuSpan?.p95Ms ?? null,
+          cpuRenderMs: b?.cpuRenderMs?.avgMs ?? null,
           gpuAvgMs: b?.gpu?.avgMs ?? null,
           draws: b?.maxDrawCalls ?? 0,
           tris: b?.maxTriangles ?? 0,
@@ -96,7 +97,7 @@ try {
         });
         const r = rows[rows.length - 1];
         console.log(
-          `${scene} ${r.backend} ${quality}: frame ${r.frameAvgMs?.toFixed(2)} ms (p95 ${r.frameP95Ms?.toFixed(2)}), span ${r.spanAvgMs?.toFixed(2) ?? 'n/a'} ms (p95 ${r.spanP95Ms?.toFixed(2) ?? 'n/a'}), pass sum ${r.gpuAvgMs?.toFixed(2) ?? 'n/a'} ms, errors ${r.errors}`,
+          `${scene} ${r.backend} ${quality}: frame ${r.frameAvgMs?.toFixed(2)} ms (p95 ${r.frameP95Ms?.toFixed(2)}), span ${r.spanAvgMs?.toFixed(2) ?? 'n/a'} ms (p95 ${r.spanP95Ms?.toFixed(2) ?? 'n/a'}), cpu render ${r.cpuRenderMs?.toFixed(2) ?? 'n/a'} ms, pass sum ${r.gpuAvgMs?.toFixed(2) ?? 'n/a'} ms, errors ${r.errors}`,
         );
         await page.close();
       }
@@ -123,13 +124,14 @@ const lines = [
     ? '垂直同期ありの計測（実行時に governor が見る値）。フレーム時間は 60Hz に張り付くので余裕の判定はしない。'
     : `主な指標は垂直同期を外したフレーム時間（CPUとGPUの重い方）。p95 が ${BUDGET_MS.toFixed(1)}ms（60fpsの80%）以下なら余裕あり。`,
   'GPU span はフレームの最初のパスの開始から最後のパスの終わりまで（WebGPU のみ、実行時の判断に使う GPU 時間）。',
+  'CPU render は計測したフレームの render() の JS の時間（パスの記録と submit）。span がこれに近ければ、GPU が submit を待っている。',
   'パス合計は three のタイムスタンプの合計で参考値（描画パスが重なる GPU では過大になる）。',
   '',
-  '| シーン | 経路 | 品質 | フレーム平均 ms | フレーム p95 ms | GPU span 平均 ms | GPU span p95 ms | パス合計 平均 ms（参考） | 描画呼び出し | 三角形 | 余裕 | エラー |',
-  '|---|---|---|---|---|---|---|---|---|---|---|---|',
+  '| シーン | 経路 | 品質 | フレーム平均 ms | フレーム p95 ms | GPU span 平均 ms | GPU span p95 ms | CPU render 平均 ms | パス合計 平均 ms（参考） | 描画呼び出し | 三角形 | 余裕 | エラー |',
+  '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
   ...rows.map(
     (r) =>
-      `| ${r.scene} | ${r.backend} | ${r.quality} | ${fmt(r.frameAvgMs)} | ${fmt(r.frameP95Ms)} | ${fmt(r.spanAvgMs)} | ${fmt(r.spanP95Ms)} | ${fmt(r.gpuAvgMs)} | ${r.draws} | ${Math.round(r.tris / 1000)}k | ${vsync ? '-' : r.frameP95Ms == null ? '?' : r.frameP95Ms <= BUDGET_MS ? 'あり' : 'なし'} | ${r.errors} |`,
+      `| ${r.scene} | ${r.backend} | ${r.quality} | ${fmt(r.frameAvgMs)} | ${fmt(r.frameP95Ms)} | ${fmt(r.spanAvgMs)} | ${fmt(r.spanP95Ms)} | ${fmt(r.cpuRenderMs)} | ${fmt(r.gpuAvgMs)} | ${r.draws} | ${Math.round(r.tris / 1000)}k | ${vsync ? '-' : r.frameP95Ms == null ? '?' : r.frameP95Ms <= BUDGET_MS ? 'あり' : 'なし'} | ${r.errors} |`,
   ),
   '',
 ];

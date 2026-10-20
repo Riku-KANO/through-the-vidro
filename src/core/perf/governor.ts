@@ -27,6 +27,10 @@ import {
  * - GPU time is only trusted while it is physically plausible. Timestamp sums over many render passes overlap on
  *   some GPUs (Apple/Metal measured ~10× too high in S-05); GPU time above the real (mean) frame time means the
  *   readings are unusable, so the governor stops using them for the rest of the session.
+ * - Dynamic resolution stops for the rest of the session, back at the preset scale, when the GPU time it acted on
+ *   turned implausible, or when lowering the resolution did not lower it (S-08: under vsync at light load the span did
+ *   not follow the pixel count; the GPU clocking down and work outside the GPU are both possible causes).
+ *   `dynresStopReason` says which.
  */
 export type GovernorAction =
   | { kind: 'scale'; scale: number }
@@ -42,6 +46,11 @@ export interface PerfGovernorOptions {
   /** GPU time will be fed and may drive decisions (see chooseGpuTimeSource in gpu-span.ts). */
   gpuTiming: boolean;
   dynresTargetMs?: number;
+  /**
+   * Stop dynamic resolution when steps down do not lower the GPU time (default true). Off only for the
+   * ?dynresTarget test hook, which drives the controller to its floor to test the wiring.
+   */
+  dynresRequireResponse?: boolean;
   /** Test hook (?autoForce): replace the recommendation to exercise the switch and verification path. */
   forceLevel?: QualityLevel;
 }
@@ -115,6 +124,8 @@ export class PerfGovernor {
   epoch = 0;
   /** False when the backend cannot time the GPU, or its readings turned out implausible. */
   gpuReliable: boolean;
+  /** Why dynamic resolution stopped during the session (null while it runs, or when it never ran). */
+  dynresStopReason: string | null = null;
   private readonly recentFrames = new Rolling(30);
   private readonly recentGpu = new Rolling(8);
   private implausible = 0;
@@ -127,6 +138,8 @@ export class PerfGovernor {
   private steppedDown = false;
   private previousLevel: QualityLevel;
   private dynres: DynamicResolution | null;
+  /** Dynamic resolution was stopped: go back to the preset scale on the next frame. */
+  private restoreScale = false;
 
   constructor(private readonly opts: PerfGovernorOptions) {
     this.level = opts.level;
@@ -174,6 +187,15 @@ export class PerfGovernor {
     const dt = Math.min(dtMs / 1000, MAX_DT_SEC);
     this.phaseTime += dt;
     this.recentFrames.push(dtMs);
+    if (this.restoreScale) {
+      this.restoreScale = false;
+      const preset = presetScale(this.level);
+      if (this.scale !== preset) {
+        this.scale = preset;
+        this.bump();
+        return { kind: 'scale', scale: preset };
+      }
+    }
     if (this.settle > 0) {
       this.settle--;
       return null;
@@ -227,6 +249,12 @@ export class PerfGovernor {
     const next = this.dynres.update(this.pendingGpu, this.gpuDt);
     this.pendingGpu = null;
     this.gpuDt = 0;
+    if (this.dynres.unresponsive) {
+      this.stopDynres(
+        'GPU time did not follow the resolution (three steps down lowered it by less than 10%)',
+      );
+      return null;
+    }
     if (next === null) return null;
     this.scale = next;
     this.bump();
@@ -242,12 +270,20 @@ export class PerfGovernor {
         this.gpuReliable = false;
         this.gpuSamples = [];
         this.pendingGpu = null;
+        if (this.dynres) this.stopDynres('GPU time turned implausible (above the mean frame time)');
         return false;
       }
     } else {
       this.implausible = 0;
     }
     return true;
+  }
+
+  /** Stops dynamic resolution for the session; the next frame() returns to the preset scale if it differs. */
+  private stopDynres(reason: string): void {
+    this.dynres = null;
+    this.dynresStopReason = reason;
+    this.restoreScale = true;
   }
 
   private switchTo(level: QualityLevel, reason: string): GovernorAction {
@@ -275,6 +311,11 @@ export class PerfGovernor {
   private makeDynres(): DynamicResolution {
     const max = presetScale(this.level);
     const min = Math.max(DYNRES_MIN_SCALE, Math.round(max * DYNRES_MIN_FRACTION * 100) / 100);
-    return new DynamicResolution({ min, max, targetMs: this.opts.dynresTargetMs });
+    return new DynamicResolution({
+      min,
+      max,
+      targetMs: this.opts.dynresTargetMs,
+      requireResponse: this.opts.dynresRequireResponse ?? true,
+    });
   }
 }

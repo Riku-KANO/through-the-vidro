@@ -12,16 +12,18 @@
  * Each marker pass dispatches one workgroup of an empty shader: Metal writes no timestamps for a pass without
  * work (they read back as 0, measured in S-08).
  *
- * WebGPU executes the queue in submission order, so the two markers bracket every pass three submits in between.
- * The span is the frame's latency on the GPU timeline, which is what decides whether a frame meets its vsync
- * deadline. Beyond the frame's own work it includes gaps where the GPU waited for the next submit and any other
- * GPU work interleaved in between (the compositor, other apps), and it runs slower while the GPU clocks down
- * under vsync. Checked in S-08 (Apple M5 Pro, vsync off, quiet machine): on the stress scene the span matched the
- * real frame time within 7% at every preset and at 1× and 2× pixel density. On a near-empty scene running at
- * thousands of fps it read 2–5× the frame interval, because consecutive frames overlap on the GPU there
- * (throughput is faster than one frame's latency). Under vsync frames are a refresh apart, so that overlap needs a
- * frame that already takes most of the refresh, and the governor's plausibility check (GPU time above the mean
- * frame time) stops trusting readings that exceed the frame.
+ * What the two timestamps bracket is not guaranteed. The queue is submitted in order, but a GPU may run work
+ * without a dependency on earlier work concurrently with it, so our markers carry no dependency on three's passes,
+ * and when a timestamp is written within its pass is up to the implementation (Metal samples at stage boundaries).
+ * The begin marker may fire while the previous frame still runs and the end marker before the last pass is done.
+ * On top of the frame's own work the span also includes gaps where the GPU waited for the next submit and any other
+ * GPU work interleaved in between (the compositor, other apps), and it stretches while the GPU clocks down.
+ * So the span is an empirical measure, validated where it is used (S-08, Apple M5 Pro, vsync off, quiet machine):
+ * - stress scene: within 7% of the real frame time at every preset and at 1× and 2× pixel density;
+ * - a near-empty scene at thousands of fps: 2–5× the frame interval. Hypothesis: consecutive frames overlap on the
+ *   GPU, so the span reads one frame's latency, which is longer than the interval between frames.
+ * Under vsync the governor's plausibility check (GPU time above the mean frame time) stops trusting readings that
+ * exceed the frame, and dynamic resolution stops when lowering the resolution does not lower the span.
  *
  * One readback at a time, and every GPU object is created once: sampling costs two tiny command buffers.
  * WebGL2 has no equivalent: timer queries cannot nest, and three already holds one around every pass.
@@ -45,7 +47,8 @@ export interface GpuTimeChoice {
 
 /**
  * Which GPU time drives the governor: the span wherever it exists, Apple included (checked against the uncapped
- * frame time on Apple hardware in S-08); otherwise the per-pass sum, except on Apple.
+ * frame time on Apple hardware in S-08), and on other GPUs too so that every WebGPU path measures the same way
+ * (to be checked on the recommended non-Apple hardware in S-07); otherwise the per-pass sum, except on Apple.
  */
 export function chooseGpuTimeSource(caps: GpuTimingCaps): GpuTimeChoice {
   if (caps.span) return { source: 'span', trusted: true };

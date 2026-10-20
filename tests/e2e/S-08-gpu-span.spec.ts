@@ -29,10 +29,12 @@ test('WebGPU measures the frame span separately from the per-pass sum [webgpu]',
   const span = bench?.gpuSpan;
   expect(span?.samples ?? 0).toBeGreaterThanOrEqual(3);
   expect(span?.avgMs ?? 0).toBeGreaterThan(0);
-  // A span longer than the real frame is physically impossible (the per-pass sum on Apple was).
+  // Under vsync a reading above the frame time is unusable (the governor's plausibility check uses the same bound).
   expect(span?.p50Ms ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual((bench?.avgMs ?? 0) * 1.1 + 0.5);
-  // The per-pass sum stays available as a separate reference value.
-  expect(bench).toHaveProperty('gpu');
+  // The per-pass sum stays available as a separate reference value while a bench records.
+  expect(bench?.gpu?.samples ?? 0).toBeGreaterThan(0);
+  // The CPU time of render() is sampled alongside, to tell waiting for submits from GPU work.
+  expect(bench?.cpuRenderMs?.samples ?? 0).toBeGreaterThan(0);
   expect(probe.gpuTimingTrusted).toBe(true);
   expect(probe.gpuReliable).toBe(true);
   expect(probe.errors).toEqual([]);
@@ -43,17 +45,60 @@ test('dynamic resolution runs on the frame span without ?gpuTrust, also on Apple
   page,
 }) => {
   const errors = collectErrors(page);
-  // A 0.1 ms target cannot be met even at the lowest scale, so the controller must step down to its floor.
-  await page.goto('/?scene=hello&dynresTarget=0.1');
+  // A 0.1 ms target cannot be met, so the controller steps down. Whether the span then follows the resolution
+  // depends on the GPU (under vsync it may clock down instead): it either keeps stepping down towards its floor,
+  // or stops and goes back to the preset scale with a reason. Both are correct; a stuck lowered scale is not.
+  // dynresResponse=1: keep the response check on (the dynresTarget hook turns it off by default).
+  await page.goto('/?scene=hello&dynresTarget=0.1&dynresResponse=1');
   await page.waitForFunction(() => window.__vidro?.status === 'running');
   const before = await page.evaluate(() => document.querySelector('canvas')?.width ?? 0);
-  await page.waitForFunction(() => window.__vidro.renderScale <= 0.6, undefined, { timeout: 20_000 });
-  const after = await page.evaluate(() => document.querySelector('canvas')?.width ?? 0);
-  expect(after).toBeLessThan(before);
+  await page.waitForFunction(() => window.__vidro.renderScale < 0.85, undefined, { timeout: 20_000 });
+  const lowered = await page.evaluate(() => document.querySelector('canvas')?.width ?? 0);
+  expect(lowered).toBeLessThan(before);
+  await page.waitForFunction(
+    () => window.__vidro.renderScale <= 0.6 || window.__vidro.dynresStopped !== null,
+    undefined,
+    { timeout: 20_000 },
+  );
+  await page.waitForTimeout(300);
   const probe = await page.evaluate(() => window.__vidro);
   expect(probe.gpuSource).toBe('span');
   expect(probe.gpuReliable).toBe(true);
-  expect(probe.renderScale).toBeGreaterThanOrEqual(0.5);
+  if (probe.dynresStopped !== null) {
+    expect(probe.dynresStopped).toMatch(/follow/);
+    expect(probe.renderScale).toBe(0.85);
+    expect(await page.evaluate(() => document.querySelector('canvas')?.width ?? 0)).toBe(before);
+  } else {
+    expect(probe.renderScale).toBeGreaterThanOrEqual(0.5);
+  }
+  expect(probe.errors).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("three's per-pass timestamps run only while a bench records, where the span drives decisions [webgpu]", async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  await page.goto('/?scene=hello&debug=1&stats=1');
+  await page.waitForFunction(() => window.__vidro?.status === 'running');
+  await page.waitForTimeout(500);
+  const tracking = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __vidroDebug: { renderer: { backend: { trackTimestamp: boolean } } } })
+          .__vidroDebug.renderer.backend.trackTimestamp,
+    );
+  expect(await page.evaluate(() => window.__vidro.gpuSource)).toBe('span');
+  expect(await tracking()).toBe(false);
+  // The overlay and the governor get the span meanwhile.
+  await page.waitForFunction(() => window.__vidro.gpuMs !== null, undefined, { timeout: 10_000 });
+  expect(await tracking()).toBe(false);
+  await page.goto('/?scene=hello&debug=1&bench=3&warmup=1');
+  await page.waitForFunction(() => ['done', 'error'].includes(window.__vidro?.status), undefined, {
+    timeout: 30_000,
+  });
+  const probe = await page.evaluate(() => window.__vidro);
+  expect(probe.bench?.gpu?.samples ?? 0).toBeGreaterThan(0);
   expect(probe.errors).toEqual([]);
   expect(errors).toEqual([]);
 });
@@ -69,7 +114,11 @@ test('WebGL2 has no frame span and keeps the per-pass rule [webgl2]', async ({ p
   expect(probe.backend).toBe('webgl2');
   expect(probe.gpuSource).toBe(probe.gpuTiming ? 'passes' : 'none');
   expect(probe.bench?.gpuSpan).toBeNull();
-  if (/apple|metal/i.test(probe.gpuName)) expect(probe.gpuTimingTrusted).toBe(false);
+  if (/apple|metal/i.test(probe.gpuName)) {
+    // The per-pass sum is not trusted on Apple: without ?gpuTrust dynamic resolution stays off.
+    expect(probe.gpuTimingTrusted).toBe(false);
+    expect(probe.gpuReliable).toBe(false);
+  }
   expect(probe.errors).toEqual([]);
   expect(errors).toEqual([]);
 });

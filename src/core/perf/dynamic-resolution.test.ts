@@ -90,3 +90,30 @@ describe('DynamicResolution', () => {
     expect(dr.scale).toBeGreaterThan(before);
   });
 });
+
+describe('DynamicResolution with requireResponse (S-08)', () => {
+  it('keeps stepping down while the GPU time follows the resolution', () => {
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(dr, pixelBound(TARGET * 1.5), 20);
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.scale).toBeLessThan(0.7);
+  });
+
+  it('gives up after three steps down that do not lower the smoothed GPU time by a tenth', () => {
+    // E.g. the GPU clocks down as the load drops, or the frame is bound by work that does not scale with pixels.
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(dr, TARGET * 1.5, 20);
+    expect(dr.unresponsive).toBe(true);
+    expect(dr.scale).toBe(0.7);
+    expect(run(dr, TARGET * 3, 10)).toBe(0);
+  });
+
+  it('judges each run of steps on its own: a calm period in between starts a new run', () => {
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(dr, TARGET * 1.5, 2.5); // two steps down
+    run(dr, TARGET * 0.7, 10); // inside the band: no change
+    run(dr, TARGET * 1.5, 2.5); // three more steps: a separate run, so no fourth one to judge yet
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.scale).toBe(0.6);
+  });
+});

@@ -7,6 +7,8 @@
 //   UNCAPPED=1  lift vsync (GPU clocks stay up; without it the GPU clocks down while it waits for vsync)
 //   SECONDS=25  how long to watch
 //   QUIET=1     refuse to run while other Playwright browsers use the GPU (exit 3)
+// Dynamic resolution stops (back at the preset scale) when three steps down do not lower the GPU time; add
+// &dynresResponse=0 to watch the controller without that check.
 import { chromium } from '@playwright/test';
 import {
   contendingBrowsers,
@@ -51,10 +53,12 @@ try {
       gpuMs: window.__vidro.gpuMs,
       source: window.__vidro.gpuSource,
       reliable: window.__vidro.gpuReliable,
+      cpu: window.__vidro.cpuRenderMs,
+      stopped: window.__vidro.dynresStopped,
       errors: window.__vidro.errors.length,
     }));
     console.log(
-      `t=${String(i).padStart(2)}s  scale ${p.scale.toFixed(2)}  gpu(${p.source}) ${p.gpuMs?.toFixed(2) ?? 'n/a'} ms  reliable=${p.reliable}  errors ${p.errors}`,
+      `t=${String(i).padStart(2)}s  scale ${p.scale.toFixed(2)}  gpu(${p.source}) ${p.gpuMs?.toFixed(2) ?? 'n/a'} ms  cpu render ${p.cpu?.toFixed(2) ?? 'n/a'} ms  reliable=${p.reliable}  errors ${p.errors}${p.stopped ? `  stopped: ${p.stopped}` : ''}`,
     );
     if (p.status === 'error') break;
     await page.waitForTimeout(1000);

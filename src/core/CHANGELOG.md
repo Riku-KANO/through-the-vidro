@@ -13,13 +13,28 @@
   （Metal では作業のないパスのタイムスタンプが 0 のまま）。前回の読みと同じ値のまま（GPU が書かなかった）の読みは捨てる。
   ほかに `spanMs`（あり得ない値を捨てる）と、governor に渡す GPU 時間を選ぶ
   `chooseGpuTimeSource`（span → three のパスの合計 → なし。span は Apple でも信用、パスの合計は Apple では信用しない）
-- `renderer.ts`: 戻り値に `gpuSource`（'span' | 'passes' | 'none'）と `spanDevice` を追加。`gpuTimingTrusted` は `chooseGpuTimeSource` で決める
-  （WebGPU なら Apple でも true になる）。オプション `frameSpan: false` で span を切れる（A/B 用）
-- `perf/governor.ts`: コメントのみ（GPU 時間の出どころ）。振る舞いは変えていない
+- `renderer.ts`: 戻り値に `gpuSource`（'span' | 'passes' | 'none'）と `spanDevice` を追加。`gpuTimingTrusted` は `chooseGpuTimeSource` で決める。
+  オプション `frameSpan: false` で span を切れる（A/B 用）。**振る舞いの変更（判断）**:
+  - Apple の WebGPU で GPU 時間を信用するようになった。動的解像度だけでなく `quality=auto` の推奨と確かめも、フレーム時間ではなく
+    GPU 時間（span）で行う。`COST_FACTOR`（`perf/quality-select.ts`）は垂直同期なしのフレーム時間で較正した値で、垂直同期ありの span は
+    それより長く出る（M5 Pro の stress で約3倍、理由は未確定）ので、低めの品質を選ぶ側に偏りうる
+  - Apple 以外の WebGPU も、three のパスの合計から span に切り替わった（計測の方法を1つに揃えるため）。Iris Xe などで確かめる（S-07）
+- `perf/dynamic-resolution.ts`: オプション `requireResponse`（既定 off）。3段続けて下げても平滑した GPU 時間が1割以上下がらなければ
+  `unresponsive` を立てて止まる（段の間が 2.5 秒を超えるか、上げた時点で数え直す）
+- `perf/governor.ts`:
+  - 動的解像度を `requireResponse` 付きで作る（オプション `dynresRequireResponse`、既定 true）。手応えがなければ、プリセットの倍率へ戻して
+    そのセッションの間止める
+  - GPU 時間の信用をやめたときも、下げた倍率のまま残さずプリセットの倍率へ戻して止める（以前は下げた倍率のまま残っていた）
+  - 止めた理由を `dynresStopReason` に出す
+- `params.ts`: `gpuSpan=0`（span を測らない）、`gpuPasses=0`（three のパスごとのタイムスタンプを使わない）、`dynresResponse=0|1`
+  （既定 on。試験用の `dynresTarget` を付けたときは既定 off）
+- `scene.ts`: 約束のコメントのみ。GPU への submit は `render()` の中で行い、`update()` では行わない（span は `render()` の前後で測るため）
 - 案2で使うときは、アプリ側でフレームごとに `begin()` → 描画 → `end()` を呼び、得た ms を `PerfGovernor.gpu()` に渡す
-  （このリポジトリでは `src/main.ts`）。three のパスの合計は参考値として残してよい
+  （このリポジトリでは `src/main.ts`）。three のパスごとのタイムスタンプ（`renderer.backend.trackTimestamp`）は、span を使う経路では
+  ベンチの間だけ有効にしている
 - 計測（Apple M5 Pro、垂直同期なし、静か）: 負荷シーンで span は実際のフレーム時間と 0〜7% で一致（パスの合計は6〜14倍）。
-  ほぼ空のシーンを毎秒数千フレームで回すと、フレームが GPU 上で重なり span がフレームの間隔より長く出る（2〜5倍）
+  ほぼ空のシーンを毎秒数千フレームで回すと、span がフレームの間隔より長く出る（2〜5倍。前後のフレームが GPU 上で重なるためと推測）。
+  2つの印が three のパスを確実に挟むことは保証されない（依存のない作業は重なりうる）ので、span は実測で確かめた値として扱う
 
 ## 0.3.0 — 2026-10-21（M0 統合: S-01 ガラス材質、S-04 遷移）
 
