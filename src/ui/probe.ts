@@ -8,6 +8,8 @@ export type PhaseName = Screen | 'loading-home' | 'home-game';
 export interface PhaseStats {
   frames: number;
   maxFrameMs: number;
+  /** Seconds into the phase when the longest frame happened (to tell a compile stall from jitter). */
+  maxAtSeconds: number;
   maxDrawCalls: number;
   maxTriangles: number;
 }

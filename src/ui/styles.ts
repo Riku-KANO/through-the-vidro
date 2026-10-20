@@ -12,7 +12,7 @@ export const UI_TOKENS = {
   frost: 'rgba(255, 255, 255, 0.14)',
   frostBlur: '14px',
   ease: GLASS_EASE_CSS,
-  /** 18px at 1080p, scaled with the viewport height, never below 18px. */
+  /** Scales with the viewport height (20px at 1080p), never below the 18px minimum of 文字と色. */
   fontSize: 'max(18px, 1.85vh)',
 } as const;
 

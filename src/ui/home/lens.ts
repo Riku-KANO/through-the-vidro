@@ -1,13 +1,16 @@
 import {
   clamp,
   dot,
+  exp,
   float,
   max,
+  min,
   mix,
   normalize,
   pow,
   reflect,
   refract,
+  screenSize,
   screenUV,
   sin,
   smoothstep,
@@ -34,6 +37,18 @@ export const GLASS_IOR = 1.5;
  */
 const REFRACTION_REACH = 0.032;
 const MAX_SHIFT = 0.3;
+/**
+ * The rim band bends outwards (what lies just beyond the rim is squeezed into it, as in a glass ball).
+ * An outward shift that grows towards the rim never folds the picture. M0 tuning value (screen units).
+ */
+const RIM_REACH = 0.05;
+/**
+ * Passing through the surface: a barrel warp over the whole screen and a ripple ring running outwards.
+ * Kept below the slope at which the picture would fold (amplitude × frequency × 2 × aspect < 0.7 up to 21:9).
+ */
+const WARP_STRENGTH = 0.06;
+const RIPPLE_FREQ = 12;
+const RIPPLE_AMP = 0.012;
 
 type V3 = THREE.Node<'vec3'>;
 type F = THREE.Node<'float'>;
@@ -43,10 +58,43 @@ export interface LensUniforms {
   proj: THREE.UniformNode<'vec2', THREE.Vector2>;
   /** Refraction strength (1 on the home screen, peaks at the crossing, 0 at the end of the dive). */
   refraction: THREE.UniformNode<'float', number>;
+  /** Barrel warp over the whole screen while passing through the surface (0..1). */
+  warp: THREE.UniformNode<'float', number>;
+  /** Ripple ring of the membrane: strength (0..1) and radius (screen heights from the middle). */
+  ripple: THREE.UniformNode<'float', number>;
+  ringRadius: THREE.UniformNode<'float', number>;
 }
 
 export function createLensUniforms(): LensUniforms {
-  return { proj: uniform(new THREE.Vector2(1, 1)), refraction: uniform(1) };
+  return {
+    proj: uniform(new THREE.Vector2(1, 1)),
+    refraction: uniform(1),
+    warp: uniform(0),
+    ripple: uniform(0),
+    ringRadius: uniform(0),
+  };
+}
+
+/**
+ * Screen-space displacement of passing through the surface. Shared by the orb and the full-screen
+ * image so both carry the same distortion while one hands over to the other.
+ */
+function membraneShift(lens: LensUniforms): { shift: THREE.Node<'vec2'>; ring: F } {
+  const aspect = screenSize.x.div(screenSize.y);
+  const ndc = vec2(screenUV.x.mul(2).sub(1), float(1).sub(screenUV.y.mul(2)));
+  const q = ndc.mul(vec2(aspect, 1));
+  const r2 = dot(q, q);
+  const barrel = ndc
+    .mul(r2)
+    .mul(lens.warp)
+    .mul(-WARP_STRENGTH / 2)
+    .mul(vec2(1, -1));
+  const r = r2.sqrt();
+  const k = r.sub(lens.ringRadius);
+  const ring = exp(k.mul(k).negate().div(0.035)).mul(lens.ripple);
+  const wave = sin(k.mul(RIPPLE_FREQ)).mul(ring).mul(RIPPLE_AMP);
+  const dir = q.div(max(r, float(1e-3))).mul(vec2(1, -1));
+  return { shift: barrel.add(dir.mul(wave)), ring };
 }
 
 /** Projects a view-space direction onto the screen plane (NDC units / 2). */
@@ -65,8 +113,6 @@ export interface ShadeInput {
   local: V3;
   /** 1 = the full glass surface (tint, reflection, highlights); 0 = only the image behind it. */
   surface: F;
-  /** Extra screen-space displacement (the ripple of the dive). */
-  extraShift?: THREE.Node<'vec2'>;
 }
 
 export function glassShade(input: ShadeInput): V3 {
@@ -75,7 +121,14 @@ export function glassShade(input: ShadeInput): V3 {
   const delta = onScreen(bent).sub(onScreen(v)).mul(lens.proj).mul(vec2(0.5, -0.5));
   let shift = delta.mul(lens.refraction).mul(REFRACTION_REACH);
   shift = shift.mul(clamp(float(MAX_SHIFT).div(max(shift.length(), float(1e-4))), 0, 1));
-  const uv = screenUV.add(shift).add(input.extraShift ?? vec2(0, 0));
+  // rim band: n.xy points outwards from the orb's centre on screen, its length grows to 1 at the rim
+  const rho = n.xy.length();
+  const outward = n.xy.div(max(rho, float(1e-4))).mul(vec2(1, -1));
+  const rimBend = pow(smoothstep(0.55, 1, rho), 2)
+    .mul(min(lens.refraction, float(1.5)))
+    .mul(RIM_REACH);
+  const membrane = membraneShift(lens);
+  const uv = screenUV.add(shift).add(outward.mul(rimBend)).add(membrane.shift);
   const behind = texture(input.inner, uv).rgb;
 
   const cosI = clamp(dot(n, v.negate()), 0, 1);
@@ -109,5 +162,6 @@ export function glassShade(input: ShadeInput): V3 {
     .mul(fresnel)
     .add(vec3(1, 0.98, 0.95).mul(highlight))
     .add(flow);
-  return through.add(surfaceLight.mul(surface));
+  const ringLight = vec3(0.86, 1, 0.94).mul(membrane.ring.mul(0.1));
+  return through.add(surfaceLight.mul(surface)).add(ringLight);
 }

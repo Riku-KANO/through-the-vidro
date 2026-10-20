@@ -1,4 +1,4 @@
-import { acceptsEscape, Transition, type TransitionSpec } from '../core/transition';
+import { acceptsEscape, glassEaseInverse, Transition, type TransitionSpec } from '../core/transition';
 import type { HomeItem } from './home/menu-logic';
 
 export type Screen = 'loading' | 'home' | 'game';
@@ -11,8 +11,12 @@ export const TRANSITIONS = {
   homeToGame: { id: 'home-game', seconds: 2.0 },
 } as const satisfies Record<string, TransitionSpec>;
 
-/** 遷移のルール 2: the dive waits here (before passing through the surface) if the game is not ready. */
-const DIVE_HOLD_AT = 0.45;
+/**
+ * 遷移のルール 2: if the game is not ready the dive waits at this pose on the curve — the orb is large
+ * and still shows the miniature, well before the hand-over to the full screen and the crossing.
+ */
+export const DIVE_HOLD_POSE = 0.5;
+const DIVE_HOLD_AT = glassEaseInverse(DIVE_HOLD_POSE);
 
 interface Route {
   from: Screen;
@@ -73,9 +77,12 @@ export class ScreenFlow {
     return true;
   }
 
-  /** Esc: plays the active transition back to where it came from. No-op otherwise. */
+  /**
+   * Esc: plays the active transition back to where it came from. Pressing it again (or holding it)
+   * keeps going back; it never turns forward again. No-op without a transition.
+   */
   escape(): boolean {
-    if (!this.active || !acceptsEscape(this.active.spec)) return false;
+    if (!this.active || !acceptsEscape(this.active.spec) || this.active.direction === -1) return false;
     this.active.reverse();
     return true;
   }

@@ -86,6 +86,8 @@ export interface DivePose {
   refraction: number;
   /** Glass surface (tint, reflections) still in front of the camera: 1 until the crossing, 0 at the end. */
   surface: number;
+  /** Barrel warp over the whole screen while passing through the surface (0..1). */
+  warp: number;
   /** Ripple of the membrane we pass through, and how far its ring has run (screen heights). */
   ripple: number;
   ringRadius: number;
@@ -114,8 +116,10 @@ export function diveChoreography(p: number): DivePose {
     distortion,
     refraction: DIVE.homeRefraction * settle + DIVE.peakExtraRefraction * distortion,
     surface: 1 - smooth(segment(x, DIVE.crossAt, 0.92)),
-    ripple: distortion * segment(x, DIVE.crossAt - 0.01, DIVE.crossAt + 0.08),
-    ringRadius: segment(x, DIVE.crossAt - 0.01, 1) * 1.7,
+    // both start once the orb covers the screen, so they are fully there at the moment of passing through
+    warp: distortion * smooth(segment(x, DIVE.blendFrom - 0.05, DIVE.crossAt)),
+    ripple: distortion * smooth(segment(x, DIVE.blendFrom - 0.02, DIVE.crossAt)),
+    ringRadius: segment(x, DIVE.blendFrom - 0.03, 0.88) * 2.4,
     inner: x,
     menu: 1 - segment(x, 0, 0.18),
     homeLook: 1 - smooth(segment(x, 0, 0.4)),

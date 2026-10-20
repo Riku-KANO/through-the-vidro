@@ -34,7 +34,7 @@ import { createMist } from '../ui/home/mist';
 import { createHomeOrb } from '../ui/home/orb';
 import { pickLang, STRINGS, type StringKey } from '../ui/lang';
 import { LoadingScreen } from '../ui/loading-screen';
-import type { HomeDiveProbe, PhaseName } from '../ui/probe';
+import type { HomeDiveProbe, PhaseName, PhaseStats } from '../ui/probe';
 import { createUiRoot } from '../ui/styles';
 
 export const title = 'S-04 loading → home → dive into the orb (?autoplay=1 plays the script)';
@@ -484,6 +484,7 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
   const loading = new LoadingScreen(ui.root, t, () => startOpening(true));
   const menu = new HomeMenu(ui.root, t, {
     onFocus: (_item, index) => gate.ping(menuPitchHz(index), 0.035, 0.8),
+    onHover: (_item, index) => gate.ping(menuPitchHz(index), 0.035, 0.8),
     onSelect: (item) => {
       probe.selected = item;
       if (flow.select(item)) gate.ping(menuPitchHz(0) / 2, 0.05, 1.8);
@@ -493,7 +494,7 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
 
   // Esc is always accepted during long transitions (遷移のルール 4) and plays them back.
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape') return;
+    if (e.key !== 'Escape' || e.repeat) return;
     if (flow.escape()) gate.ping(menuPitchHz(4) / 2, 0.03, 0.7);
     else if (flow.rewindFromGame()) gate.ping(menuPitchHz(0) / 2, 0.04, 1.2);
   };
@@ -507,6 +508,7 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
   window.addEventListener('pointermove', onMove);
 
   // ---- loading: build environment maps, compile every pipeline while the vessel fills ----
+  let disposed = false;
   let orbReady = false;
   let gameReady = false;
   let warmInner = false;
@@ -548,6 +550,7 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
   };
   const load = async (): Promise<void> => {
     await nextFrame();
+    if (disposed) return; // the scene was closed while loading
     envTargets.push(pmrem.fromScene(world.skyScene, 0.02));
     world.scene.environment = envTargets[0]?.texture ?? null;
     const room = new RoomEnvironment();
@@ -556,16 +559,20 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
     room.dispose();
     done('environment maps');
     await compileWith(null, late, outerCam, home, [membrane.mesh]);
+    if (disposed) return;
     home.add(late);
     orbReady = true;
     done('compile home orb');
     await compileWith(innerRT, world.scene, gameCam, world.scene);
+    if (disposed) return;
     done('compile game (orb image)');
     await compileWith(null, world.scene, gameCam, world.scene);
+    if (disposed) return;
     done('compile game (screen)');
     warmInner = true; // one real draw into the orb's image (transmission buffers etc.)
     await nextFrame();
     await nextFrame();
+    if (disposed) return;
     warmInner = false;
     gameReady = true;
     flow.setGameReady(true);
@@ -610,6 +617,7 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
   let elapsed = 0;
   let lastNow = performance.now();
   let lastPhase: PhaseName = 'loading';
+  let phaseStart = performance.now();
   let firstFrameDrawn = false;
 
   const phaseOf = (): PhaseName => (flow.transition ? (flow.transition.spec.id as PhaseName) : flow.screen);
@@ -645,9 +653,9 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
 
   const runAutoplay = (dt: number): void => {
     if (autoplay === 'off' || flow.transition) return;
-    if (flow.screen === 'loading' && flow.isLoaded && loading.full) {
+    if (flow.screen === 'loading' && flow.isLoaded && (loading.full || autoplay === 'home')) {
       dwell += dt;
-      if (dwell >= AUTOPLAY.loadingDwell) {
+      if (autoplay === 'home' || dwell >= AUTOPLAY.loadingDwell) {
         dwell = 0;
         startOpening(false);
       }
@@ -663,23 +671,31 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
     }
   };
 
+  const statsOf = (phase: PhaseName): PhaseStats => {
+    const s = probe.phases[phase] ?? {
+      frames: 0,
+      maxFrameMs: 0,
+      maxAtSeconds: 0,
+      maxDrawCalls: 0,
+      maxTriangles: 0,
+    };
+    probe.phases[phase] = s;
+    return s;
+  };
+  /** Frame time of the frame that was just shown, booked to the phase it showed. */
   const recordFrame = (): void => {
     const now = performance.now();
     const ms = now - lastNow;
     lastNow = now;
     if (!probe.load.ready) stepMaxFrame = Math.max(stepMaxFrame, ms);
     if (!firstFrameDrawn) return;
-    const s = probe.phases[lastPhase] ?? { frames: 0, maxFrameMs: 0, maxDrawCalls: 0, maxTriangles: 0 };
-    probe.phases[lastPhase] = s;
+    const s = statsOf(lastPhase);
     s.frames++;
-    s.maxFrameMs = Math.max(s.maxFrameMs, ms);
-    s.maxDrawCalls = Math.max(s.maxDrawCalls, renderer.info.render.drawCalls);
-    s.maxTriangles = Math.max(s.maxTriangles, renderer.info.render.triangles);
+    if (ms > s.maxFrameMs) {
+      s.maxFrameMs = ms;
+      s.maxAtSeconds = (now - phaseStart) / 1000;
+    }
   };
-
-  // several render passes per frame: count them all, reset once per frame in render()
-  const prevAutoReset = renderer.info.autoReset;
-  renderer.info.autoReset = false;
 
   return {
     scene: home,
@@ -726,8 +742,9 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
       membrane.opacity.value = dv.fullscreen;
       membrane.cameraDistance.value = dv.cameraDistance;
       membrane.surface.value = dv.surface;
-      membrane.ripple.value = dv.ripple;
-      membrane.ringRadius.value = dv.ringRadius;
+      lens.warp.value = dv.warp;
+      lens.ripple.value = dv.ripple;
+      lens.ringRadius.value = dv.ringRadius;
 
       // the fog: white-out while loading, the vessel's light spills into it, then it clears
       mist.fog.value = op.fog * (1 - segment(diveP, 0, 0.3));
@@ -812,8 +829,11 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
       probe.paused = paused;
     },
     render() {
-      renderer.info.reset();
-      lastPhase = phaseOf();
+      const phase = phaseOf();
+      if (phase !== lastPhase) {
+        lastPhase = phase;
+        phaseStart = performance.now();
+      }
       const tr = flow.transition;
       if (flow.screen === 'game' && !tr) {
         // standing in the workshop: the game scene is the whole picture now
@@ -828,6 +848,10 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
         renderer.setRenderTarget(null);
         renderer.render(home, outerCam);
       }
+      // renderer.info is reset once per animation frame, so here it holds every pass of this frame
+      const s = statsOf(phase);
+      s.maxDrawCalls = Math.max(s.maxDrawCalls, renderer.info.render.drawCalls);
+      s.maxTriangles = Math.max(s.maxTriangles, renderer.info.render.triangles);
       if (!firstFrameDrawn) {
         firstFrameDrawn = true;
         loading.hideBackdrop();
@@ -843,7 +867,8 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
       menu.invalidate();
     },
     dispose() {
-      renderer.info.autoReset = prevAutoReset;
+      disposed = true;
+      window.__vidro.sceneProbe = {};
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onMove);
       loading.dispose();

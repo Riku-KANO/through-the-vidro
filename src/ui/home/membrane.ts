@@ -1,17 +1,4 @@
-import {
-  exp,
-  float,
-  max,
-  normalize,
-  positionGeometry,
-  screenSize,
-  screenUV,
-  sin,
-  uniform,
-  vec2,
-  vec3,
-  vec4,
-} from 'three/tsl';
+import { float, max, normalize, positionGeometry, screenUV, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { HOME_COMPOSITION } from './choreography';
 import { glassShade, type LensUniforms } from './lens';
@@ -24,8 +11,6 @@ export interface Membrane {
   cameraDistance: THREE.UniformNode<'float', number>;
   /** 1 = glass surface still in front of us, 0 = only the game image. */
   surface: THREE.UniformNode<'float', number>;
-  ripple: THREE.UniformNode<'float', number>;
-  ringRadius: THREE.UniformNode<'float', number>;
   dispose(): void;
 }
 
@@ -39,8 +24,6 @@ export function createMembrane(inner: THREE.Texture, lens: LensUniforms): Membra
   const opacity = uniform(0);
   const cameraDistance = uniform(HOME_COMPOSITION.cameraDistance);
   const surface = uniform(1);
-  const ripple = uniform(0);
-  const ringRadius = uniform(0);
   const R = HOME_COMPOSITION.orbRadius;
 
   const ndc = vec2(screenUV.x.mul(2).sub(1), float(1).sub(screenUV.y.mul(2)));
@@ -53,16 +36,6 @@ export function createMembrane(inner: THREE.Texture, lens: LensUniforms): Membra
   const centre = vec3(0, 0, d.negate());
   const normal = normalize(hit.sub(centre));
 
-  // the ripple of passing through the surface: a ring running outwards from the middle
-  const aspect = screenSize.x.div(screenSize.y);
-  const q = ndc.mul(vec2(aspect, 1));
-  const r = q.length();
-  const k = r.sub(ringRadius);
-  const env = exp(k.mul(k).negate().div(0.035));
-  const wave = sin(k.mul(30)).mul(env).mul(ripple).mul(0.022);
-  const dir = q.div(max(r, float(1e-3)));
-  const extraShift = dir.mul(wave).mul(vec2(1, -1));
-
   const shaded = glassShade({
     inner,
     lens,
@@ -70,9 +43,7 @@ export function createMembrane(inner: THREE.Texture, lens: LensUniforms): Membra
     normal,
     local: normal,
     surface,
-    extraShift,
   });
-  const rim = vec3(0.86, 1, 0.94).mul(env.mul(ripple).mul(0.1));
 
   const material = new THREE.MeshBasicNodeMaterial({
     transparent: true,
@@ -80,7 +51,7 @@ export function createMembrane(inner: THREE.Texture, lens: LensUniforms): Membra
     depthWrite: false,
   });
   material.vertexNode = vec4(positionGeometry.xy, 0, 1);
-  material.colorNode = shaded.add(rim);
+  material.colorNode = shaded;
   material.opacityNode = opacity;
   const geometry = new THREE.PlaneGeometry(2, 2);
   const mesh = new THREE.Mesh(geometry, material);
@@ -93,8 +64,6 @@ export function createMembrane(inner: THREE.Texture, lens: LensUniforms): Membra
     opacity,
     cameraDistance,
     surface,
-    ripple,
-    ringRadius,
     dispose() {
       geometry.dispose();
       material.dispose();

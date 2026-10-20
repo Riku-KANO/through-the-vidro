@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { diveChoreography, HOME_COMPOSITION, openingChoreography, orbCoversScreen } from './choreography';
+import {
+  DIVE,
+  diveChoreography,
+  HOME_COMPOSITION,
+  openingChoreography,
+  orbCoversScreen,
+} from './choreography';
 
 const steps = (n: number): number[] => Array.from({ length: n + 1 }, (_, i) => i / n);
 const { orbRadius, fovDeg } = HOME_COMPOSITION;
@@ -101,5 +107,19 @@ describe('diveChoreography (ホーム → ゲーム開始)', () => {
     expect(peak).toBeGreaterThan(0.5);
     expect(orbCoversScreen(atPeak.cameraDistance, orbRadius, fovDeg, 16 / 9)).toBe(true);
     expect(atPeak.fullscreen).toBeGreaterThan(0);
+    // not just a zoom: the whole screen is warped and the ripple ring is running across it right then
+    const atCross = diveChoreography(DIVE.crossAt);
+    expect(atCross.warp).toBeGreaterThan(0.8);
+    expect(atCross.ripple).toBeGreaterThan(0.8);
+    expect(atCross.ringRadius).toBeGreaterThan(0.3);
+    expect(atCross.ringRadius).toBeLessThan(1.2);
+  });
+
+  it('leaves no warp or ripple once standing in the game view', () => {
+    const end = diveChoreography(1);
+    expect(end.warp).toBe(0);
+    expect(end.ripple).toBe(0);
+    expect(end.surface).toBe(0);
+    expect(end.refraction).toBe(0);
   });
 });

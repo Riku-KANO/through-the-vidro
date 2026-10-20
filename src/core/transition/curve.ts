@@ -53,3 +53,17 @@ export function cubicBezier(x1: number, y1: number, x2: number, y2: number): (x:
 }
 
 export const glassEase: (x: number) => number = cubicBezier(...GLASS_EASE_POINTS);
+
+/** The time (0..1) at which `glassEase` reaches `y`. Lets a pose on the curve be turned into a moment. */
+export function glassEaseInverse(y: number): number {
+  if (!(y > 0)) return 0;
+  if (y >= 1) return 1;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 48; i++) {
+    const mid = (lo + hi) / 2;
+    if (glassEase(mid) < y) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}

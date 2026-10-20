@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GLASS_EASE_CSS, glassEase } from './curve';
+import { GLASS_EASE_CSS, glassEase, glassEaseInverse } from './curve';
 
 const samples = (n: number): number[] => Array.from({ length: n + 1 }, (_, i) => i / n);
 
@@ -41,6 +41,12 @@ describe('glassEase (トランジション設計 > 遷移のルール 5)', () =>
 
   it('spends most of its motion in the middle', () => {
     expect(glassEase(0.6) - glassEase(0.3)).toBeGreaterThan(0.5);
+  });
+
+  it('can be read backwards: the moment at which a given pose is reached', () => {
+    for (const y of [0.1, 0.5, 0.62, 0.9]) expect(glassEase(glassEaseInverse(y))).toBeCloseTo(y, 6);
+    expect(glassEaseInverse(0)).toBe(0);
+    expect(glassEaseInverse(1)).toBe(1);
   });
 
   it('is available as the same curve for DOM animations', () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ScreenFlow, TRANSITIONS } from './flow';
+import { glassEase } from '../core/transition';
+import { DIVE_HOLD_POSE, ScreenFlow, TRANSITIONS } from './flow';
+import { DIVE } from './home/choreography';
 
 function run(flow: ScreenFlow, seconds: number, step = 1 / 60): void {
   for (let t = 0; t < seconds; t += step) flow.update(step);
@@ -67,6 +69,21 @@ describe('ScreenFlow', () => {
     expect(flow.screen).toBe('home');
   });
 
+  it('keeps going back however many times Esc is pressed (no turning forward again)', () => {
+    const flow = new ScreenFlow();
+    flow.markLoaded();
+    flow.start();
+    run(flow, 1.6);
+    flow.select('start');
+    run(flow, 1.0);
+    expect(flow.escape()).toBe(true);
+    expect(flow.escape()).toBe(false);
+    expect(flow.escape()).toBe(false);
+    expect(flow.transition?.direction).toBe(-1);
+    run(flow, 1.1);
+    expect(flow.screen).toBe('home');
+  });
+
   it('ignores other input while a transition is playing (only Esc gets through)', () => {
     const flow = new ScreenFlow();
     flow.markLoaded();
@@ -107,6 +124,10 @@ describe('ScreenFlow', () => {
     run(flow, 4);
     expect(flow.screen).toBe('home');
     expect(flow.transition?.holding).toBe(true);
+    // waiting with the orb still on screen: before the hand-over to the full-screen image
+    expect(flow.transition?.value ?? 1).toBeCloseTo(DIVE_HOLD_POSE, 3);
+    expect(DIVE_HOLD_POSE).toBeLessThan(DIVE.blendFrom);
+    expect(glassEase(flow.transition?.progress ?? 1)).toBeLessThan(DIVE.blendFrom);
     flow.setGameReady(true);
     run(flow, 2.1);
     expect(flow.screen).toBe('game');

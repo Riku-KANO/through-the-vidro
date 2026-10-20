@@ -19,7 +19,7 @@ const BUDGET = { drawCalls: 300, triangles: 1_500_000 };
 
 const CHECKPOINTS = {
   'loading-home': [0, 0.75, 1.5],
-  'home-game': [0, 0.5, 0.8, 0.9, 1.0, 1.5, 2.0],
+  'home-game': [0, 0.5, 0.8, 0.85, 0.9, 0.95, 1.0, 1.5, 2.0],
 } as const;
 const pauseParam = Object.entries(CHECKPOINTS)
   .map(([id, ts]) => `${id}:${ts.join(',')}`)
@@ -155,8 +155,11 @@ for (const backend of backends) {
       expect(s.maxTriangles, `triangles in ${phase}`).toBeLessThanOrEqual(BUDGET.triangles);
     }
     // A pipeline compile in the middle of a transition shows up as a long frame (S-00 saw 1.2 s).
+    // Measured worst frames are ~18 ms; 200 ms leaves room for headless jitter and for another
+    // session's sensor sharing the GPU (one-off spikes of 75–90 ms were seen that way), and still
+    // catches a compile stall.
     for (const phase of ['loading-home', 'home', 'home-game', 'game'] as const) {
-      expect(p.phases[phase]?.maxFrameMs ?? 0, `worst frame in ${phase}`).toBeLessThan(500);
+      expect(p.phases[phase]?.maxFrameMs ?? 0, `worst frame in ${phase}`).toBeLessThan(200);
     }
     expect(errors.filter((e) => !/GPU stall|powerPreference/i.test(e))).toEqual([]);
   });
@@ -185,16 +188,13 @@ test.describe('S-04 input', () => {
     await waitProbe(page, "p.screen === 'home' && p.transition === null");
 
     const drop = page.locator('[data-item="continue"]');
-    const scaleOf = (): Promise<number> =>
-      drop.evaluate((el) => {
-        const bead = el.querySelector('[data-part="bead"]') ?? el;
-        return new DOMMatrix(getComputedStyle(bead).transform).a;
-      });
-    const before = await scaleOf();
+    const bead = drop.locator('[data-part="bead"]');
+    const beadWidth = async (): Promise<number> => (await bead.boundingBox())?.width ?? 0;
+    const before = await beadWidth();
     await drop.hover();
     await page.waitForTimeout(450);
     expect((await probe(page)).hovered).toBe('continue');
-    expect(await scaleOf()).toBeGreaterThan(before * 1.05);
+    expect(await beadWidth()).toBeGreaterThan(before * 1.05);
 
     const vp = page.viewportSize() ?? { width: 1280, height: 720 };
     await page.mouse.move(vp.width * 0.95, vp.height * 0.08);

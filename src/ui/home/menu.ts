@@ -23,6 +23,8 @@ export interface MenuEvents {
   onSelect(item: HomeItem): void;
   /** Focus moved to a drop (by keyboard or by hover): answer with light and sound. */
   onFocus(item: HomeItem, index: number): void;
+  /** The pointer reached a drop (画面ごとの設計: 雫にホバーすると膨らんで鳴る), focused or not. */
+  onHover(item: HomeItem, index: number): void;
 }
 
 interface Drop {
@@ -47,6 +49,8 @@ export class HomeMenu {
   private rowHalf = 18;
   private measured = false;
   private shown = true;
+  /** Focus moved by a hover, which already answered with its own sound. */
+  private quietFocus = false;
 
   constructor(
     root: HTMLElement,
@@ -72,7 +76,12 @@ export class HomeMenu {
         if (!this.interactive) return;
         this.hoverIndex = index;
         el.classList.add('is-hover');
-        if (this.focusIndex !== index) el.focus({ preventScroll: true });
+        this.events.onHover(id, index);
+        if (this.focusIndex !== index) {
+          this.quietFocus = true;
+          el.focus({ preventScroll: true });
+          this.quietFocus = false;
+        }
       });
       el.addEventListener('pointerleave', () => {
         if (this.hoverIndex === index) this.hoverIndex = -1;
@@ -81,7 +90,7 @@ export class HomeMenu {
       el.addEventListener('focus', () => {
         this.focusIndex = index;
         el.classList.add('is-focus');
-        if (this.interactive) this.events.onFocus(id, index);
+        if (this.interactive && !this.quietFocus) this.events.onFocus(id, index);
       });
       el.addEventListener('blur', () => el.classList.remove('is-focus'));
       el.addEventListener('click', () => {
@@ -101,6 +110,7 @@ export class HomeMenu {
       }
     });
     root.appendChild(this.el);
+    this.applyInteractive();
   }
 
   get focused(): HomeItem | null {
@@ -115,6 +125,11 @@ export class HomeMenu {
   setInteractive(on: boolean): void {
     if (on === this.interactive) return;
     this.interactive = on;
+    this.applyInteractive();
+  }
+
+  private applyInteractive(): void {
+    const on = this.interactive;
     this.el.style.pointerEvents = on ? 'auto' : 'none';
     for (const d of this.drops) {
       d.el.tabIndex = on ? 0 : -1;
@@ -158,7 +173,9 @@ export class HomeMenu {
     if (!shown) return;
     const n = this.drops.length;
     const rr = layout.r * ARC_RADIUS;
-    this.drops.forEach((d, i) => {
+    for (let i = 0; i < n; i++) {
+      const d = this.drops[i];
+      if (!d) continue;
       const a = ((ARC_FROM_DEG + ((ARC_TO_DEG - ARC_FROM_DEG) * i) / Math.max(1, n - 1)) * Math.PI) / 180;
       const bobY = Math.sin(layout.time * 0.9 + i * 1.7) * 3;
       const bobX = Math.cos(layout.time * 0.6 + i * 1.1) * 1.5;
@@ -171,7 +188,7 @@ export class HomeMenu {
         d.pressTimer -= dt;
         if (d.pressTimer <= 0) d.el.classList.remove('is-pressed');
       }
-    });
+    }
   }
 
   dispose(): void {
