@@ -8,6 +8,7 @@ import {
 } from './core/bench';
 import { parseParams } from './core/params';
 import { PerfGovernor } from './core/perf/governor';
+import { GpuSpanTimer, type GpuTimeSource } from './core/perf/gpu-span';
 import type { QualityDecision } from './core/perf/quality-select';
 import { QUALITY_PRESETS, type QualityLevel } from './core/quality';
 import { type Backend, createRenderer } from './core/renderer';
@@ -21,8 +22,13 @@ import { loadScene, sceneNames } from './scenes/registry';
  */
 export interface BenchResult extends FrameStats {
   seconds: number;
-  /** GPU time from timestamp queries; null when the backend cannot measure it. */
+  /**
+   * three's per-pass GPU timestamp sum (reference only: passes overlap on Apple/Metal and read ~10× too high);
+   * null when the backend cannot measure it.
+   */
   gpu: GpuStats | null;
+  /** GPU frame span (first pass start → last pass end, S-08); null without WebGPU timestamp queries. */
+  gpuSpan: GpuStats | null;
   maxDrawCalls: number;
   maxTriangles: number;
   budgetViolations: ReturnType<typeof checkBudget>;
@@ -37,12 +43,16 @@ export interface VidroProbe {
   /** Current render scale (preset × dynamic resolution), relative to the device pixel ratio. */
   renderScale: number;
   gpuName: string;
-  /** The backend can read GPU timestamps (shown in the overlay and bench). */
+  /** The backend can read three's per-pass GPU timestamps (bench reference). */
   gpuTiming: boolean;
-  /** Timestamps may drive decisions on this GPU (not on Apple/Metal until calibrated, see renderer.ts). */
+  /** GPU time that feeds the governor and the overlay: the frame span on WebGPU, else three's per-pass sum. */
+  gpuSource: GpuTimeSource;
+  /** That GPU time may drive decisions (the span everywhere; the per-pass sum not on Apple/Metal). */
   gpuTimingTrusted: boolean;
   /** False once GPU timestamps proved implausible or untrusted; the governor then keeps the preset scale. */
   gpuReliable: boolean;
+  /** Latest GPU time (ms) from gpuSource, as fed to the governor; null before the first reading. */
+  gpuMs: number | null;
   /** Set once ?quality=auto has measured its window. */
   qualityDecision: QualityDecision | null;
   /** Whether the auto-selected preset held its headroom when re-measured (null = not verified). */
@@ -76,8 +86,10 @@ const probe: VidroProbe = {
   renderScale: QUALITY_PRESETS[params.quality].renderScale,
   gpuName: '',
   gpuTiming: false,
+  gpuSource: 'none',
   gpuTimingTrusted: false,
   gpuReliable: false,
+  gpuMs: null,
   qualityDecision: null,
   qualityVerified: null,
   errors: [],
@@ -130,13 +142,17 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { renderer, backend, baseDpr, gpuName, gpuTiming, gpuTimingTrusted } = await createRenderer(app, {
-    forceWebGL: params.forceWebGL,
-    renderScale: QUALITY_PRESETS[params.quality].renderScale,
-  });
+  const { renderer, backend, baseDpr, gpuName, gpuTiming, gpuSource, gpuTimingTrusted, spanDevice } =
+    await createRenderer(app, {
+      forceWebGL: params.forceWebGL,
+      renderScale: QUALITY_PRESETS[params.quality].renderScale,
+      // ?gpuSpan=0 turns the frame span off (A/B of its cost; the governor falls back to the per-pass rule).
+      frameSpan: params.raw.get('gpuSpan') !== '0',
+    });
   probe.backend = backend;
   probe.gpuName = gpuName;
   probe.gpuTiming = gpuTiming;
+  probe.gpuSource = gpuSource;
   probe.gpuTimingTrusted = gpuTimingTrusted;
 
   const mod: SceneModule = await loadScene(params.scene);
@@ -237,21 +253,35 @@ async function main(): Promise<void> {
     forceLevel: params.autoForce ?? undefined,
   });
 
-  // GPU timing: resolve every few frames, one request in flight, only while something uses the value.
-  // Samples carry the governor epoch so readings from before a change are dropped.
+  // GPU timing: sample every few frames, one readback in flight per source, only while something uses the value.
+  // The frame span (WebGPU) feeds the governor and the overlay; three's per-pass sum is kept as a bench reference
+  // and feeds them only where there is no span. Samples carry the governor epoch so readings from before a change
+  // are dropped.
+  const spanTimer = spanDevice ? new GpuSpanTimer(spanDevice) : null;
   const benchGpu: number[] = [];
+  const benchSpan: number[] = [];
   let benchRecording = false;
   let gpuInFlight = false;
   let gpuEpoch = 0;
+  let spanEpoch = 0;
+  const feedGovernor = (ms: number, epoch: number): void => {
+    extras.gpuMs = ms;
+    probe.gpuMs = ms;
+    governor.gpu(ms, epoch);
+  };
   const onGpu = (ms: number | undefined): void => {
     gpuInFlight = false;
     if (typeof ms !== 'number' || ms <= 0) return;
-    extras.gpuMs = ms;
-    governor.gpu(ms, gpuEpoch);
+    if (gpuSource === 'passes') feedGovernor(ms, gpuEpoch);
     if (benchRecording) benchGpu.push(ms);
   };
   const onGpuFailed = (): void => {
     gpuInFlight = false;
+  };
+  const onSpan = (ms: number | null): void => {
+    if (ms === null) return;
+    feedGovernor(ms, spanEpoch);
+    if (benchRecording) benchSpan.push(ms);
   };
 
   let switching = false;
@@ -293,11 +323,16 @@ async function main(): Promise<void> {
     if (switching || !current || probe.status === 'error') return;
 
     current.update(dt, t);
+    const sampleGpu =
+      (governor.gpuReliable || stats.visible || benchRecording) && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
+    // The span brackets only the rendering: CPU work in update() is not GPU time.
+    const timingSpan = sampleGpu && (spanTimer?.begin() ?? false);
+    if (timingSpan) spanEpoch = governor.epoch;
     if (current.render) current.render();
     else renderer.render(current.scene, current.camera);
+    if (timingSpan) spanTimer?.end()?.then(onSpan);
 
-    const wantGpu = gpuTiming && (governor.gpuReliable || stats.visible || benchRecording);
-    if (wantGpu && !gpuInFlight && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0) {
+    if (sampleGpu && gpuTiming && !gpuInFlight && (gpuSource === 'passes' || benchRecording)) {
       gpuInFlight = true;
       gpuEpoch = governor.epoch;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
@@ -328,6 +363,7 @@ async function main(): Promise<void> {
           ...summarizeFrameTimes(frameTimes),
           seconds: params.benchSeconds,
           gpu: summarizeGpuTimes(benchGpu),
+          gpuSpan: summarizeGpuTimes(benchSpan),
           maxDrawCalls,
           maxTriangles,
           budgetViolations: checkBudget({ drawCalls: maxDrawCalls, triangles: maxTriangles }),

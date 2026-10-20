@@ -22,6 +22,7 @@ const rows = files.map((f) => {
     status: r.status,
     fps: b.avgFps ? b.avgFps.toFixed(1) : '-',
     p95ms: b.p95Ms ? b.p95Ms.toFixed(1) : '-',
+    spanMs: b.gpuSpan ? b.gpuSpan.avgMs.toFixed(2) : '-',
     draws: b.maxDrawCalls ?? '-',
     ktris: b.maxTriangles != null ? Math.round(b.maxTriangles / 1000) : '-',
     budget: (b.budgetViolations ?? []).length ? 'OVER' : 'ok',

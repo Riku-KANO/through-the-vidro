@@ -3,6 +3,24 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.4.0（統合待ち） — 2026-10-21（S-08 GPU のフレーム時間）
+
+`VERSION` はこのスライスの書き込み範囲の外なので、統合時に 0.4.0 へ上げる。
+
+- `perf/gpu-span.ts`（新規）: GPU のフレーム時間 span（フレームの最初のパスの開始から最後のパスの終わりまで）を自前のタイムスタンプで測る
+  `GpuSpanTimer`。描画の直前に `begin()`、直後に `end()`（Promise で ms か null）。WebGPU のみ（`GpuSpanTimer.supported(device)`）。
+  読み出し待ちは1件まで、querySet・バッファ・パイプラインは起動時に1回だけ作る。印のパスは1ワークグループの空のシェーダを dispatch する
+  （Metal では作業のないパスのタイムスタンプが 0 のまま）。前回の読みと同じ値のまま（GPU が書かなかった）の読みは捨てる。
+  ほかに `spanMs`（あり得ない値を捨てる）と、governor に渡す GPU 時間を選ぶ
+  `chooseGpuTimeSource`（span → three のパスの合計 → なし。span は Apple でも信用、パスの合計は Apple では信用しない）
+- `renderer.ts`: 戻り値に `gpuSource`（'span' | 'passes' | 'none'）と `spanDevice` を追加。`gpuTimingTrusted` は `chooseGpuTimeSource` で決める
+  （WebGPU なら Apple でも true になる）。オプション `frameSpan: false` で span を切れる（A/B 用）
+- `perf/governor.ts`: コメントのみ（GPU 時間の出どころ）。振る舞いは変えていない
+- 案2で使うときは、アプリ側でフレームごとに `begin()` → 描画 → `end()` を呼び、得た ms を `PerfGovernor.gpu()` に渡す
+  （このリポジトリでは `src/main.ts`）。three のパスの合計は参考値として残してよい
+- 計測（Apple M5 Pro、垂直同期なし、静か）: 負荷シーンで span は実際のフレーム時間と 0〜7% で一致（パスの合計は6〜14倍）。
+  ほぼ空のシーンを毎秒数千フレームで回すと、フレームが GPU 上で重なり span がフレームの間隔より長く出る（2〜5倍）
+
 ## 0.3.0 — 2026-10-21（M0 統合: S-01 ガラス材質、S-04 遷移）
 
 ### S-01 ガラス材質

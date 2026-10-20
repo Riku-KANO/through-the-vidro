@@ -22,6 +22,8 @@ import {
  *   measurement and never acts on frame time, which under vsync cannot tell a cap from overload.
  * - Every action bumps `epoch`; GPU samples requested before it are dropped, and a few frames are skipped after it,
  *   so a stale reading from the old resolution never drives the next decision.
+ * - GPU time is the frame span where WebGPU can time it (first pass start → last pass end, perf/gpu-span.ts, S-08),
+ *   otherwise three's per-pass sum; which one, and whether it is trusted, is chooseGpuTimeSource's call.
  * - GPU time is only trusted while it is physically plausible. Timestamp sums over many render passes overlap on
  *   some GPUs (Apple/Metal measured ~10× too high in S-05); GPU time above the real (mean) frame time means the
  *   readings are unusable, so the governor stops using them for the rest of the session.
@@ -37,6 +39,7 @@ export interface PerfGovernorOptions {
   auto: boolean;
   autoWindowSec: number;
   dynres: boolean;
+  /** GPU time will be fed and may drive decisions (see chooseGpuTimeSource in gpu-span.ts). */
   gpuTiming: boolean;
   dynresTargetMs?: number;
   /** Test hook (?autoForce): replace the recommendation to exercise the switch and verification path. */
