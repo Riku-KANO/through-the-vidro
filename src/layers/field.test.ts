@@ -1,3 +1,4 @@
+import { float } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { describe, expect, it } from 'vitest';
 import { LayerField } from './field';
@@ -94,5 +95,38 @@ describe('LayerField.assign (表・裏・共通の割り当て)', () => {
     const sun = new THREE.DirectionalLight();
     field.assign(sun, 'shared');
     expect(sun.shadow.camera.layers.mask).toBe(viewMask('main'));
+  });
+
+  it('glass made transmissive by a node is treated like transmission > 0', () => {
+    const field = new LayerField();
+    const glass = new THREE.MeshPhysicalNodeMaterial();
+    glass.transmissionNode = float(1);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(), glass);
+    field.assign(bridge, 'back');
+    expect(visibleTo(bridge, 'peek')).toBe(false);
+    const standIn = bridge.children[0] as THREE.Mesh | undefined;
+    expect(standIn).toBeDefined();
+    const m = (standIn as THREE.Mesh).material as THREE.MeshPhysicalNodeMaterial;
+    expect(m.useTransmission).toBe(false);
+  });
+
+  it('assigning a transmissive object again keeps one stand-in, still only in the peek image', () => {
+    const field = new LayerField();
+    const glass = new THREE.MeshPhysicalNodeMaterial({ transmission: 1 });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(), glass);
+    field.assign(dome, 'back');
+    const first = dome.children[0] as THREE.Mesh;
+    const backStandInMat = first.material;
+    field.assign(dome, 'back');
+    field.assign(dome, 'shared');
+    expect(dome.children).toHaveLength(1);
+    expect(dome.children[0]).toBe(first);
+    expect(visibleTo(first, 'main')).toBe(false);
+    expect(visibleTo(first, 'peek')).toBe(true);
+    // re-cut for the new kind, not patched on top of the old stand-in material
+    expect(first.material).not.toBe(backStandInMat);
+    expect(contains((first.material as Patched).emissiveNode, (backStandInMat as Patched).emissiveNode)).toBe(
+      false,
+    );
   });
 });

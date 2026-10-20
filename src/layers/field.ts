@@ -58,8 +58,14 @@ const materialsOf = (o: THREE.Object3D): THREE.Material[] => {
   if (!m) return [];
   return Array.isArray(m) ? m : [m];
 };
-const isTransmissive = (m: THREE.Material): boolean =>
-  ((m as { transmission?: number }).transmission ?? 0) > 0;
+
+/** Same test as three's `useTransmission`: a transmission value or a transmission node. */
+const isTransmissive = (m: THREE.Material): boolean => {
+  const useTransmission = (m as { useTransmission?: unknown }).useTransmission;
+  if (typeof useTransmission === 'boolean') return useTransmission;
+  const t = m as { transmission?: number; transmissionNode?: unknown };
+  return (t.transmission ?? 0) > 0 || (t.transmissionNode ?? null) !== null;
+};
 
 /**
  * The materialized field: up to 3 spheres (技術設計 > 裏の層の実装 > 実体化) handed to every layered
@@ -86,8 +92,12 @@ export class LayerField {
   private readonly pristine = new Map<THREE.Material, THREE.Material>();
   /** patched version → source material */
   private readonly origin = new Map<THREE.Material, THREE.Material>();
-  /** source material → its peek-image stand-in (transmissive materials only) */
-  private readonly standIns = new Map<THREE.Material, THREE.Material>();
+  /** source material → its peek-image stand-in material per layer kind (transmissive materials only) */
+  private readonly standIns = new Map<THREE.Material, Map<LayerKind, THREE.Material>>();
+  /** object → its peek-image stand-in child, and the set of stand-ins themselves */
+  private readonly standInOf = new WeakMap<THREE.Object3D, THREE.Mesh>();
+  private readonly standInObjects = new WeakSet<THREE.Object3D>();
+  private readonly warned = new Set<string>();
   private readonly owned: THREE.Material[] = [];
   private readonly membraneGeometry = new THREE.SphereGeometry(1, 72, 36);
 
@@ -122,7 +132,9 @@ export class LayerField {
   /**
    * Puts `root` and all its descendants on a layer and makes their materials obey the field.
    * The caller's material is patched in place for the first kind it meets; a material shared by
-   * several kinds gets one copy per kind, each made from an untouched copy of the original.
+   * several kinds gets one copy per kind, each made from an untouched copy of the original. Those
+   * copies are snapshots: later changes to the caller's material reach only the first kind's version
+   * (change the material before assigning, or assign each kind its own material).
    *
    * Transmission and the peek image: on the WebGPU path, transmission drawn into the smaller peek
    * target in the same frame invalidates the frame (three r186, found in S-05). So a back/shared
@@ -131,8 +143,10 @@ export class LayerField {
    * `inPeek: false` keeps an object out of the peek image entirely.
    */
   assign(root: THREE.Object3D, kind: LayerKind, opts: { inPeek?: boolean } = {}): void {
-    const standIns: [THREE.Object3D, THREE.Mesh][] = [];
+    const standInWanted: [THREE.Mesh, boolean][] = [];
     root.traverse((o) => {
+      // our own stand-ins keep their peek-only layer and material when their owner is assigned again
+      if (this.standInObjects.has(o)) return;
       const mats = materialsOf(o);
       const transmissive = mats.some(isTransmissive);
       o.layers.mask = layerMask(kind, { transmissive: transmissive || opts.inPeek === false });
@@ -142,15 +156,15 @@ export class LayerField {
           ? r.material.map((m) => this.patch(m, kind))
           : this.patch(mats[0] as THREE.Material, kind);
       }
-      if (transmissive && kind !== 'surface' && opts.inPeek !== false && o instanceof THREE.Mesh) {
-        standIns.push([o, this.createStandIn(o, kind)]);
+      if (o instanceof THREE.Mesh) {
+        standInWanted.push([o, transmissive && kind !== 'surface' && opts.inPeek !== false]);
       }
       // The shadow map is drawn once per frame by whichever render uses it first; when the peek image
       // is drawn first its camera would decide what casts shadows. Pin shadows to the normal view.
       const shadow = (o as { shadow?: { camera?: THREE.Camera } }).shadow;
       if (shadow?.camera) shadow.camera.layers.mask = viewMask('main');
     });
-    for (const [parent, twin] of standIns) parent.add(twin);
+    for (const [mesh, wanted] of standInWanted) this.syncStandIn(mesh, kind, wanted);
   }
 
   /** Updates the spheres (at most 3; extra entries are ignored). Allocation-free. */
@@ -191,27 +205,71 @@ export class LayerField {
     this.standIns.clear();
   }
 
-  private createStandIn(o: THREE.Mesh, kind: LayerKind): THREE.Mesh {
-    const source = materialsOf(o).map((m) => this.origin.get(m) ?? m);
-    const materials = source.map((m) => {
-      let standIn = this.standIns.get(m);
-      if (!standIn) {
-        const copy = (this.pristine.get(m) ?? m).clone() as THREE.Material & { transmission?: number };
-        copy.transmission = 0;
-        copy.transparent = true;
-        copy.opacity = PEEK_STAND_IN_OPACITY;
-        copy.depthWrite = false;
-        this.owned.push(copy);
-        standIn = this.patchCopy(copy, kind);
-        this.standIns.set(m, standIn);
+  /** Adds, updates or removes the peek-image stand-in child of a transmissive mesh. */
+  private syncStandIn(o: THREE.Mesh, kind: LayerKind, wanted: boolean): void {
+    const existing = this.standInOf.get(o);
+    if (!wanted || o instanceof THREE.SkinnedMesh) {
+      if (wanted) this.warnOnce(o, 'is skinned; its transmissive glass is left out of the peek image');
+      if (existing) {
+        o.remove(existing);
+        this.standInOf.delete(o);
+        this.standInObjects.delete(existing);
       }
-      return standIn;
-    });
-    const twin = new THREE.Mesh(o.geometry, materials.length === 1 ? materials[0] : materials);
+      return;
+    }
+    const mats = materialsOf(o).map((m) => this.standInMaterial(m, kind));
+    const material = mats.length === 1 ? (mats[0] as THREE.Material) : mats;
+    if (existing) {
+      existing.material = material;
+      return;
+    }
+    let twin: THREE.Mesh;
+    if (o instanceof THREE.InstancedMesh) {
+      const inst = new THREE.InstancedMesh(o.geometry, material, o.count);
+      inst.instanceMatrix = o.instanceMatrix;
+      inst.instanceColor = o.instanceColor;
+      twin = inst;
+    } else {
+      twin = new THREE.Mesh(o.geometry, material);
+    }
     twin.name = `${o.name || o.type}:peek-stand-in`;
     twin.layers.mask = peekStandInMask();
     twin.renderOrder = o.renderOrder;
-    return twin;
+    this.standInObjects.add(twin);
+    this.standInOf.set(o, twin);
+    o.add(twin);
+  }
+
+  /** The same material without transmission, translucent, cut for `kind`. One per (material, kind). */
+  private standInMaterial(material: THREE.Material, kind: LayerKind): THREE.Material {
+    const source = this.origin.get(material) ?? material;
+    let byKind = this.standIns.get(source);
+    const cached = byKind?.get(kind);
+    if (cached) return cached;
+    const copy = (this.pristine.get(source) ?? source).clone() as THREE.Material & {
+      transmission?: number;
+      transmissionNode?: unknown;
+    };
+    copy.transmission = 0;
+    copy.transmissionNode = null;
+    copy.transparent = true;
+    copy.opacity = PEEK_STAND_IN_OPACITY;
+    copy.depthWrite = false;
+    this.owned.push(copy);
+    const standIn = this.patchCopy(copy, kind);
+    if (!byKind) {
+      byKind = new Map();
+      this.standIns.set(source, byKind);
+    }
+    byKind.set(kind, standIn);
+    return standIn;
+  }
+
+  private warnOnce(o: THREE.Object3D, what: string): void {
+    const key = `${o.uuid}:${what}`;
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    console.warn(`LayerField: "${o.name || o.type}" ${what}`);
   }
 
   private patch(material: THREE.Material, kind: LayerKind): THREE.Material {

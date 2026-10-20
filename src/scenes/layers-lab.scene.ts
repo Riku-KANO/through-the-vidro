@@ -70,8 +70,11 @@ const HAND_SECONDS = PEEK_SECONDS;
 /** 仮: 玉が小さく震えて知らせる — 1.2 cm reads as a tremble from a few metres (~7 px at 1080p). */
 const SHAKE_SECONDS = 0.45;
 const SHAKE_AMPLITUDE = 0.012;
-/** 仮: the pedestal must be roughly in view to be used (lab only; S-06 decides how 調べる targets). */
-const FACING_DEG = 75;
+/**
+ * 仮: the pedestal must be in view to be used, within 45° of the view direction (the horizontal
+ * half-FOV is ~51° at 70° and 16:9), so a refusal is always seen. Lab only; S-06 decides 調べる.
+ */
+const FACING_DEG = 45;
 const LOOK_SPEED = 1.4;
 const START_X = -2.0;
 /** The opening view: the broken edge, the pedestal on the left and the far ledge across the gap. */
@@ -86,7 +89,7 @@ const BRIDGE_BOX = { min: [0, -0.14, -0.6] as Vec3, max: [2.8, 0, 0.6] as Vec3 }
 const PEDESTAL_ID = 'edge';
 const PEDESTAL_ORB: Vec3 = [-0.5, 1.05, -0.9];
 /** ?orbs=3 (dev switch): two more pedestals with small orbs, to draw all three spheres at once. */
-const SMALL_PEDESTALS: Record<string, Vec3> = { near: [-1.2, 1.05, 2.4], far: [4.4, 1.05, 1.2] };
+const SMALL_PEDESTALS: Record<string, Vec3> = { near: [-0.2, 1.05, 1.0], far: [4.4, 1.05, 1.2] };
 /** 仮: back-layer footing segment length (設計書: 細かい区画に分けておき). A wide floor would need a grid. */
 const SEGMENT_LENGTH = 0.4;
 

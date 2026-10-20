@@ -309,7 +309,12 @@ for (const backend of backends) {
         const inside = await page.screenshot({
           clip: { x: o.x * vw - half, y: o.y * vh - half, width: half * 2, height: half * 2 },
         });
-        const outside = await page.screenshot({ clip: { x: 16, y: 16, width: 240, height: 140 } });
+        // below the orb the peek image holds the bridge deck: a leak of the back image outside the
+        // orb would show there
+        const top = (o.y + o.r * 1.15) * vh;
+        const outside = await page.screenshot({
+          clip: { x: o.x * vw - 90, y: top, width: 180, height: Math.min(90, vh * 0.95 - top) },
+        });
         return { inside, outside };
       };
       const withBack = await grab('');

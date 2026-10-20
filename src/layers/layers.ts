@@ -36,7 +36,8 @@ export function layerMask(kind: LayerKind, opts: LayerOptions = {}): number {
   const back = 1 << LAYER_CHANNEL.back;
   const mask = kind === 'surface' ? surface : kind === 'back' ? back : 1 | surface | back;
   if (!opts.transmissive || (mask & viewMask('peek')) === 0) return mask;
-  return (mask & ~viewMask('peek')) | (1 << LAYER_CHANNEL.mainOnly);
+  // also drop channel 0, so dev views that draw channel 0 into the peek image never pick it up
+  return (mask & ~viewMask('peek') & ~1) | (1 << LAYER_CHANNEL.mainOnly);
 }
 
 /** Camera layers mask for a view. */

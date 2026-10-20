@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipFor, drawnIn, type LayerKind } from './layers';
+import { clipFor, drawnIn, type LayerKind, layerMask } from './layers';
 
 describe('surface / back / shared layers (技術設計 > 裏の層の実装 > 層の分け方)', () => {
   it('the normal view draws surface, back and shared objects', () => {
@@ -30,5 +30,10 @@ describe('surface / back / shared layers (技術設計 > 裏の層の実装 > �
       expect(drawnIn(kind, 'peek', { transmissive: true })).toBe(false);
     }
     expect(drawnIn('surface', 'main', { transmissive: true })).toBe(true);
+  });
+
+  it('transmissive objects stay off channel 0, so a dev view drawing channel 0 never shows them', () => {
+    expect(layerMask('shared', { transmissive: true }) & 1).toBe(0);
+    expect(layerMask('back', { transmissive: true }) & 1).toBe(0);
   });
 });
