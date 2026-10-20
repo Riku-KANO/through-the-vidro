@@ -134,10 +134,15 @@ slices:
       - src/core/perf/**
       - src/core/renderer.ts
       - src/core/params.ts
+      - src/core/params.test.ts
+      - src/core/bench.ts
+      - src/core/bench.test.ts
+      - src/core/VERSION
       - src/dev/**
       - src/main.ts
       - src/scenes/stress.scene.ts
       - scripts/bench-*.mjs
+      - scripts/lib/**
       - tests/e2e/S-05-*.spec.ts
       - process/slices/S-05.md
       - src/core/CHANGELOG.md

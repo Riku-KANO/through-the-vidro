@@ -30,7 +30,9 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 整形 | `pnpm format` |
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
-`dynres=0|1` `dynresTarget=<ms>`（試験用） `webgl=1`（WebGL2経路の強制） `stats=1` `debug=1`（`window.__vidroDebug.renderer` を出す）。
+`dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
+`gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `debug=1`（`window.__vidroDebug` に renderer と setScale を出す）。
+`quality=auto` と `bench` を一緒に使うと計測の途中でプリセットが変わるので、計測は固定のプリセットで行う。
 シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
 ## センサー（ループが自分の仕事を確かめる手段）
@@ -92,4 +94,5 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **GPU のタイムスタンプを GPU 時間として信じない。** three の `resolveTimestampsAsync` は描画パスごとの時間の合計で、
   Apple/Metal では仕上げのパスが多いと重なって約10倍に膨らむ（S-05: 実際 約1ms のフレームが 11〜22ms と出た）。
   性能の判断は垂直同期を外したフレーム時間（`scripts/bench-headed.mjs`）で行う。実行時の制御（`src/core/perf/governor.ts`）は、
-  GPU 時間がフレーム時間を超えたら信用せずフレーム時間に切り替える。
+  Apple/Metal では GPU 時間を判断に使わず、それ以外でも GPU 時間が平均フレーム時間を超えたら信用しない。そのとき動的解像度は止まり、
+  品質の判定と検証はフレーム時間で行う（垂直同期の下ではフレーム時間で上限と過負荷を見分けられないため、解像度は動かさない）。
