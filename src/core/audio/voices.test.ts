@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type GateState, VoiceAllocator } from './voices';
+import { type GateState, mayRequestResume, VoiceAllocator } from './voices';
 
 const opts = { maxVoices: 4, maxPerGroup: 2, resumeGrace: 0.25 };
 const running: GateState = { realtime: true, running: true, resumeRequestedAt: null, wallNow: 10 };
@@ -74,5 +74,37 @@ describe('voice allocation', () => {
     // Room is left globally, but the emitter is full: its oldest (most decayed) voice goes.
     expect([...alloc.makeRoom(0.3, emitter)]).toEqual(['e1']);
     expect([...alloc.makeRoom(0.3, null)]).toEqual([]);
+  });
+});
+
+describe('releasing an emitter', () => {
+  it('forgets that emitter’s voices so they no longer count or get stolen', () => {
+    const alloc = new VoiceAllocator<string>(opts);
+    const gone = {};
+    const kept = {};
+    alloc.add({ start: 0, end: 4, level: 0.01, group: gone, data: 'g1' });
+    alloc.add({ start: 0, end: 4, level: 0.01, group: gone, data: 'g2' });
+    alloc.add({ start: 0, end: 4, level: 0.5, group: kept, data: 'k1' });
+    alloc.releaseGroup(gone);
+    expect(alloc.active(0.1)).toBe(1);
+    alloc.add({ start: 0, end: 4, level: 0.6, group: null, data: 'n1' });
+    alloc.add({ start: 0, end: 4, level: 0.7, group: null, data: 'n2' });
+    alloc.add({ start: 0, end: 4, level: 0.8, group: null, data: 'n3' });
+    // At the cap the quietest *remaining* voice goes, never a released one.
+    expect([...alloc.makeRoom(0.1, null)]).toEqual(['k1']);
+  });
+});
+
+describe('whether to ask the browser to resume', () => {
+  it('asks only for a suspended or interrupted realtime context during a user activation', () => {
+    expect(mayRequestResume({ realtime: true, state: 'suspended', activationActive: true })).toBe(true);
+    expect(mayRequestResume({ realtime: true, state: 'interrupted', activationActive: true })).toBe(true);
+    // No activation: Chrome would leave resume() pending forever.
+    expect(mayRequestResume({ realtime: true, state: 'suspended', activationActive: false })).toBe(false);
+    // Browsers without navigator.userActivation: try (the gesture handler is the activation).
+    expect(mayRequestResume({ realtime: true, state: 'suspended', activationActive: null })).toBe(true);
+    expect(mayRequestResume({ realtime: true, state: 'running', activationActive: true })).toBe(false);
+    expect(mayRequestResume({ realtime: true, state: 'closed', activationActive: true })).toBe(false);
+    expect(mayRequestResume({ realtime: false, state: 'suspended', activationActive: true })).toBe(false);
   });
 });

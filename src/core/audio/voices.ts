@@ -24,6 +24,21 @@ export interface GateState {
   wallNow: number;
 }
 
+/**
+ * Should a gesture handler ask the browser to resume? Only for a realtime context that is not running
+ * and not closed, and only while the page has user activation: without it Chrome leaves resume()
+ * pending forever. `activationActive` is null where navigator.userActivation does not exist (then the
+ * gesture handler itself is the activation, so try).
+ */
+export function mayRequestResume(s: {
+  realtime: boolean;
+  state: string;
+  activationActive: boolean | null;
+}): boolean {
+  if (!s.realtime || s.state === 'running' || s.state === 'closed') return false;
+  return s.activationActive !== false;
+}
+
 export interface VoiceAllocatorOptions {
   maxVoices: number;
   maxPerGroup: number;
@@ -85,6 +100,16 @@ export class VoiceAllocator<T> {
 
   add(slot: Slot<T>): void {
     this.slots.push(slot);
+  }
+
+  /** Forget every voice of `group` (its emitter is gone; it must not count or be stolen later). */
+  releaseGroup(group: unknown): void {
+    let w = 0;
+    for (let r = 0; r < this.slots.length; r++) {
+      const s = this.slots[r] as Slot<T>;
+      if (s.group !== group) this.slots[w++] = s;
+    }
+    this.slots.length = w;
   }
 
   /** Drop finished voices in place (no allocation). */

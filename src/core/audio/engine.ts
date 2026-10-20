@@ -12,16 +12,10 @@
  * - 3D sound with HRTF (サウンドデザイン > 環境音) and per-space reverb with synthesized IRs.
  * No game rules here: callers decide what plays where.
  */
-import {
-  BUSES,
-  type BusName,
-  DEFAULT_VOLUMES,
-  VOLUME_CHANNELS,
-  type VolumeChannel,
-  volumeToGain,
-} from './mix';
-import { ROOM_PRESETS, type RoomPreset, RoomReverb } from './reverb';
-import { type ScheduledVoice, VoiceAllocator } from './voices';
+import { CUT_TAU } from './glass';
+import { BUSES, type BusName, VOLUME_CHANNELS, type VolumeChannel, volumeToGain } from './mix';
+import { type RoomPreset, RoomReverb } from './reverb';
+import { mayRequestResume, type ScheduledVoice, VoiceAllocator } from './voices';
 
 export interface Vec3 {
   x: number;
@@ -38,7 +32,12 @@ export interface Emitter {
 }
 
 export interface AudioEngineOptions {
-  room?: RoomPreset;
+  /** The acoustic space to start in (rooms are the game's data). */
+  room: RoomPreset;
+  /** Starting volume slider positions 0..1 (the game's defaults). Missing channels start at 1. */
+  volumes?: Partial<Record<VolumeChannel, number>>;
+  /** How much of each bus feeds the room reverb, 0..1. Missing buses send 1. */
+  reverbSend?: Partial<Record<BusName, number>>;
   /** Concurrent voice cap; at the cap the quietest voice is stolen. Default 48. */
   maxVoices?: number;
   /** Concurrent voices per emitter. Default 8. */
@@ -66,8 +65,6 @@ export interface AudioEngineSnapshot {
 
 /** What the engine needs to know about a voice before scheduling it. */
 export interface VoiceSpec {
-  /** Seconds until it is silent on its own. */
-  duration: number;
   /** Peak level (used to pick the quietest voice to steal). */
   level: number;
   emitter?: Emitter;
@@ -97,14 +94,12 @@ function wallSeconds(): number {
   return performance.now() / 1000;
 }
 
-/**
- * Technical defaults (not from the design doc; see process/slices/S-09.md).
- * Reverb send per bus, smoothing time, resume grace, voice caps.
- */
-const REVERB_SEND: Record<BusName, number> = { music: 0.5, sfx: 1, ambience: 1 };
+/** Mechanism constants (not sound tuning): smoothing, resume grace, fade lengths. */
 const SMOOTH = 0.03;
 const RESUME_GRACE = 0.25;
 const EMITTER_FADE = 0.015;
+/** Fade of the whole mix before the engine is torn down while playing (≈ -60 dB in 20 ms). */
+const DISPOSE_TAU = CUT_TAU;
 /** Activation-triggering events (pointerup / click cover browsers that only grant activation on release). */
 const GESTURES = ['pointerdown', 'pointerup', 'click', 'keydown', 'touchend'] as const;
 
@@ -118,7 +113,7 @@ export class AudioEngine {
   private readonly limiter: DynamicsCompressorNode;
   private readonly buses: Record<BusName, GainNode>;
   private readonly sends: GainNode[] = [];
-  private readonly volumes: Record<VolumeChannel, number> = { ...DEFAULT_VOLUMES };
+  private readonly volumes: Record<VolumeChannel, number> = { master: 1, music: 1, sfx: 1, ambience: 1 };
   private readonly voices: VoiceAllocator<ScheduledVoice>;
   private readonly emitters = new Set<EmitterRecord>();
   private readonly listenerPose = {
@@ -139,7 +134,7 @@ export class AudioEngine {
    * Create the engine. A context it creates itself is suspended until unlock() runs inside a user
    * gesture; a context passed in is used as is.
    */
-  static async create(opts: AudioEngineOptions = {}): Promise<AudioEngine> {
+  static async create(opts: AudioEngineOptions): Promise<AudioEngine> {
     if (opts.context) return new AudioEngine(opts.context, false, opts);
     const ctx = new AudioContext({ latencyHint: opts.latencyHint ?? 'interactive' });
     // Some browsers (or autoplay settings) start the context running. Start silent everywhere so the
@@ -151,6 +146,10 @@ export class AudioEngine {
   private constructor(ctx: BaseAudioContext, owns: boolean, opts: AudioEngineOptions) {
     this.ctx = ctx;
     this.ownsContext = owns;
+    for (const ch of VOLUME_CHANNELS) {
+      const v = opts.volumes?.[ch];
+      if (v !== undefined && Number.isFinite(v)) this.volumes[ch] = Math.min(1, Math.max(0, v));
+    }
     this.realtime = typeof AudioContext !== 'undefined' && ctx instanceof AudioContext;
     this.voices = new VoiceAllocator({
       maxVoices: opts.maxVoices ?? 48,
@@ -167,7 +166,7 @@ export class AudioEngine {
     this.master = ctx.createGain();
     this.master.gain.value = volumeToGain(this.volumes.master);
     this.master.connect(this.limiter);
-    this.reverb = new RoomReverb(ctx, opts.room ?? ROOM_PRESETS.smallRoom);
+    this.reverb = new RoomReverb(ctx, opts.room);
     this.reverb.output.connect(this.master);
     const buses = {} as Record<BusName, GainNode>;
     for (const name of BUSES) {
@@ -175,7 +174,7 @@ export class AudioEngine {
       bus.gain.value = volumeToGain(this.volumes[name]);
       bus.connect(this.master);
       const send = ctx.createGain();
-      send.gain.value = REVERB_SEND[name];
+      send.gain.value = Math.min(1, Math.max(0, opts.reverbSend?.[name] ?? 1));
       bus.connect(send).connect(this.reverb.input);
       this.sends.push(send);
       buses[name] = bus;
@@ -203,9 +202,13 @@ export class AudioEngine {
    * and sounds are only accepted for a short grace period while a resume is in flight.
    */
   unlock(): Promise<void> {
-    if (!this.realtime || this.ctx.state === 'closed' || this.running) return Promise.resolve();
     const activation = typeof navigator !== 'undefined' ? navigator.userActivation : undefined;
-    if (activation && !activation.isActive) return Promise.resolve();
+    const ask = mayRequestResume({
+      realtime: this.realtime,
+      state: this.ctx.state,
+      activationActive: activation ? activation.isActive : null,
+    });
+    if (!ask) return Promise.resolve();
     this.isUnlocked = true;
     this.resumeRequestedAt = wallSeconds();
     return (this.ctx as AudioContext).resume().catch(() => undefined);
@@ -353,7 +356,7 @@ export class AudioEngine {
       dirty: false,
     };
     this.emitters.add(rec);
-    return {
+    const emitter: Emitter = {
       input: panner,
       setPosition: (p: Vec3): void => {
         if (same(rec.position, p)) return;
@@ -363,6 +366,8 @@ export class AudioEngine {
       },
       dispose: () => {
         if (!this.emitters.delete(rec)) return;
+        // Its voices fade with the emitter; they must no longer count towards caps or be stolen.
+        this.voices.releaseGroup(emitter);
         if (this.realtime && this.running) {
           fade.gain.setTargetAtTime(0, this.ctx.currentTime, EMITTER_FADE / 4);
           setTimeout(() => disconnectEmitter(rec), EMITTER_FADE * 2000);
@@ -371,6 +376,7 @@ export class AudioEngine {
         }
       },
     };
+    return emitter;
   }
 
   /**
@@ -395,11 +401,12 @@ export class AudioEngine {
     }
     const now = this.ctx.currentTime;
     const group = spec.emitter ?? null;
+    const when = this.now();
+    // Fade stolen voices from the same instant the new one starts (a time the renderer has not reached).
     for (const victim of this.voices.makeRoom(now, group)) {
-      victim.fadeOut(now);
+      victim.fadeOut(when);
       this.voicesStolen++;
     }
-    const when = this.now();
     const destination = spec.emitter?.input ?? this.buses[spec.bus ?? 'sfx'];
     const voice = schedule(this.ctx, destination, when);
     this.voices.add({ start: when, end: voice.end, level: spec.level, group, data: voice });
@@ -429,8 +436,25 @@ export class AudioEngine {
     };
   }
 
-  /** Disconnect everything; close the context only if the engine created it. */
+  /**
+   * Glide the whole mix (dry and reverb) to silence from `at` — continuous, so no click.
+   * Used before tearing down while playing; setVolume('master', …) brings it back.
+   */
+  fadeOutAll(at: number = this.now()): void {
+    const g = this.master.gain;
+    g.cancelScheduledValues(at);
+    g.setTargetAtTime(0, at, DISPOSE_TAU);
+  }
+
+  /**
+   * Fade out (~20 ms) if playing, then disconnect everything; close the context only if the engine
+   * created it.
+   */
   async dispose(): Promise<void> {
+    if (this.realtime && this.running) {
+      this.fadeOutAll();
+      await new Promise((resolve) => setTimeout(resolve, (DISPOSE_TAU * 7 + 0.005) * 1000));
+    }
     this.unbindUnlockGestures();
     this.ctx.removeEventListener('statechange', this.onStateChange);
     for (const rec of this.emitters) disconnectEmitter(rec);

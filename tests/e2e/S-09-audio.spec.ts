@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { glassPitch, VIDRO_SCALE } from '../../src/audio/tuning';
 import { decayT60, estimatePitch, peak, rms } from '../../src/core/audio/analysis';
+import { volumeToGain } from '../../src/core/audio/mix';
 import { isInScale, midiToHz } from '../../src/core/audio/scale';
 
 /**
@@ -27,12 +28,15 @@ interface RenderResult {
   notes: Note[];
   t60: number;
   voicesStarted?: number;
+  cutAt?: number;
 }
 type RenderSpec =
   | { kind: 'glass'; size: number; strength: 'touch' | 'tap' | 'hit'; seed: number; duration?: number }
   | { kind: 'popen'; type: 'peek' | 'place' | 'pickup' | 'tremble'; seed: number; duration?: number }
-  | { kind: 'impulse'; room: 'smallRoom' | 'largeDome'; duration?: number }
-  | { kind: 'mix'; volumes: Record<string, number>; seed: number; duration?: number };
+  | { kind: 'impulse'; room: 'workshop' | 'dome'; duration?: number }
+  | { kind: 'mix'; volumes: Record<string, number>; seed: number; duration?: number }
+  | { kind: 'cut'; mode: 'steal' | 'silence' }
+  | { kind: 'bed'; bed: 'wind' | 'drone'; stopAt: number };
 interface AudioLabProbe {
   ready: boolean;
   audio: {
@@ -95,6 +99,19 @@ async function render(page: Page, spec: RenderSpec): Promise<RenderResult & { x:
   return { ...result, x: Float32Array.from(result.samples) };
 }
 
+/** Largest jump between neighbouring samples in [from, to) seconds: a click shows up as a jump. */
+function maxStep(x: Float32Array, sampleRate: number, from: number, to: number): number {
+  let m = 0;
+  const end = Math.min(x.length, Math.round(to * sampleRate));
+  for (let i = Math.max(1, Math.round(from * sampleRate)); i < end; i++)
+    m = Math.max(m, Math.abs((x[i] as number) - (x[i - 1] as number)));
+  return m;
+}
+
+function rmsAt(x: Float32Array, sampleRate: number, from: number, to: number): number {
+  return rms(x, Math.round(from * sampleRate), Math.round(to * sampleRate));
+}
+
 function relErr(measured: number | null, target: number): number {
   return measured === null ? Number.POSITIVE_INFINITY : Math.abs(measured / target - 1);
 }
@@ -152,7 +169,7 @@ for (const backend of backends) {
     const room0 = (await probe(page)).audio.room;
     await page.keyboard.press('r');
     const room1 = (await probe(page)).audio.room;
-    expect(new Set([room0, room1])).toEqual(new Set(['smallRoom', 'largeDome']));
+    expect(new Set([room0, room1])).toEqual(new Set(['workshop', 'dome']));
 
     await page.keyboard.press('o');
     const a0 = (await probe(page)).orbit.angle;
@@ -264,14 +281,14 @@ for (const backend of backends) {
 
     // Rooms: an impulse through the synthesized reverb decays at the room's T60; the dome is much longer.
     const roomT60: Record<string, number> = {};
-    for (const room of ['smallRoom', 'largeDome'] as const) {
+    for (const room of ['workshop', 'dome'] as const) {
       const r = await render(page, { kind: 'impulse', room });
       const t60 = decayT60(r.x, r.sampleRate);
       report.push({ sound: `impulse ${room}`, designedT60: r.t60, measuredT60: t60, rms: rms(r.x) });
       expect(relErr(t60, r.t60), `room ${room}: ${t60} vs ${r.t60}`).toBeLessThan(0.2);
       roomT60[room] = t60 as number;
     }
-    expect(roomT60.largeDome).toBeGreaterThan((roomT60.smallRoom as number) * 3);
+    expect(roomT60.dome).toBeGreaterThan((roomT60.workshop as number) * 3);
 
     // The real engine on an OfflineAudioContext: a glass struck through an HRTF emitter on the sfx bus.
     const db = (a: number, b: number) => 20 * Math.log10(a / b);
@@ -293,8 +310,58 @@ for (const backend of backends) {
     expect(full.voices, 'offline engine needs no unlock').toBe(1);
     expect(full.level, 'emitter voice is audible').toBeGreaterThan(RMS_MIN);
     expect(sfxOff.level, 'sfx volume 0 is silent').toBeLessThan(1e-5);
-    expect(Math.abs(db(masterHalf.level, full.level) + 12.04), 'master 0.5 ≈ -12 dB').toBeLessThan(0.5);
+    // The expectation comes from the volume curve itself, so the curve can change without editing this test.
+    const halfDb = 20 * Math.log10(volumeToGain(0.5));
+    expect(Math.abs(db(masterHalf.level, full.level) - halfDb), 'master 0.5 follows the curve').toBeLessThan(
+      0.5,
+    );
     expect(Math.abs(db(musicOff.level, full.level)), 'music volume leaves sfx alone').toBeLessThan(0.1);
+
+    // Cutting a ringing voice must not click: stealing it at the voice cap, or fading the whole engine
+    // (what dispose() does while playing). A click is a jump between neighbouring samples.
+    for (const mode of ['steal', 'silence'] as const) {
+      const r = await render(page, { kind: 'cut', mode });
+      const at = r.cutAt as number;
+      const before = maxStep(r.x, r.sampleRate, 0.1, at - 0.002);
+      const around = maxStep(r.x, r.sampleRate, at - 0.002, at + 0.06);
+      const ringing = rmsAt(r.x, r.sampleRate, 0.1, at);
+      const after = rmsAt(r.x, r.sampleRate, at + 0.1, at + 0.2);
+      report.push({
+        sound: `cut ${mode}`,
+        stepBefore: before,
+        stepAround: around,
+        rmsBefore: ringing,
+        rmsAfter: after,
+      });
+      expect(around, `${mode}: no click (largest sample jump vs. before)`).toBeLessThan(before * 1.5);
+      if (mode === 'steal') {
+        expect(r.voicesStarted, 'a voice was stolen').toBe(1);
+        expect(after, 'stolen voice is gone (only the room tail remains)').toBeLessThan(ringing * 0.3);
+      } else {
+        expect(after, 'whole mix is silent').toBeLessThan(ringing * 0.01);
+      }
+    }
+
+    // Switching a test bed off fades it (no click that could be mistaken for a bug when listening).
+    for (const bed of ['wind', 'drone'] as const) {
+      const r = await render(page, { kind: 'bed', bed, stopAt: 0.5 });
+      const level = rmsAt(r.x, r.sampleRate, 0.3, 0.5);
+      const first10ms = rmsAt(r.x, r.sampleRate, 0.5, 0.51);
+      const later = rmsAt(r.x, r.sampleRate, 0.7, 0.9);
+      const before = maxStep(r.x, r.sampleRate, 0.3, 0.5);
+      const around = maxStep(r.x, r.sampleRate, 0.5, 0.65);
+      report.push({
+        sound: `bed ${bed} stop`,
+        rmsBefore: level,
+        rmsFirst10ms: first10ms,
+        rmsAfter: later,
+        stepBefore: before,
+        stepAround: around,
+      });
+      expect(first10ms, `${bed}: fades rather than cutting`).toBeGreaterThan(level * 0.3);
+      expect(later, `${bed}: silent after the fade`).toBeLessThan(level * 0.05);
+      if (bed === 'drone') expect(around, 'drone: no click').toBeLessThan(before * 1.5);
+    }
 
     mkdirSync(join(process.cwd(), 'artifacts/audio'), { recursive: true });
     writeFileSync(join(process.cwd(), `artifacts/audio/S-09${suffix}.json`), JSON.stringify(report, null, 2));

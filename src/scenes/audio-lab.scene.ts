@@ -1,6 +1,9 @@
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three/webgpu';
+import { strikeGlass, VIDRO_GLASS } from '../audio/glass-tuning';
+import { VIDRO_REVERB_SEND, VIDRO_VOLUMES } from '../audio/levels';
 import { designPopen, type PopenKind, playPopen } from '../audio/popen';
+import { VIDRO_ROOMS, type VidroRoomId } from '../audio/rooms';
 import { glassPitch } from '../audio/tuning';
 import { AudioEngine, type Emitter, type Vec3 } from '../core/audio/engine';
 import { designGlassVoice, type GlassStrength, scheduleGlassVoice } from '../core/audio/glass';
@@ -8,7 +11,7 @@ import { VOLUME_CHANNELS, type VolumeChannel } from '../core/audio/mix';
 import { mixdown, renderOffline } from '../core/audio/offline';
 import { playGlass } from '../core/audio/play';
 import { schedulePops } from '../core/audio/pop';
-import { ROOM_PRESETS, type RoomId, RoomReverb } from '../core/audio/reverb';
+import { RoomReverb } from '../core/audio/reverb';
 import { mulberry32 } from '../core/audio/rng';
 import { midiToHz } from '../core/audio/scale';
 import type { SceneFactory } from '../core/scene';
@@ -31,7 +34,7 @@ const GLASS_SIZES = [0.4, 0.26, 0.18, 0.12, 0.08];
 const STRENGTH_KEYS: Record<string, GlassStrength> = { q: 'touch', w: 'tap', e: 'hit' };
 const POPEN_KEYS: Record<string, PopenKind> = { '6': 'peek', '7': 'place', '8': 'pickup', '9': 'tremble' };
 const STRENGTH_LABEL: Record<GlassStrength, string> = { touch: '触れる', tap: '叩く', hit: '玉が当たる' };
-const ROOM_LABEL: Record<RoomId, string> = { smallRoom: '工房（短い残響）', largeDome: 'ドーム（長い残響）' };
+const ROOM_LABEL: Record<VidroRoomId, string> = { workshop: '工房（短い残響）', dome: 'ドーム（長い残響）' };
 const VOLUME_LABEL: Record<VolumeChannel, string> = {
   master: '全体',
   music: '音楽',
@@ -48,12 +51,21 @@ const RING_SECONDS = 0.9;
 type RenderSpec =
   | { kind: 'glass'; size: number; strength: GlassStrength; seed: number; duration?: number }
   | { kind: 'popen'; type: PopenKind; seed: number; duration?: number }
-  | { kind: 'impulse'; room: RoomId; duration?: number }
+  | { kind: 'impulse'; room: VidroRoomId; duration?: number }
   /** The whole engine (buses, emitter, reverb, limiter) on an OfflineAudioContext. */
-  | { kind: 'mix'; volumes: Partial<Record<VolumeChannel, number>>; seed: number; duration?: number };
+  | { kind: 'mix'; volumes: Partial<Record<VolumeChannel, number>>; seed: number; duration?: number }
+  /**
+   * A ringing glass cut at CUT_AT: 'steal' forces the voice cap (1 per emitter) to take it,
+   * 'silence' fades the whole engine as dispose() does while playing.
+   */
+  | { kind: 'cut'; mode: 'steal' | 'silence' }
+  /** A lab test bed (wind / drone) started at 0 and stopped at `stopAt`. */
+  | { kind: 'bed'; bed: 'wind' | 'drone'; stopAt: number };
 
 interface RenderResult {
   sampleRate: number;
+  /** For 'cut': the context time at which the cut was asked to start. */
+  cutAt?: number;
   samples: number[];
   notes: { time: number; midi: number; hz: number; t60: number }[];
   t60: number;
@@ -66,6 +78,78 @@ declare global {
   }
 }
 
+/** Engine with the game's mixer and starting room. */
+function vidroEngine(
+  extra: { context?: BaseAudioContext; maxVoicesPerEmitter?: number } = {},
+): Promise<AudioEngine> {
+  return AudioEngine.create({
+    room: VIDRO_ROOMS.workshop,
+    volumes: VIDRO_VOLUMES,
+    reverbSend: VIDRO_REVERB_SEND,
+    ...extra,
+  });
+}
+
+const CUT_AT = 0.2;
+/** Fade used when a test bed is switched off (avoids a click that could be mistaken for a bug). */
+const BED_FADE_TAU = 0.02;
+
+interface Bed {
+  /** Fade out from `at` and stop. */
+  stop(at?: number): void;
+}
+
+/** 3 s of noise for the wind bed (long enough that the loop does not flutter). */
+function windNoise(ctx: BaseAudioContext): AudioBuffer {
+  const buf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  const rng = mulberry32(17);
+  for (let i = 0; i < d.length; i++) d[i] = rng() * 2 - 1;
+  return buf;
+}
+
+/** Lab test beds for the ambience (wind through glass) and music (D3 A3 D4 drone) buses. */
+function startBed(ctx: BaseAudioContext, destination: AudioNode, kind: 'wind' | 'drone', when = 0): Bed {
+  const gain = ctx.createGain();
+  gain.connect(destination);
+  const sources: AudioScheduledSourceNode[] = [];
+  if (kind === 'wind') {
+    gain.gain.value = 0.06;
+    const src = ctx.createBufferSource();
+    src.buffer = windNoise(ctx);
+    src.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 700;
+    band.Q.value = 0.8;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.13;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 350;
+    lfo.connect(lfoGain).connect(band.frequency);
+    src.connect(band).connect(gain);
+    sources.push(src, lfo);
+  } else {
+    gain.gain.value = 0.035;
+    for (const m of [50, 57, 62]) {
+      const o = ctx.createOscillator();
+      o.frequency.value = midiToHz(m);
+      o.connect(gain);
+      sources.push(o);
+    }
+  }
+  for (const src of sources) src.start(when);
+  return {
+    stop(at = ctx.currentTime + 0.005) {
+      gain.gain.cancelScheduledValues(at);
+      gain.gain.setTargetAtTime(0, at, BED_FADE_TAU);
+      const end = at + BED_FADE_TAU * 8;
+      for (const src of sources) src.stop(end);
+      (sources[0] as AudioScheduledSourceNode).onended = () => gain.disconnect();
+    },
+  };
+}
+
 /** Offline render through the same synth / reverb code as live playback (no gesture needed). */
 async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
   const sampleRate = 44100;
@@ -74,6 +158,7 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     const voice = designGlassVoice(
       { hz: pitch.hz, size: spec.size, strength: spec.strength, sampleRate },
       mulberry32(spec.seed),
+      VIDRO_GLASS,
     );
     const t60 = voice.partials[0]?.t60 ?? 0;
     const buf = await renderOffline(
@@ -106,14 +191,14 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     const buf = await renderOffline(
       { duration: spec.duration ?? 1.2, sampleRate, channels: 2 },
       async (ctx) => {
-        const engine = await AudioEngine.create({ context: ctx });
+        const engine = await vidroEngine({ context: ctx });
         for (const ch of VOLUME_CHANNELS) {
           const v = spec.volumes[ch];
           if (v !== undefined) engine.setVolume(ch, v);
         }
         const emitter = engine.createEmitter('sfx', { x: 0, y: 0, z: -2 });
         const size = 0.12;
-        playGlass(engine, { hz: glassPitch(size).hz, size, strength: 'tap' }, { emitter, seed: spec.seed });
+        strikeGlass(engine, size, 'tap', { emitter, seed: spec.seed });
         held.engine = engine;
         return engine;
       },
@@ -122,7 +207,46 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     await held.engine?.dispose();
     return { sampleRate, samples: Array.from(mixdown(buf)), notes: [], t60: 0, voicesStarted };
   }
-  const room = ROOM_PRESETS[spec.room];
+  if (spec.kind === 'cut') {
+    // A low glass (A3) rings on one emitter; at CUT_AT it is stolen or the whole mix is faded.
+    const held: { engine?: AudioEngine; at?: number } = {};
+    const buf = await renderOffline({ duration: 0.6, sampleRate, channels: 2 }, async (ctx) => {
+      const engine = await vidroEngine({ context: ctx, maxVoicesPerEmitter: 1 });
+      const emitter = engine.createEmitter('sfx', { x: 0, y: 0, z: -2 });
+      strikeGlass(engine, 0.4, 'tap', { emitter, seed: 3 });
+      void ctx.suspend(CUT_AT).then(() => {
+        held.at = engine.now();
+        if (spec.mode === 'steal') {
+          // A silent voice on the same emitter: the cap of 1 forces the ringing glass to be stolen.
+          engine.startVoice({ level: 1, emitter }, (_c, _d, when) => ({ end: when + 1, fadeOut: () => {} }));
+        } else {
+          engine.fadeOutAll(held.at);
+        }
+        void ctx.resume();
+      });
+      held.engine = engine;
+      return engine;
+    });
+    const stolen = held.engine?.snapshot().voicesStolen ?? 0;
+    await held.engine?.dispose();
+    return {
+      sampleRate,
+      samples: Array.from(mixdown(buf)),
+      notes: [],
+      t60: 0,
+      voicesStarted: stolen,
+      cutAt: held.at,
+    };
+  }
+  if (spec.kind === 'bed') {
+    const buf = await renderOffline({ duration: spec.stopAt + 0.5, sampleRate }, (ctx, dest) => {
+      const bed = startBed(ctx, dest, spec.bed);
+      bed.stop(spec.stopAt);
+      return bed;
+    });
+    return { sampleRate, samples: Array.from(mixdown(buf)), notes: [], t60: 0, cutAt: spec.stopAt };
+  }
+  const room = VIDRO_ROOMS[spec.room];
   const buf = await renderOffline(
     {
       duration: spec.duration ?? room.preDelay + room.t60 * 1.3 + 0.05,
@@ -165,7 +289,7 @@ const PANEL =
   `font:18px/1.5 ${FONT};text-shadow:0 1px 2px rgba(10,20,35,0.45);`;
 
 const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
-  const engine = await AudioEngine.create({ room: ROOM_PRESETS.smallRoom });
+  const engine = await vidroEngine();
   engine.bindUnlockGestures(window);
 
   // ---------- 3D: pre-dawn blue lab, a brass rail with five glass spheres ----------
@@ -270,71 +394,15 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   engine.setListener(camera.position, fwd, camera.up);
 
   // ---------- Test beds for the music and ambience buses ----------
-  let wind: { stop(): void } | null = null;
-  let drone: { stop(): void } | null = null;
-  let windBuffer: AudioBuffer | null = null;
-  /** 3 s of noise for the wind bed (long enough that the loop does not flutter). */
-  const windNoise = (): AudioBuffer => {
-    if (!windBuffer) {
-      const ctx = engine.ctx;
-      windBuffer = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
-      const d = windBuffer.getChannelData(0);
-      const rng = mulberry32(17);
-      for (let i = 0; i < d.length; i++) d[i] = rng() * 2 - 1;
-    }
-    return windBuffer;
-  };
-  const startWind = (): { stop(): void } => {
-    const ctx = engine.ctx;
-    const src = ctx.createBufferSource();
-    src.buffer = windNoise();
-    src.loop = true;
-    const band = ctx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = 700;
-    band.Q.value = 0.8;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.13;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 350;
-    lfo.connect(lfoGain).connect(band.frequency);
-    const gain = ctx.createGain();
-    gain.gain.value = 0.06;
-    src.connect(band).connect(gain).connect(engine.bus('ambience'));
-    src.start();
-    lfo.start();
-    return {
-      stop: () => {
-        src.stop();
-        lfo.stop();
-        gain.disconnect();
-      },
-    };
-  };
-  const startDrone = (): { stop(): void } => {
-    const ctx = engine.ctx;
-    const gain = ctx.createGain();
-    gain.gain.value = 0.035;
-    gain.connect(engine.bus('music'));
-    const oscs = [50, 57, 62].map((m) => {
-      const o = ctx.createOscillator();
-      o.frequency.value = midiToHz(m); // D3 A3 D4
-      o.connect(gain);
-      o.start();
-      return o;
-    });
-    return {
-      stop: () => {
-        for (const o of oscs) o.stop();
-        gain.disconnect();
-      },
-    };
-  };
+  let wind: Bed | null = null;
+  let drone: Bed | null = null;
+  const startWind = (): Bed => startBed(engine.ctx, engine.bus('ambience'), 'wind', engine.now());
+  const startDrone = (): Bed => startBed(engine.ctx, engine.bus('music'), 'drone', engine.now());
 
   // ---------- Probe ----------
   const state = {
     strength: 'tap' as GlassStrength,
-    room: 'smallRoom' as RoomId,
+    room: 'workshop' as VidroRoomId,
     /** dotX / dotY: offset (px) last applied to the direction dial's dot. */
     orbit: { on: false, angle: 0, dotX: 0, dotY: 0 },
     plays: 0,
@@ -492,14 +560,10 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     const g = glasses[i];
     if (g) g.ringAge = 0;
   };
-  const strikeGlass = (i: number): void => {
+  const ringGlassAt = (i: number): void => {
     const g = glasses[i];
     if (!g) return;
-    const voice = playGlass(
-      engine,
-      { hz: g.pitch.hz, size: g.size, strength: state.strength },
-      { emitter: g.emitter },
-    );
+    const voice = strikeGlass(engine, g.size, state.strength, { emitter: g.emitter });
     if (!voice) return;
     state.plays++;
     state.glassPlays++;
@@ -522,7 +586,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(ndc, camera);
     const hit = raycaster.intersectObjects(meshes, false)[0];
-    if (hit) strikeGlass(hit.object.userData.index as number);
+    if (hit) ringGlassAt(hit.object.userData.index as number);
   };
   canvas.addEventListener('pointerdown', onPointerDown);
 
@@ -531,12 +595,12 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     if (e.target instanceof HTMLInputElement) return;
     const key = e.key.toLowerCase();
     const digit = Number(key);
-    if (digit >= 1 && digit <= glasses.length) strikeGlass(digit - 1);
+    if (digit >= 1 && digit <= glasses.length) ringGlassAt(digit - 1);
     else if (POPEN_KEYS[key]) popen(POPEN_KEYS[key]);
     else if (STRENGTH_KEYS[key]) state.strength = STRENGTH_KEYS[key];
     else if (key === 'r') {
-      state.room = state.room === 'smallRoom' ? 'largeDome' : 'smallRoom';
-      engine.setRoom(ROOM_PRESETS[state.room]);
+      state.room = state.room === 'workshop' ? 'dome' : 'workshop';
+      engine.setRoom(VIDRO_ROOMS[state.room]);
     } else if (key === 'o') {
       state.orbit.on = !state.orbit.on;
       orb.visible = state.orbit.on;
@@ -606,7 +670,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
           const voice = playGlass(
             engine,
             { hz: midiToHz(note), size: 0.07, strength: 'tap' },
-            { emitter: orbitEmitter },
+            { emitter: orbitEmitter, tuning: VIDRO_GLASS },
           );
           if (voice) state.orbitPlays++;
         }

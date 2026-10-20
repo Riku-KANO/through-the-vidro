@@ -5,7 +5,8 @@
  *
  * Each pop = a sine whose pitch starts a few percent sharp and drops onto the note within ~10 ms
  * (the membrane springs back), a faint thin-shell overtone, and a ~1 ms click.
- * A "pair" pattern articulates two pops as a soft short "po" and a brighter, longer-ringing "pen".
+ * A "pair" pattern voices two pops with the tuning's "po" and "pen" articulations (e.g. soft and short,
+ * then brighter and ringing). The articulation and jitter values come from the game as a PopTuning.
  * designPops() is pure; schedulePops() renders it on any BaseAudioContext.
  */
 import { fadeAndStop, GLASS_MODE_RATIOS, LN1000, noiseBuffer, type PlannedSource } from './glass';
@@ -47,31 +48,40 @@ export interface PopScore {
 
 const ATTACK = 0.001;
 
-/** Tuning values (to be confirmed by ear). */
-const ARTICULATION = {
-  po: { gain: 0.7, bright: 0.25, t60: 0.12, glide: 0.06 },
-  pen: { gain: 1, bright: 0.5, t60: 0.28, glide: 0.035 },
-  plain: { gain: 1, bright: 0.35, t60: 0.08, glide: 0.035 },
-};
+/** How one pop is voiced. */
+export interface PopArticulation {
+  /** Gain multiplier on the pattern gain. */
+  gain: number;
+  /** 0..1, level of the thin-shell overtone and the click. */
+  bright: number;
+  t60: number;
+  /** Relative pitch overshoot at the snap. */
+  glide: number;
+}
 
-/** Per-play randomness. */
-const JITTER = { time: 0.005, pitch: 0.002, levelDb: 1, t60: 0.1 };
+/** Everything that shapes the pops, supplied by the game (Through the Vidro: src/audio/popen.ts). */
+export interface PopTuning {
+  /** First pop of a pair. */
+  po: PopArticulation;
+  /** Second pop of a pair. */
+  pen: PopArticulation;
+  /** Every pop of a non-pair pattern (and pops after the second). */
+  plain: PopArticulation;
+  /** Per-play randomness: time (± s), pitch (± fraction), level (± dB), t60 (± fraction). */
+  jitter: { time: number; pitch: number; levelDb: number; t60: number };
+}
 
-export function designPops(pattern: PopPattern, rng: Rng): PopScore {
+export function designPops(pattern: PopPattern, rng: Rng, tuning: PopTuning): PopScore {
+  const j = tuning.jitter;
   const pops: Pop[] = pattern.notes.map((midi, i) => {
-    const a =
-      pattern.pair && i === 0
-        ? ARTICULATION.po
-        : pattern.pair && i === 1
-          ? ARTICULATION.pen
-          : ARTICULATION.plain;
+    const a = pattern.pair && i === 0 ? tuning.po : pattern.pair && i === 1 ? tuning.pen : tuning.plain;
     return {
-      time: i === 0 ? 0 : i * pattern.spacing + jitter(rng, JITTER.time),
+      time: i === 0 ? 0 : i * pattern.spacing + jitter(rng, j.time),
       midi,
-      hz: midiToHz(midi) * (1 + jitter(rng, JITTER.pitch)),
-      gain: pattern.gain * a.gain * pattern.fade ** i * 10 ** (jitter(rng, JITTER.levelDb) / 20),
+      hz: midiToHz(midi) * (1 + jitter(rng, j.pitch)),
+      gain: pattern.gain * a.gain * pattern.fade ** i * 10 ** (jitter(rng, j.levelDb) / 20),
       bright: a.bright,
-      t60: a.t60 * (1 + jitter(rng, JITTER.t60)),
+      t60: a.t60 * (1 + jitter(rng, j.t60)),
       glide: a.glide,
     };
   });

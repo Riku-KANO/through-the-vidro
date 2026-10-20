@@ -1,13 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VOLUMES, VOLUME_CHANNELS, volumeToGain } from './mix';
+import { VOLUME_CHANNELS, volumeToGain } from './mix';
 
 describe('volume channels', () => {
   it('has master, music, sfx and ambience', () => {
     expect([...VOLUME_CHANNELS].sort()).toEqual(['ambience', 'master', 'music', 'sfx']);
-    for (const ch of VOLUME_CHANNELS) {
-      expect(DEFAULT_VOLUMES[ch]).toBeGreaterThan(0);
-      expect(DEFAULT_VOLUMES[ch]).toBeLessThanOrEqual(1);
-    }
   });
 });
 

@@ -4,8 +4,9 @@
  * workshop, long under a glass dome. Technique: exponentially decaying stereo noise whose high
  * frequencies die first (a time-varying low-pass), plus a few early reflections after a pre-delay.
  *
- * synthesizeImpulseResponse() is pure; RoomReverb wraps two ConvolverNodes and crossfades between
- * rooms so switching never clicks.
+ * Rooms are data supplied by the game (Through the Vidro: src/audio/rooms.ts); core has no presets.
+ * synthesizeImpulseResponse() is pure; RoomReverb keeps one ConvolverNode per room and crossfades
+ * between them so switching never clicks.
  */
 import { mulberry32, type Rng } from './rng';
 
@@ -24,29 +25,15 @@ export interface RoomPreset {
 }
 
 /**
- * Generic presets. Tuning values (the design doc only says "small workshop short, dome long").
- * smallRoom ≈ a small furnished room; largeDome ≈ a big, hard, glass-walled hall.
+ * Identity of a room for caching and switching: every parameter, not just the id, so two presets that
+ * share an id but differ in any value are treated as different rooms.
  */
-export const ROOM_PRESETS = {
-  smallRoom: {
-    id: 'smallRoom',
-    t60: 0.6,
-    preDelay: 0.004,
-    wet: 0.25,
-    damping: 0.5,
-    early: { count: 8, spread: 0.025, gain: 4 },
-  },
-  largeDome: {
-    id: 'largeDome',
-    t60: 4.2,
-    preDelay: 0.035,
-    wet: 0.45,
-    damping: 0.65,
-    early: { count: 10, spread: 0.12, gain: 3 },
-  },
-} as const satisfies Record<string, RoomPreset>;
-
-export type RoomId = keyof typeof ROOM_PRESETS;
+export function roomKey(preset: RoomPreset): string {
+  const e = preset.early;
+  return [preset.id, preset.t60, preset.preDelay, preset.wet, preset.damping, e.count, e.spread, e.gain].join(
+    '|',
+  );
+}
 
 /**
  * Stereo impulse response for a room. Energy is normalised to 1 across channels so every room
@@ -103,8 +90,7 @@ export function impulseResponseBuffer(ctx: BaseAudioContext, preset: RoomPreset,
     byRoom = new Map();
     irCache.set(ctx, byRoom);
   }
-  const { early } = preset;
-  const key = `${preset.id}:${preset.t60}:${preset.preDelay}:${preset.damping}:${early.count}:${early.spread}:${early.gain}:${seed}`;
+  const key = `${roomKey(preset)}|${seed}`;
   let buf = byRoom.get(key);
   if (!buf) {
     const chans = synthesizeImpulseResponse(preset, ctx.sampleRate, mulberry32(seed));
@@ -151,7 +137,8 @@ export class RoomReverb {
   }
 
   private slot(preset: RoomPreset): RoomSlot {
-    let slot = this.rooms.get(preset.id);
+    const key = roomKey(preset);
+    let slot = this.rooms.get(key);
     if (!slot) {
       const conv = this.ctx.createConvolver();
       conv.normalize = false;
@@ -160,7 +147,7 @@ export class RoomReverb {
       gain.gain.value = 0;
       conv.connect(gain).connect(this.output);
       slot = { conv, gain, fed: false, idleTimer: null };
-      this.rooms.set(preset.id, slot);
+      this.rooms.set(key, slot);
     }
     return slot;
   }
@@ -174,7 +161,7 @@ export class RoomReverb {
 
   /** Crossfade to another room over `fade` seconds. */
   setRoom(preset: RoomPreset, fade = 0.5): void {
-    if (preset.id === this.current.id) return;
+    if (roomKey(preset) === roomKey(this.current)) return;
     const now = this.ctx.currentTime;
     const tau = Math.max(0.001, fade / 4);
     const target = this.slot(preset);

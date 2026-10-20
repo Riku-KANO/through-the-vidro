@@ -41,6 +41,25 @@ describe('popen (the hand orb’s “po-pen”)', () => {
     expect(new Set(POPEN_KINDS.map((k) => contour(k).join(','))).size).toBe(4);
   });
 
+  it('voices a pair as a soft short “po” and a brighter, longer “pen”', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const [po, pen] = designPopen('place', mulberry32(seed)).pops;
+      expect(po?.gain).toBeLessThan(pen?.gain as number);
+      expect(po?.bright).toBeLessThan(pen?.bright as number);
+      expect(po?.t60).toBeLessThan(pen?.t60 as number);
+    }
+  });
+
+  it('cannot clip on its own (body + overtone + click)', () => {
+    for (const kind of POPEN_KINDS) {
+      for (let seed = 1; seed < 30; seed++) {
+        for (const p of designPopen(kind, mulberry32(seed)).pops) {
+          expect(p.gain * (1 + p.bright * 0.5 + 0.25 * (0.5 + p.bright))).toBeLessThan(1);
+        }
+      }
+    }
+  });
+
   it('trembles with several quick, quieter pops', () => {
     const tremble = designPopen('tremble', mulberry32(1));
     const peek = designPopen('peek', mulberry32(1));
