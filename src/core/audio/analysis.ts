@@ -122,6 +122,9 @@ export interface PitchOptions {
  * Fundamental frequency estimate for pitched (also inharmonic) sounds: the lowest spectral peak
  * that reaches `threshold` of the strongest one, refined by Gaussian (log-parabolic) interpolation.
  * Returns null for silence. Autocorrelation is avoided on purpose: glass overtones are not harmonic.
+ * Caveat (e.g. for recorded samples): if the fundamental is weaker than `threshold` × the strongest
+ * peak, this returns an overtone. For such sounds lower `threshold`, or check for peaks at f/2, f/3.
+ * Our synthesized voices keep the fundamental the strongest partial, so the default is safe for them.
  */
 export function estimatePitch(x: Samples, sampleRate: number, opts: PitchOptions = {}): number | null {
   const [start, length] = segment(x, sampleRate, opts.start ?? 0, opts.duration);

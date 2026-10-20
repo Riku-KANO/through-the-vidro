@@ -1,14 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
+import { glassPitch, VIDRO_SCALE } from '../../src/audio/tuning';
 import { decayT60, estimatePitch, peak, rms } from '../../src/core/audio/analysis';
-import { isInScale, midiToHz, pitchForSize } from '../../src/core/audio/scale';
+import { isInScale, midiToHz } from '../../src/core/audio/scale';
 
 /**
  * S-09 sensor for the audio foundation (scene: audio-lab).
  *  (a) the AudioContext stays suspended until the first click, then runs; keys and clicks play sounds
  *  (b) glass and popen sounds rendered in the browser with OfflineAudioContext are audible,
  *      in tune (fundamental within ±3 % of the scale note) and decay as designed; rooms differ in T60
+ *  (c) the real AudioEngine rendered offline: an emitter voice is audible, and the four volumes act
+ *      as specified (sfx 0 = silence, master 0.5 = -12 dB, music does not touch sfx)
  * Runs on both render paths. Numbers land in artifacts/audio/S-09[-webgl].json for the slice record.
  */
 
@@ -23,11 +26,13 @@ interface RenderResult {
   samples: number[];
   notes: Note[];
   t60: number;
+  voicesStarted?: number;
 }
 type RenderSpec =
   | { kind: 'glass'; size: number; strength: 'touch' | 'tap' | 'hit'; seed: number; duration?: number }
   | { kind: 'popen'; type: 'peek' | 'place' | 'pickup' | 'tremble'; seed: number; duration?: number }
-  | { kind: 'impulse'; room: 'smallRoom' | 'largeDome'; duration?: number };
+  | { kind: 'impulse'; room: 'smallRoom' | 'largeDome'; duration?: number }
+  | { kind: 'mix'; volumes: Record<string, number>; seed: number; duration?: number };
 interface AudioLabProbe {
   ready: boolean;
   audio: {
@@ -42,7 +47,7 @@ interface AudioLabProbe {
   popenPlays: number;
   strength: string;
   lastSound: { kind: string } | null;
-  orbit: { on: boolean; angle: number };
+  orbit: { on: boolean; angle: number; dotX: number; dotY: number };
   glasses: { size: number; midi: number; hz: number; note: string }[];
 }
 
@@ -114,10 +119,11 @@ for (const backend of backends) {
       expect(b.size).toBeGreaterThan(a.size);
       expect(b.midi).toBeLessThan(a.midi);
     }
-    for (const g of p.glasses) expect(isInScale(g.midi)).toBe(true);
+    for (const g of p.glasses) expect(isInScale(g.midi, VIDRO_SCALE)).toBe(true);
 
-    // The instructions are on screen before the click.
-    await expect(page.getByText('クリックで音を有効にする')).toBeVisible();
+    // The instructions and the audio status are on screen before the click.
+    await expect(page.getByLabel('操作の説明')).toBeVisible();
+    await expect(page.getByLabel('音の状態')).toBeVisible();
 
     await page.mouse.click(640, 430);
     await page.waitForFunction(
@@ -154,6 +160,8 @@ for (const backend of backends) {
     p = await probe(page);
     expect(p.orbit.on).toBe(true);
     expect(p.orbit.angle).not.toBeCloseTo(a0, 2);
+    // The direction dial follows the source (its dot sits on the dial's ring).
+    expect(Math.hypot(p.orbit.dotX, p.orbit.dotY)).toBeGreaterThan(30);
 
     // A struck glass shows its light ring; the orbiting source is on screen while in front.
     await page.keyboard.press('3');
@@ -161,7 +169,6 @@ for (const backend of backends) {
     mkdirSync(join(process.cwd(), 'artifacts/screens'), { recursive: true });
     await page.screenshot({ path: join(process.cwd(), `artifacts/screens/audio-lab-playing${suffix}.png`) });
 
-    await expect(page.getByText('ぽぺん', { exact: false }).first()).toBeVisible();
     expect(errors.filter((e) => !/GPU stall|powerPreference/i.test(e))).toEqual([]);
     expect(await page.evaluate(() => window.__vidro.errors)).toEqual([]);
   });
@@ -181,7 +188,7 @@ for (const backend of backends) {
         seed: i + 1,
         duration: 0.6,
       });
-      const expected = pitchForSize(g.size);
+      const expected = glassPitch(g.size);
       expect((r.notes[0] as Note).midi).toBe(expected.midi);
       const level = rms(r.x, 0, Math.round(0.3 * r.sampleRate));
       const hz = estimatePitch(r.x, r.sampleRate, { start: 0.01, duration: 0.45 });
@@ -243,7 +250,7 @@ for (const backend of backends) {
       expect(level, `rms popen ${type}`).toBeGreaterThan(RMS_MIN);
       expect(peak(r.x)).toBeLessThanOrEqual(1);
       for (const [j, n] of r.notes.entries()) {
-        expect(isInScale(n.midi)).toBe(true);
+        expect(isInScale(n.midi, VIDRO_SCALE)).toBe(true);
         const next = r.notes[j + 1]?.time ?? n.time + 0.16;
         const start = n.time + 0.012;
         const hz = estimatePitch(r.x, r.sampleRate, { start, duration: Math.min(0.14, next - start) });
@@ -265,6 +272,29 @@ for (const backend of backends) {
       roomT60[room] = t60 as number;
     }
     expect(roomT60.largeDome).toBeGreaterThan((roomT60.smallRoom as number) * 3);
+
+    // The real engine on an OfflineAudioContext: a glass struck through an HRTF emitter on the sfx bus.
+    const db = (a: number, b: number) => 20 * Math.log10(a / b);
+    const mix = async (volumes: Record<string, number>) => {
+      const r = await render(page, { kind: 'mix', volumes, seed: 5 });
+      return { level: rms(r.x), voices: r.voicesStarted ?? 0 };
+    };
+    const full = await mix({ master: 1, music: 1, sfx: 1, ambience: 1 });
+    const sfxOff = await mix({ master: 1, music: 1, sfx: 0, ambience: 1 });
+    const masterHalf = await mix({ master: 0.5, music: 1, sfx: 1, ambience: 1 });
+    const musicOff = await mix({ master: 1, music: 0, sfx: 1, ambience: 1 });
+    report.push({
+      sound: 'engine mix (glass via emitter, sfx bus)',
+      rmsFull: full.level,
+      rmsSfxOff: sfxOff.level,
+      masterHalfDb: db(masterHalf.level, full.level),
+      musicOffDb: db(musicOff.level, full.level),
+    });
+    expect(full.voices, 'offline engine needs no unlock').toBe(1);
+    expect(full.level, 'emitter voice is audible').toBeGreaterThan(RMS_MIN);
+    expect(sfxOff.level, 'sfx volume 0 is silent').toBeLessThan(1e-5);
+    expect(Math.abs(db(masterHalf.level, full.level) + 12.04), 'master 0.5 ≈ -12 dB').toBeLessThan(0.5);
+    expect(Math.abs(db(musicOff.level, full.level)), 'music volume leaves sfx alone').toBeLessThan(0.1);
 
     mkdirSync(join(process.cwd(), 'artifacts/audio'), { recursive: true });
     writeFileSync(join(process.cwd(), `artifacts/audio/S-09${suffix}.json`), JSON.stringify(report, null, 2));

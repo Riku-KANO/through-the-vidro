@@ -19,8 +19,9 @@ export interface OfflineOptions {
 const rendering = new Set<unknown>();
 
 /**
- * Render whatever `build` connects to `destination`. Return from `build` any nodes that must live
- * until the end (e.g. a RoomReverb); they stay referenced while rendering.
+ * Render whatever `build` connects to `destination`. `build` may be async (e.g. to create an
+ * AudioEngine on the offline context). Return from it anything that must live until the end
+ * (e.g. a RoomReverb or the engine); it stays referenced while rendering.
  */
 export async function renderOffline(
   opts: OfflineOptions,
@@ -28,7 +29,7 @@ export async function renderOffline(
 ): Promise<AudioBuffer> {
   const sampleRate = opts.sampleRate ?? 44100;
   const ctx = new OfflineAudioContext(opts.channels ?? 1, Math.ceil(opts.duration * sampleRate), sampleRate);
-  const graph = { ctx, nodes: build(ctx, ctx.destination) };
+  const graph = { ctx, nodes: await build(ctx, ctx.destination) };
   rendering.add(graph);
   try {
     return await ctx.startRendering();
@@ -36,6 +37,7 @@ export async function renderOffline(
     rendering.delete(graph);
   }
 }
+
 /** Average all channels into one. */
 export function mixdown(buffer: AudioBuffer): Float32Array {
   const out = new Float32Array(buffer.length);

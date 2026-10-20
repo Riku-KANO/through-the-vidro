@@ -8,6 +8,7 @@
  * on any BaseAudioContext (live or OfflineAudioContext), so tests render exactly what players hear.
  */
 import { jitter, type Rng } from './rng';
+import type { ScheduledVoice } from './voices';
 
 export type GlassStrength = 'touch' | 'tap' | 'hit';
 export const GLASS_STRENGTHS: readonly GlassStrength[] = ['touch', 'tap', 'hit'];
@@ -161,16 +162,31 @@ export function noiseBuffer(ctx: BaseAudioContext): AudioBuffer {
 /** Natural log of 1000: an exponential decays by 60 dB after t60 = tau × LN1000. */
 export const LN1000 = Math.log(1000);
 
-/** Build the voice as Web Audio nodes into `destination`, starting at `when`. Returns the end time. */
+/** A source node and the time it is planned to stop. */
+export interface PlannedSource {
+  node: AudioScheduledSourceNode;
+  stop: number;
+}
+
+/** Cut a voice short without a click: 10 ms ramp to zero, then stop the sources still planned to play. */
+export function fadeAndStop(out: GainNode, sources: readonly PlannedSource[], at: number): void {
+  out.gain.cancelScheduledValues(at);
+  out.gain.setValueAtTime(1, at);
+  out.gain.linearRampToValueAtTime(0, at + 0.01);
+  const stop = at + 0.015;
+  for (const s of sources) if (s.stop > stop) s.node.stop(stop);
+}
+
+/** Build the voice as Web Audio nodes into `destination`, starting at `when`. */
 export function scheduleGlassVoice(
   ctx: BaseAudioContext,
   destination: AudioNode,
   voice: GlassVoice,
   when: number,
-): number {
+): ScheduledVoice {
   const out = ctx.createGain();
   out.connect(destination);
-  const end = when + voice.duration;
+  const sources: PlannedSource[] = [];
   let last: OscillatorNode | null = null;
   let lastEnd = 0;
   for (const p of voice.partials) {
@@ -184,6 +200,7 @@ export function scheduleGlassVoice(
     const stop = when + voice.attack + p.t60;
     osc.start(when);
     osc.stop(stop);
+    sources.push({ node: osc, stop });
     if (stop > lastEnd) {
       lastEnd = stop;
       last = osc;
@@ -200,9 +217,12 @@ export function scheduleGlassVoice(
     env.gain.setValueAtTime(voice.strike.gain, when);
     env.gain.setTargetAtTime(0, when, voice.strike.duration / 3);
     src.connect(band).connect(env).connect(out);
+    const stop = when + voice.strike.duration * 4;
     src.start(when, voice.strike.offset);
-    src.stop(when + voice.strike.duration * 4);
+    src.stop(stop);
+    sources.push({ node: src, stop });
   }
+  // Free the voice once the longest-ringing partial has stopped.
   if (last) last.onended = () => out.disconnect();
-  return end;
+  return { end: when + voice.duration, fadeOut: (at: number) => fadeAndStop(out, sources, at) };
 }

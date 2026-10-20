@@ -103,7 +103,8 @@ export function impulseResponseBuffer(ctx: BaseAudioContext, preset: RoomPreset,
     byRoom = new Map();
     irCache.set(ctx, byRoom);
   }
-  const key = `${preset.id}:${preset.t60}:${preset.preDelay}:${preset.damping}:${seed}`;
+  const { early } = preset;
+  const key = `${preset.id}:${preset.t60}:${preset.preDelay}:${preset.damping}:${early.count}:${early.spread}:${early.gain}:${seed}`;
   let buf = byRoom.get(key);
   if (!buf) {
     const chans = synthesizeImpulseResponse(preset, ctx.sampleRate, mulberry32(seed));
@@ -114,64 +115,96 @@ export function impulseResponseBuffer(ctx: BaseAudioContext, preset: RoomPreset,
   return buf;
 }
 
+interface RoomSlot {
+  conv: ConvolverNode;
+  gain: GainNode;
+  /** Whether input currently feeds this convolver (idle rooms are unplugged to save CPU). */
+  fed: boolean;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+}
+
 /**
- * input → [convolver A | convolver B] → output. Switching rooms loads the idle convolver and
- * crossfades, because swapping a playing convolver's buffer clicks.
+ * input → one ConvolverNode per room (its buffer set once) → per-room gain → output.
+ * Switching rooms only crossfades gains: replacing a playing convolver's buffer clicks, even when
+ * switching back mid-fade. A room that has faded out is unplugged from the input after the fade so
+ * idle convolvers do not cost CPU; it is plugged in again (same buffer) when the room comes back.
  */
 export class RoomReverb {
   readonly input: GainNode;
   readonly output: GainNode;
-  private readonly slots: { conv: ConvolverNode; gain: GainNode }[];
-  private active = 0;
-  private current: RoomPreset;
   private readonly ctx: BaseAudioContext;
+  private readonly rooms = new Map<string, RoomSlot>();
+  private current: RoomPreset;
 
   constructor(ctx: BaseAudioContext, preset: RoomPreset) {
     this.ctx = ctx;
     this.input = ctx.createGain();
     this.output = ctx.createGain();
-    this.slots = [0, 1].map(() => {
-      const conv = ctx.createConvolver();
-      conv.normalize = false;
-      const gain = ctx.createGain();
-      gain.gain.value = 0;
-      this.input.connect(conv);
-      conv.connect(gain).connect(this.output);
-      return { conv, gain };
-    });
+    const slot = this.slot(preset);
+    this.feed(slot);
+    slot.gain.gain.value = preset.wet;
     this.current = preset;
-    const first = this.slots[0] as { conv: ConvolverNode; gain: GainNode };
-    first.conv.buffer = impulseResponseBuffer(ctx, preset);
-    first.gain.gain.value = preset.wet;
   }
 
   get room(): RoomPreset {
     return this.current;
   }
 
+  private slot(preset: RoomPreset): RoomSlot {
+    let slot = this.rooms.get(preset.id);
+    if (!slot) {
+      const conv = this.ctx.createConvolver();
+      conv.normalize = false;
+      conv.buffer = impulseResponseBuffer(this.ctx, preset);
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      conv.connect(gain).connect(this.output);
+      slot = { conv, gain, fed: false, idleTimer: null };
+      this.rooms.set(preset.id, slot);
+    }
+    return slot;
+  }
+
+  private feed(slot: RoomSlot): void {
+    if (slot.idleTimer !== null) clearTimeout(slot.idleTimer);
+    slot.idleTimer = null;
+    if (!slot.fed) this.input.connect(slot.conv);
+    slot.fed = true;
+  }
+
   /** Crossfade to another room over `fade` seconds. */
   setRoom(preset: RoomPreset, fade = 0.5): void {
     if (preset.id === this.current.id) return;
     const now = this.ctx.currentTime;
-    const from = this.slots[this.active] as { conv: ConvolverNode; gain: GainNode };
-    this.active = 1 - this.active;
-    const to = this.slots[this.active] as { conv: ConvolverNode; gain: GainNode };
-    to.conv.buffer = impulseResponseBuffer(this.ctx, preset);
     const tau = Math.max(0.001, fade / 4);
-    from.gain.gain.cancelScheduledValues(now);
-    from.gain.gain.setTargetAtTime(0, now, tau);
-    to.gain.gain.cancelScheduledValues(now);
-    to.gain.gain.setValueAtTime(0, now);
-    to.gain.gain.setTargetAtTime(preset.wet, now, tau);
+    const target = this.slot(preset);
+    this.feed(target);
+    target.gain.gain.cancelScheduledValues(now);
+    target.gain.gain.setTargetAtTime(preset.wet, now, tau);
+    for (const slot of this.rooms.values()) {
+      if (slot === target) continue;
+      slot.gain.gain.cancelScheduledValues(now);
+      slot.gain.gain.setTargetAtTime(0, now, tau);
+      if (slot.fed && slot.idleTimer === null) {
+        // Unplug once the fade (and the tail it lets through) is over.
+        slot.idleTimer = setTimeout(() => {
+          slot.idleTimer = null;
+          if (slot.fed) this.input.disconnect(slot.conv);
+          slot.fed = false;
+        }, fade * 3000);
+      }
+    }
     this.current = preset;
   }
 
   dispose(): void {
     this.input.disconnect();
-    for (const s of this.slots) {
-      s.conv.disconnect();
-      s.gain.disconnect();
+    for (const slot of this.rooms.values()) {
+      if (slot.idleTimer !== null) clearTimeout(slot.idleTimer);
+      slot.conv.disconnect();
+      slot.gain.disconnect();
     }
+    this.rooms.clear();
     this.output.disconnect();
   }
 }

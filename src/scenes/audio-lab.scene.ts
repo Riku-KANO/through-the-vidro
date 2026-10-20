@@ -1,14 +1,16 @@
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three/webgpu';
+import { designPopen, type PopenKind, playPopen } from '../audio/popen';
+import { glassPitch } from '../audio/tuning';
 import { AudioEngine, type Emitter, type Vec3 } from '../core/audio/engine';
 import { designGlassVoice, type GlassStrength, scheduleGlassVoice } from '../core/audio/glass';
 import { VOLUME_CHANNELS, type VolumeChannel } from '../core/audio/mix';
 import { mixdown, renderOffline } from '../core/audio/offline';
-import { playGlass, playPopen } from '../core/audio/play';
-import { designPopen, type PopenKind, schedulePopen } from '../core/audio/popen';
+import { playGlass } from '../core/audio/play';
+import { schedulePops } from '../core/audio/pop';
 import { ROOM_PRESETS, type RoomId, RoomReverb } from '../core/audio/reverb';
 import { mulberry32 } from '../core/audio/rng';
-import { midiToHz, pitchForSize } from '../core/audio/scale';
+import { midiToHz } from '../core/audio/scale';
 import type { SceneFactory } from '../core/scene';
 
 export const title = 'S-09 audio lab: glass by size, po-pen, HRTF orbit, workshop / dome reverb';
@@ -46,13 +48,16 @@ const RING_SECONDS = 0.9;
 type RenderSpec =
   | { kind: 'glass'; size: number; strength: GlassStrength; seed: number; duration?: number }
   | { kind: 'popen'; type: PopenKind; seed: number; duration?: number }
-  | { kind: 'impulse'; room: RoomId; duration?: number };
+  | { kind: 'impulse'; room: RoomId; duration?: number }
+  /** The whole engine (buses, emitter, reverb, limiter) on an OfflineAudioContext. */
+  | { kind: 'mix'; volumes: Partial<Record<VolumeChannel, number>>; seed: number; duration?: number };
 
 interface RenderResult {
   sampleRate: number;
   samples: number[];
   notes: { time: number; midi: number; hz: number; t60: number }[];
   t60: number;
+  voicesStarted?: number;
 }
 
 declare global {
@@ -65,7 +70,7 @@ declare global {
 async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
   const sampleRate = 44100;
   if (spec.kind === 'glass') {
-    const pitch = pitchForSize(spec.size);
+    const pitch = glassPitch(spec.size);
     const voice = designGlassVoice(
       { hz: pitch.hz, size: spec.size, strength: spec.strength, sampleRate },
       mulberry32(spec.seed),
@@ -86,7 +91,7 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     const score = designPopen(spec.type, mulberry32(spec.seed));
     const buf = await renderOffline(
       { duration: spec.duration ?? score.duration + 0.05, sampleRate },
-      (ctx, dest) => schedulePopen(ctx, dest, score, 0),
+      (ctx, dest) => schedulePops(ctx, dest, score, 0),
     );
     return {
       sampleRate,
@@ -94,6 +99,28 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
       notes: score.pops.map((p) => ({ time: p.time, midi: p.midi, hz: p.hz, t60: p.t60 })),
       t60: Math.max(...score.pops.map((p) => p.t60)),
     };
+  }
+  if (spec.kind === 'mix') {
+    // A glass struck 2 m in front of the listener through an HRTF emitter on the sfx bus.
+    const held: { engine?: AudioEngine } = {};
+    const buf = await renderOffline(
+      { duration: spec.duration ?? 1.2, sampleRate, channels: 2 },
+      async (ctx) => {
+        const engine = await AudioEngine.create({ context: ctx });
+        for (const ch of VOLUME_CHANNELS) {
+          const v = spec.volumes[ch];
+          if (v !== undefined) engine.setVolume(ch, v);
+        }
+        const emitter = engine.createEmitter('sfx', { x: 0, y: 0, z: -2 });
+        const size = 0.12;
+        playGlass(engine, { hz: glassPitch(size).hz, size, strength: 'tap' }, { emitter, seed: spec.seed });
+        held.engine = engine;
+        return engine;
+      },
+    );
+    const voicesStarted = held.engine?.snapshot().voicesStarted ?? 0;
+    await held.engine?.dispose();
+    return { sampleRate, samples: Array.from(mixdown(buf)), notes: [], t60: 0, voicesStarted };
   }
   const room = ROOM_PRESETS[spec.room];
   const buf = await renderOffline(
@@ -135,7 +162,7 @@ const FONT = '"Shippori Mincho","Zen Old Mincho","Hiragino Mincho ProN","Yu Minc
 const PANEL =
   'position:absolute;background:rgba(255,255,255,0.13);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);' +
   'border:1px solid rgba(255,255,255,0.22);border-radius:14px;color:#f1ece4;' +
-  `font:16px/1.65 ${FONT};text-shadow:0 1px 2px rgba(10,20,35,0.45);`;
+  `font:18px/1.5 ${FONT};text-shadow:0 1px 2px rgba(10,20,35,0.45);`;
 
 const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   const engine = await AudioEngine.create({ room: ROOM_PRESETS.smallRoom });
@@ -147,13 +174,14 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   scene.fog = new THREE.Fog(0x26354a, 2.5, 7);
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new RoomEnvironment();
-  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  const envRT = pmrem.fromScene(envScene, 0.04);
+  scene.environment = envRT.texture;
   scene.environmentIntensity = 0.75;
   envScene.dispose();
 
   const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 50);
   camera.position.set(0, 0.95, 1.7);
-  camera.lookAt(0, 0.66, 0);
+  camera.lookAt(0, 0.6, 0);
 
   const dawn = new THREE.DirectionalLight(0xcfe0ff, 1.6);
   dawn.position.set(-2, 3, -2);
@@ -194,7 +222,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
 
   const xs = [-0.82, -0.3, 0.13, 0.48, 0.78];
   const glasses = GLASS_SIZES.map((size, i) => {
-    const pitch = pitchForSize(size);
+    const pitch = glassPitch(size);
     const radius = size / 2;
     const pos = new THREE.Vector3(xs[i] as number, railY + 0.012 + radius * 0.96, 0);
     const mesh = new THREE.Mesh(sphereGeo, glassMat);
@@ -307,7 +335,8 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   const state = {
     strength: 'tap' as GlassStrength,
     room: 'smallRoom' as RoomId,
-    orbit: { on: false, angle: 0 },
+    /** dotX / dotY: offset (px) last applied to the direction dial's dot. */
+    orbit: { on: false, angle: 0, dotX: 0, dotY: 0 },
     plays: 0,
     glassPlays: 0,
     popenPlays: 0,
@@ -358,40 +387,47 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   window.__vidroAudioLab = { render: renderForSensor };
 
   // ---------- Overlay (DOM) ----------
-  const panel = el('div', `${PANEL}right:24px;top:24px;padding:16px 22px 14px;max-width:440px`, overlay);
-  el('div', 'font-size:21px;letter-spacing:0.08em;margin-bottom:6px', panel, '音の実験室');
-  const status = el('div', 'margin-bottom:10px;color:#ffe2b0', panel);
-  const rows: [string, string][] = [
-    ['クリック', '球を叩く'],
-    ['1 – 5', 'ガラスを鳴らす（1 が最も大きく低い）'],
-    ['Q W E', '強さ: 触れる / 叩く / 玉が当たる'],
-    ['6 7 8 9', 'ぽぺん: 覗く / 置く / 拾う / 震える'],
-    ['R', '残響: 工房 ⇄ ドーム'],
-    ['O', '音源が聞き手の周りを回る（立体音響）'],
-    ['A / M', '環境音（風）/ 音楽（持続音）'],
-  ];
-  const grid = el('div', 'display:grid;grid-template-columns:auto 1fr;column-gap:16px;row-gap:2px', panel);
-  for (const [k, v] of rows) {
-    el(
-      'div',
-      'font-family:ui-sans-serif,system-ui,sans-serif;font-size:15px;opacity:0.9;white-space:nowrap',
-      grid,
-      k,
-    );
-    el('div', '', grid, v);
-  }
-  const current = el('div', 'margin-top:10px;font-size:15px;opacity:0.92', panel);
-  el('div', 'margin-top:4px;font-size:15px;opacity:0.75', panel, 'ヘッドホンで聴くと方向が分かります');
+  // Panels stay off the orbit path (a band just above the screen centre) and off the glasses.
+  // Text is at least 18px (UI/UX設計 > 文字と色).
+  const panel = el('section', `${PANEL}right:24px;top:24px;padding:14px 22px;max-width:560px`, overlay);
+  panel.setAttribute('aria-label', '音の状態');
+  el('div', 'font-size:22px;letter-spacing:0.08em', panel, '音の実験室');
+  const status = el('div', 'color:#ffe2b0', panel);
+  const current = el('div', '', panel);
+  el('div', 'opacity:0.8', panel, 'ヘッドホンで聴くと方向が分かります');
 
-  const mixer = el(
-    'div',
-    `${PANEL}left:24px;bottom:24px;padding:12px 18px;pointer-events:auto;display:grid;` +
-      'grid-template-columns:auto 140px;column-gap:12px;row-gap:4px;align-items:center',
+  const help = el(
+    'section',
+    `${PANEL}left:50%;bottom:24px;transform:translateX(-50%);padding:12px 22px;display:grid;` +
+      'grid-template-columns:auto auto auto auto;column-gap:14px;row-gap:0;white-space:nowrap',
     overlay,
   );
+  help.setAttribute('aria-label', '操作の説明');
+  const rows: [string, string][] = [
+    ['クリック', '球を叩く'],
+    ['6 7 8 9', 'ぽぺん: 覗く / 置く / 拾う / 震える'],
+    ['1 – 5', 'ガラス（1 が最も大きく低い）'],
+    ['R', '残響: 工房 ⇄ ドーム'],
+    ['Q W E', '強さ: 触れる / 叩く / 玉が当たる'],
+    ['O', '音源が頭の周りを回る'],
+    ['', ''],
+    ['A / M', '環境音（風）/ 音楽（持続音）'],
+  ];
+  for (const [k, v] of rows) {
+    el('div', 'font-family:ui-sans-serif,system-ui,sans-serif;opacity:0.9', help, k);
+    el('div', 'margin-right:18px', help, v);
+  }
+
+  const mixer = el(
+    'section',
+    `${PANEL}left:24px;top:96px;padding:10px 18px;pointer-events:auto;display:grid;` +
+      'grid-template-columns:auto 150px;column-gap:12px;row-gap:2px;align-items:center',
+    overlay,
+  );
+  mixer.setAttribute('aria-label', '音量');
   for (const ch of VOLUME_CHANNELS) {
     el('label', '', mixer, VOLUME_LABEL[ch]);
-    const input = el('input', 'width:140px;accent-color:#d9b77e', mixer);
+    const input = el('input', 'width:150px;accent-color:#d9b77e', mixer);
     input.type = 'range';
     input.min = '0';
     input.max = '100';
@@ -400,20 +436,27 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     input.addEventListener('input', () => engine.setVolume(ch, Number(input.value) / 100));
   }
 
-  const radar = el('div', `${PANEL}right:24px;bottom:24px;width:132px;height:150px;padding:0`, overlay);
-  el('div', 'position:absolute;left:0;right:0;top:6px;text-align:center;font-size:14px', radar, '音源の方向');
+  const radar = el('section', `${PANEL}right:24px;bottom:24px;width:150px;height:160px;padding:0`, overlay);
+  radar.setAttribute('aria-label', '音源の方向');
+  el('div', 'position:absolute;left:0;right:0;top:6px;text-align:center', radar, '音源の方向');
   const dial = el(
     'div',
-    'position:absolute;left:21px;top:34px;width:90px;height:90px;border-radius:50%;' +
+    'position:absolute;left:30px;top:44px;width:90px;height:90px;border-radius:50%;' +
       'border:1px solid rgba(255,255,255,0.45)',
     radar,
   );
+  // Listener in the centre; a small notch marks "ahead".
   el(
     'div',
-    'position:absolute;left:41px;top:39px;width:8px;height:8px;border-radius:50%;background:#f1ece4',
+    'position:absolute;left:41px;top:41px;width:8px;height:8px;border-radius:50%;background:#f1ece4',
     dial,
   );
-  el('div', 'position:absolute;left:40px;top:-2px;font-size:11px;opacity:0.8', dial, '前');
+  el(
+    'div',
+    'position:absolute;left:40px;top:-6px;width:0;height:0;border-left:5px solid transparent;' +
+      'border-right:5px solid transparent;border-bottom:8px solid rgba(255,255,255,0.8)',
+    dial,
+  );
   const dot = el(
     'div',
     'position:absolute;left:39px;top:39px;width:12px;height:12px;border-radius:50%;background:#ffc988;' +
@@ -424,7 +467,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   const labels = glasses.map((g, i) =>
     el(
       'div',
-      `position:absolute;transform:translate(-50%,0);color:#f1ece4;font:15px/1.3 ${FONT};text-align:center;` +
+      `position:absolute;transform:translate(-50%,0);color:#f1ece4;font:18px/1.3 ${FONT};text-align:center;` +
         'text-shadow:0 1px 3px rgba(10,20,35,0.7);white-space:nowrap',
       overlay,
       `${i + 1} · ${g.pitch.name}`,
@@ -436,9 +479,9 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     status.textContent =
       s === 'running'
         ? `● 音: 再生中（AudioContext ${s}）`
-        : `○ 音: 停止中（AudioContext ${s}）— クリックで音を有効にする`;
+        : `○ 音: 停止中（${s}）— クリックで音を有効にする`;
     current.textContent =
-      `いま: 強さ「${STRENGTH_LABEL[state.strength]}」 / 残響「${ROOM_LABEL[state.room]}」 / ` +
+      `強さ「${STRENGTH_LABEL[state.strength]}」 残響「${ROOM_LABEL[state.room]}」 ` +
       `周回 ${state.orbit.on ? 'オン' : 'オフ'}`;
   };
   refreshText();
@@ -452,7 +495,11 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   const strikeGlass = (i: number): void => {
     const g = glasses[i];
     if (!g) return;
-    const voice = playGlass(engine, { size: g.size, strength: state.strength }, { emitter: g.emitter });
+    const voice = playGlass(
+      engine,
+      { hz: g.pitch.hz, size: g.size, strength: state.strength },
+      { emitter: g.emitter },
+    );
     if (!voice) return;
     state.plays++;
     state.glassPlays++;
@@ -512,6 +559,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
   window.addEventListener('keydown', onKeyDown);
 
   let orbitTimer = 0;
+  const dotAt = { x: Number.POSITIVE_INFINITY, y: Number.POSITIVE_INFINITY };
   let orbitNote = 0;
   const projected = new THREE.Vector3();
   probe.ready = true;
@@ -541,14 +589,23 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
         orbitPos.z = camera.position.z - Math.cos(a) * ORBIT_RADIUS;
         orb.position.set(orbitPos.x, orbitPos.y, orbitPos.z);
         orbitEmitter.setPosition(orbitPos);
-        dot.style.transform = `translate(${Math.sin(a) * 38}px, ${-Math.cos(a) * 38}px)`;
+        // Only touch the DOM when the dot moved by at least half a pixel.
+        const dx = Math.sin(a) * 38;
+        const dy = -Math.cos(a) * 38;
+        if (Math.abs(dx - dotAt.x) >= 0.5 || Math.abs(dy - dotAt.y) >= 0.5) {
+          dotAt.x = dx;
+          dotAt.y = dy;
+          dot.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+          state.orbit.dotX = dx;
+          state.orbit.dotY = dy;
+        }
         orbitTimer -= dt;
         if (orbitTimer <= 0) {
           orbitTimer = ORBIT_INTERVAL;
           const note = ORBIT_NOTES[orbitNote++ % ORBIT_NOTES.length] as number;
           const voice = playGlass(
             engine,
-            { size: 0.07, strength: 'tap', hz: midiToHz(note) },
+            { hz: midiToHz(note), size: 0.07, strength: 'tap' },
             { emitter: orbitEmitter },
           );
           if (voice) state.orbitPlays++;
@@ -574,6 +631,7 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
       orbitEmitter.dispose();
       void engine.dispose();
       delete window.__vidroAudioLab;
+      envRT.dispose();
       pmrem.dispose();
       const geometries = new Set<THREE.BufferGeometry>();
       scene.traverse((o) => {

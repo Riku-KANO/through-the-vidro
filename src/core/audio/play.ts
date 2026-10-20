@@ -1,13 +1,12 @@
 /**
- * Live playback helpers: design a voice (with a fresh random seed, so every strike differs a little),
- * reserve a voice slot on the engine, and schedule it on an emitter (3D) or a bus.
+ * Live playback helpers: design a voice (with a fresh random seed, so every strike differs a little)
+ * and start it through the engine (admission, voice stealing) on an emitter (3D) or a bus.
  */
 import type { AudioEngine, Emitter } from './engine';
 import { designGlassVoice, type GlassStrength, type GlassVoice, scheduleGlassVoice } from './glass';
 import type { BusName } from './mix';
-import { designPopen, type PopenKind, type PopenScore, schedulePopen } from './popen';
+import { designPops, type PopPattern, type PopScore, schedulePops } from './pop';
 import { mulberry32, randomSeed } from './rng';
-import { pitchForSize } from './scale';
 
 export interface PlayOptions {
   /** Positioned source; otherwise the sound goes straight to `bus`. */
@@ -18,39 +17,37 @@ export interface PlayOptions {
 }
 
 export interface GlassStrike {
-  /** Characteristic size in metres (decides ring time, and the pitch unless `hz` is given). */
+  /** Fundamental in Hz (the game picks it, e.g. from its size→pitch rule). */
+  hz: number;
+  /** Characteristic size in metres (decides the ring time). */
   size: number;
   strength: GlassStrength;
-  /** Override the pitch (should be a scale note). Default: pitchForSize(size). */
-  hz?: number;
 }
 
-/** Strike a glass now. Returns the voice, or null if the engine refused it (locked / voice cap). */
+/** Strike a glass now. Returns the voice, or null if the engine refused it (audio not running). */
 export function playGlass(
   engine: AudioEngine,
   strike: GlassStrike,
   opts: PlayOptions = {},
 ): GlassVoice | null {
   const voice = designGlassVoice(
-    {
-      hz: strike.hz ?? pitchForSize(strike.size).hz,
-      size: strike.size,
-      strength: strike.strength,
-      sampleRate: engine.ctx.sampleRate,
-    },
+    { hz: strike.hz, size: strike.size, strength: strike.strength, sampleRate: engine.ctx.sampleRate },
     mulberry32(opts.seed ?? randomSeed()),
   );
-  const when = engine.now();
-  if (!engine.beginVoice(when + voice.duration)) return null;
-  scheduleGlassVoice(engine.ctx, opts.emitter?.input ?? engine.bus(opts.bus ?? 'sfx'), voice, when);
-  return voice;
+  const started = engine.startVoice(
+    { duration: voice.duration, level: voice.level, emitter: opts.emitter, bus: opts.bus },
+    (ctx, destination, when) => scheduleGlassVoice(ctx, destination, voice, when),
+  );
+  return started ? voice : null;
 }
 
-/** Play the hand orb's po-pen now. Returns the score, or null if the engine refused it. */
-export function playPopen(engine: AudioEngine, kind: PopenKind, opts: PlayOptions = {}): PopenScore | null {
-  const score = designPopen(kind, mulberry32(opts.seed ?? randomSeed()));
-  const when = engine.now();
-  if (!engine.beginVoice(when + score.duration)) return null;
-  schedulePopen(engine.ctx, opts.emitter?.input ?? engine.bus(opts.bus ?? 'sfx'), score, when);
-  return score;
+/** Play a pattern of thin-glass pops now. Returns the score, or null if the engine refused it. */
+export function playPops(engine: AudioEngine, pattern: PopPattern, opts: PlayOptions = {}): PopScore | null {
+  const score = designPops(pattern, mulberry32(opts.seed ?? randomSeed()));
+  const level = Math.max(0, ...score.pops.map((p) => p.gain));
+  const started = engine.startVoice(
+    { duration: score.duration, level, emitter: opts.emitter, bus: opts.bus },
+    (ctx, destination, when) => schedulePops(ctx, destination, score, when),
+  );
+  return started ? score : null;
 }

@@ -1,87 +1,106 @@
 import { describe, expect, it } from 'vitest';
 import {
-  D_MAJOR_PENTATONIC,
-  DEFAULT_SIZE_PITCH,
   hzToMidi,
   isInScale,
+  MAJOR_PENTATONIC,
+  makeScale,
   midiToHz,
   noteName,
   pitchForSize,
+  type SizePitchRule,
   scaleNotes,
   scaleStep,
   snapToScale,
 } from './scale';
 
-describe('D major pentatonic', () => {
-  it('contains exactly D E F# A B in every octave', () => {
-    const names = scaleNotes(D_MAJOR_PENTATONIC, 60, 71).map((m) => noteName(m).replace(/\d+$/, ''));
-    expect(names).toEqual(['D', 'E', 'F#', 'A', 'B']);
-    for (const m of scaleNotes(D_MAJOR_PENTATONIC, 24, 108)) {
-      expect(['D', 'E', 'F#', 'A', 'B']).toContain(noteName(m).replace(/-?\d+$/, ''));
-    }
+// Core is game-agnostic: every function takes the scale / rule as an argument.
+const C_PENTA = makeScale('C major pentatonic', 0, MAJOR_PENTATONIC);
+const G_PENTA = makeScale('G major pentatonic', 7, MAJOR_PENTATONIC);
+
+describe('scales', () => {
+  it('builds a scale from a root and intervals', () => {
+    const names = scaleNotes(G_PENTA, 60, 71).map((m) => noteName(m).replace(/\d+$/, ''));
+    expect(names).toEqual(['D', 'E', 'G', 'A', 'B']);
   });
 
-  it('rejects notes outside the scale (C, G, F, D#)', () => {
-    for (const m of [60, 67, 65, 63]) expect(isInScale(m)).toBe(false);
-    for (const m of [62, 64, 66, 69, 71]) expect(isInScale(m)).toBe(true);
+  it('rejects malformed scales instead of looping forever', () => {
+    expect(() => makeScale('empty', 0, [])).toThrow(RangeError);
+    expect(() => makeScale('bad root', 12, [0, 2])).toThrow(RangeError);
+    expect(() => makeScale('bad interval', 0, [0, 12])).toThrow(RangeError);
+    expect(() => makeScale('fraction', 0, [0, 2.5])).toThrow(RangeError);
+    const hollow = { name: 'hollow', rootPitchClass: 0, intervals: [] as number[] };
+    expect(() => snapToScale(60, hollow)).toThrow(RangeError);
+    expect(() => scaleStep(60, 1, hollow)).toThrow(RangeError);
+  });
+
+  it('checks membership', () => {
+    for (const m of [60, 62, 64, 67, 69]) expect(isInScale(m, C_PENTA)).toBe(true);
+    for (const m of [61, 65, 71, 60.5]) expect(isInScale(m, C_PENTA)).toBe(false);
   });
 
   it('uses equal temperament with A4 = 440 Hz', () => {
     expect(midiToHz(69)).toBeCloseTo(440, 6);
-    expect(midiToHz(62)).toBeCloseTo(293.665, 2); // D4
-    expect(midiToHz(74)).toBeCloseTo(587.33, 1); // D5
+    expect(midiToHz(62)).toBeCloseTo(293.665, 2);
     expect(hzToMidi(midiToHz(66.25))).toBeCloseTo(66.25, 9);
   });
 
-  it('snaps any pitch to the nearest scale note', () => {
+  it('snaps any finite pitch to the nearest scale note', () => {
     for (let m = 30; m <= 100; m += 0.37) {
-      const snapped = snapToScale(m);
-      expect(isInScale(snapped)).toBe(true);
-      const best = Math.min(...scaleNotes(D_MAJOR_PENTATONIC, 20, 110).map((n) => Math.abs(n - m)));
+      const snapped = snapToScale(m, C_PENTA);
+      expect(isInScale(snapped, C_PENTA)).toBe(true);
+      const best = Math.min(...scaleNotes(C_PENTA, 20, 110).map((n) => Math.abs(n - m)));
       expect(Math.abs(snapped - m)).toBeCloseTo(best, 9);
     }
   });
 
-  it('steps up and down by scale degrees', () => {
-    expect(scaleStep(62, 1)).toBe(64); // D4 -> E4
-    expect(scaleStep(62, 5)).toBe(74); // five degrees = one octave
-    expect(scaleStep(69, -1)).toBe(66); // A4 -> F#4
-    expect(scaleStep(62, 0)).toBe(62);
+  it('steps by scale degrees', () => {
+    expect(scaleStep(60, 1, C_PENTA)).toBe(62);
+    expect(scaleStep(60, 5, C_PENTA)).toBe(72);
+    expect(scaleStep(67, -1, C_PENTA)).toBe(64);
+    expect(scaleStep(60, 0, C_PENTA)).toBe(60);
+  });
+
+  it('rejects non-finite input explicitly (never hangs the main thread)', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => snapToScale(bad, C_PENTA)).toThrow(RangeError);
+      expect(() => scaleStep(bad, 1, C_PENTA)).toThrow(RangeError);
+      expect(() => scaleStep(60, bad, C_PENTA)).toThrow(RangeError);
+    }
+    expect(() => scaleStep(60, 1.5, C_PENTA)).toThrow(RangeError);
   });
 });
 
-describe('pitch from size (bigger glass rings lower)', () => {
-  const sizes = Array.from({ length: 200 }, (_, i) => 0.005 * 1.05 ** i); // 5 mm .. ~85 m
+describe('pitch from size', () => {
+  const rule: SizePitchRule = {
+    refSize: 0.1,
+    refMidi: 79, // G5, in C pentatonic
+    semitonesPerDoubling: 12,
+    minMidi: 36,
+    maxMidi: 96,
+    scale: C_PENTA,
+  };
+  const sizes = Array.from({ length: 200 }, (_, i) => 0.005 * 1.05 ** i);
 
-  it('always lands on a scale note inside the allowed range', () => {
+  it('lands on a scale note inside the range, never rising as size grows', () => {
+    let prev = Number.POSITIVE_INFINITY;
     for (const s of sizes) {
-      const p = pitchForSize(s);
-      expect(isInScale(p.midi), `size ${s}`).toBe(true);
-      expect(p.midi).toBeGreaterThanOrEqual(DEFAULT_SIZE_PITCH.minMidi);
-      expect(p.midi).toBeLessThanOrEqual(DEFAULT_SIZE_PITCH.maxMidi);
-      expect(p.hz).toBeCloseTo(midiToHz(p.midi), 9);
+      const p = pitchForSize(s, rule);
+      expect(isInScale(p.midi, C_PENTA)).toBe(true);
+      expect(p.midi).toBeGreaterThanOrEqual(rule.minMidi);
+      expect(p.midi).toBeLessThanOrEqual(rule.maxMidi);
+      expect(p.midi).toBeLessThanOrEqual(prev);
+      prev = p.midi;
     }
   });
 
-  it('never rises when the object gets bigger', () => {
-    for (let i = 1; i < sizes.length; i++) {
-      expect(pitchForSize(sizes[i] as number).midi).toBeLessThanOrEqual(
-        pitchForSize(sizes[i - 1] as number).midi,
-      );
+  it('drops one octave per doubling and maps the reference size to the reference note', () => {
+    expect(pitchForSize(0.15, rule).midi - pitchForSize(0.3, rule).midi).toBe(12);
+    expect(pitchForSize(rule.refSize, rule).midi).toBe(rule.refMidi);
+  });
+
+  it('rejects sizes that are not positive finite numbers', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1]) {
+      expect(() => pitchForSize(bad, rule)).toThrow(RangeError);
     }
-  });
-
-  it('spans low for big objects and high for small ones', () => {
-    expect(pitchForSize(0.01).hz).toBeGreaterThan(1500);
-    expect(pitchForSize(5).hz).toBeLessThan(150);
-  });
-
-  it('drops one octave when the size doubles (f ∝ 1/size), within the range', () => {
-    expect(pitchForSize(0.15).midi - pitchForSize(0.3).midi).toBe(12);
-    expect(pitchForSize(0.07).midi - pitchForSize(0.14).midi).toBe(12);
-  });
-
-  it('maps the reference size to the reference note', () => {
-    expect(pitchForSize(DEFAULT_SIZE_PITCH.refSize).midi).toBe(DEFAULT_SIZE_PITCH.refMidi);
   });
 });
