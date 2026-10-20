@@ -1,6 +1,6 @@
 // Shared by the bench scripts: serve dist/ with `vite preview` on a port owned by this worktree,
 // fail fast if it cannot start, and always stop the whole process group.
-import { spawn } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -62,3 +62,20 @@ export const GPU_ARGS = [
 ];
 /** Lifts the 60 Hz cap so frame time shows real throughput (max of CPU and GPU under back-pressure). */
 export const UNCAPPED_ARGS = ['--disable-gpu-vsync', '--disable-frame-rate-limit'];
+
+/**
+ * Number of other Playwright browsers using the GPU right now (one GPU process per browser).
+ * Parallel slices share one GPU; numbers measured while others render are not comparable (S-05).
+ */
+export function contendingBrowsers() {
+  try {
+    return execSync('ps -A -o command', { encoding: 'utf8' })
+      .split('\n')
+      .filter(
+        (l) =>
+          /ms-playwright\/(chromium|chromium_headless_shell)/.test(l) && l.includes('--type=gpu-process'),
+      ).length;
+  } catch {
+    return -1;
+  }
+}

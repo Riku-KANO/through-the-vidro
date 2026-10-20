@@ -11,7 +11,13 @@ import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
-import { GPU_ARGS, startPreview, UNCAPPED_ARGS, worktreePort } from './lib/preview-server.mjs';
+import {
+  contendingBrowsers,
+  GPU_ARGS,
+  startPreview,
+  UNCAPPED_ARGS,
+  worktreePort,
+} from './lib/preview-server.mjs';
 
 const root = process.cwd();
 const list = (v, d) => (v ? v.split(',').filter(Boolean) : d);
@@ -27,6 +33,14 @@ const backends = list(process.env.BACKENDS, ['webgpu', 'webgl2']);
 const seconds = Number(process.env.BENCH_SECONDS ?? 5);
 const BUDGET_MS = (1000 / 60) * 0.8;
 
+// Other browsers on the same GPU distort every number here. QUIET=1 refuses to measure under contention.
+const busyBefore = contendingBrowsers();
+if (busyBefore > 0) {
+  console.warn(
+    `warning: ${busyBefore} other Playwright browser(s) are using the GPU; results will be marked as contended`,
+  );
+  if (process.env.QUIET === '1') process.exit(3);
+}
 const server = await startPreview(worktreePort(311));
 const rows = [];
 let browser;
@@ -77,12 +91,18 @@ try {
   await browser?.close();
   server.stop();
 }
+const busyAfter = contendingBrowsers();
+const contended = busyBefore !== 0 || busyAfter !== 0;
 
 const fmt = (v, d = 2) => (v == null ? 'n/a' : v.toFixed(d));
 const lines = [
   '# 実機ベンチ（ヘッドあり、1920×1080、垂直同期なし）',
   '',
   `${new Date().toISOString()} · ${cpus()[0]?.model ?? 'unknown CPU'} · ${seconds}秒/条件`,
+  '',
+  contended
+    ? `**混雑した状態の計測**: ほかのブラウザが GPU を使っていた（前 ${busyBefore} / 後 ${busyAfter}）。数値は比較に使わない。`
+    : '静かな状態で計測した（ほかのブラウザなし、前後とも確認）。',
   '',
   `主な指標は垂直同期を外したフレーム時間（CPUとGPUの重い方）。p95 が ${BUDGET_MS.toFixed(1)}ms（60fpsの80%）以下なら余裕あり。`,
   'GPUタイムスタンプは参考値（描画パスの合計で、GPUによっては重なって過大になる）。',
@@ -97,5 +117,8 @@ const lines = [
 ];
 mkdirSync(join(root, 'artifacts'), { recursive: true });
 writeFileSync(join(root, 'artifacts/bench-headed.md'), lines.join('\n'));
-writeFileSync(join(root, 'artifacts/bench-headed.json'), JSON.stringify(rows, null, 2));
+writeFileSync(
+  join(root, 'artifacts/bench-headed.json'),
+  JSON.stringify({ contended, busyBefore, busyAfter, rows }, null, 2),
+);
 console.log('\nwrote artifacts/bench-headed.md');
