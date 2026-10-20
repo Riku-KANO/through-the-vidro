@@ -116,4 +116,48 @@ describe('DynamicResolution with requireResponse (S-08)', () => {
     expect(dr.unresponsive).toBe(false);
     expect(dr.scale).toBe(0.6);
   });
+
+  // The smoothed cost lags behind a load that rises mid-session (median of 5, then EMA): it is still climbing after
+  // the first step down, so it must not be the yardstick for the response (S-08 review round 2, P1).
+  it.each([
+    [0.5, 1.5],
+    [0.7, 1.3],
+    [0.7, 2],
+    [0.75, 1.2],
+  ])(
+    'keeps stepping down when an overload that follows the pixels starts mid-session (%s T → %s T)',
+    (from, to) => {
+      const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+      run(dr, pixelBound(TARGET * from), 5);
+      run(dr, pixelBound(TARGET * to), 20);
+      expect(dr.unresponsive).toBe(false);
+      expect(dr.scale).toBeLessThan(0.75);
+    },
+  );
+
+  it('keeps stepping down under an extreme overload that follows the pixels (above the spike clamp)', () => {
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(dr, pixelBound(TARGET * 6), 20);
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.scale).toBe(0.5);
+  });
+
+  it('keeps stepping down when part of the cost is fixed (8 ms fixed + 12 ms that follows the pixels)', () => {
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(dr, TARGET * 0.5, 5);
+    run(dr, (s) => 8 + 12 * (s / 0.85) ** 2, 20);
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.scale).toBeLessThan(0.7);
+  });
+
+  it('still gives up on a constant cost that starts mid-session, or a noisy constant cost', () => {
+    const late = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    run(late, TARGET * 0.5, 5);
+    run(late, 25, 20);
+    expect(late.unresponsive).toBe(true);
+    const noisy = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
+    let i = 0;
+    run(noisy, () => 20 + ((i++ * 7919) % 11) - 5, 20); // 15–25 ms, deterministic
+    expect(noisy.unresponsive).toBe(true);
+  });
 });

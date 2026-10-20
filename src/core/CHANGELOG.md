@@ -19,15 +19,17 @@
     GPU 時間（span）で行う。`COST_FACTOR`（`perf/quality-select.ts`）は垂直同期なしのフレーム時間で較正した値で、垂直同期ありの span は
     それより長く出る（M5 Pro の stress で約3倍、理由は未確定）ので、低めの品質を選ぶ側に偏りうる
   - Apple 以外の WebGPU も、three のパスの合計から span に切り替わった（計測の方法を1つに揃えるため）。Iris Xe などで確かめる（S-07）
-- `perf/dynamic-resolution.ts`: オプション `requireResponse`（既定 off）。3段続けて下げても平滑した GPU 時間が1割以上下がらなければ
-  `unresponsive` を立てて止まる（段の間が 2.5 秒を超えるか、上げた時点で数え直す）
+- `perf/dynamic-resolution.ts`: オプション `requireResponse`（既定 off）。3段続けて下げても GPU 時間が1割以上下がらなければ
+  `unresponsive` を立てて止まる（段の間が 2.5 秒を超えるか、上げた時点で数え直す）。比べるのは段を下げる直前の直近5サンプルの中央値
+  （EMA は途中から上がった負荷に遅れて追いつくので、基準にすると画素に比例する過負荷でも誤って止まる）。中央値の窓には生の値を入れ、
+  スパイクの上限は EMA に入れるときだけ掛ける（EMA の値は以前と同じ）
 - `perf/governor.ts`:
   - 動的解像度を `requireResponse` 付きで作る（オプション `dynresRequireResponse`、既定 true）。手応えがなければ、プリセットの倍率へ戻して
     そのセッションの間止める
   - GPU 時間の信用をやめたときも、下げた倍率のまま残さずプリセットの倍率へ戻して止める（以前は下げた倍率のまま残っていた）
   - 止めた理由を `dynresStopReason` に出す
-- `params.ts`: `gpuSpan=0`（span を測らない）、`gpuPasses=0`（three のパスごとのタイムスタンプを使わない）、`dynresResponse=0|1`
-  （既定 on。試験用の `dynresTarget` を付けたときは既定 off）
+- `params.ts`: `gpuSpan=0`（span を測らない）、`gpuPasses=0`（three のパスごとのタイムスタンプを使わない）、`dynresResponse=0`
+  （手応えの検査を切る。配線だけを確かめる試験用）。どれも既定 on で、ほかのスイッチと連動しない
 - `scene.ts`: 約束のコメントのみ。GPU への submit は `render()` の中で行い、`update()` では行わない（span は `render()` の前後で測るため）
 - 案2で使うときは、アプリ側でフレームごとに `begin()` → 描画 → `end()` を呼び、得た ms を `PerfGovernor.gpu()` に渡す
   （このリポジトリでは `src/main.ts`）。three のパスごとのタイムスタンプ（`renderer.backend.trackTimestamp`）は、span を使う経路では

@@ -30,6 +30,30 @@ function simulate(
   return actions;
 }
 
+/**
+ * Drives the governor exactly like src/main.ts: a GPU sample requested every 8th frame while none is in flight,
+ * read back 2 frames later with the epoch of the request, the cost taken at the scale the frame was rendered at.
+ * Frames take one refresh interval, or two when the GPU cost does not fit (vsync).
+ */
+function simulateApp(g: PerfGovernor, seconds: number, gpuMs: (scale: number) => number): GovernorAction[] {
+  const actions: GovernorAction[] = [];
+  let pending: { ms: number; epoch: number; at: number } | null = null;
+  let elapsed = 0;
+  for (let i = 0; elapsed < seconds * 1000; i++) {
+    const cost = gpuMs(g.scale);
+    const ms = cost <= FRAME ? FRAME : FRAME * 2;
+    elapsed += ms;
+    if (pending && i >= pending.at) {
+      g.gpu(pending.ms, pending.epoch);
+      pending = null;
+    }
+    if (!pending && i % 8 === 0) pending = { ms: cost, epoch: g.epoch, at: i + 2 };
+    const a = g.frame(ms);
+    if (a) actions.push(a);
+  }
+  return actions;
+}
+
 const opts = (o: Partial<PerfGovernorOptions> = {}): PerfGovernorOptions => ({
   level: 'mid',
   auto: false,
@@ -211,7 +235,33 @@ describe('PerfGovernor', () => {
     expect(simulate(g, 20, () => 25, 33.3)).toEqual([]);
   });
 
-  it('without the response check (test hook), keeps stepping down to the floor whatever the GPU time does', () => {
+  it('settles in the band, then keeps lowering for an overload that starts mid-session (app sampling)', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulateApp(g, 5, (s) => 8 * (s / 0.85) ** 2);
+    expect(g.scale).toBe(0.85);
+    simulateApp(g, 25, (s) => 25 * (s / 0.85) ** 2);
+    expect(g.dynresStopReason).toBeNull();
+    expect(g.scale).toBeLessThan(0.7);
+    expect(g.scale).toBeGreaterThan(0.51);
+  });
+
+  it('keeps lowering when part of the cost is fixed (8 ms fixed + 12 ms that follows the pixels, app sampling)', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulateApp(g, 5, (s) => 6 * (s / 0.85) ** 2);
+    simulateApp(g, 25, (s) => 8 + 12 * (s / 0.85) ** 2);
+    expect(g.dynresStopReason).toBeNull();
+    expect(g.scale).toBeLessThan(0.75);
+  });
+
+  it('stops for a constant cost that starts mid-session (app sampling)', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulateApp(g, 5, () => 8);
+    const actions = simulateApp(g, 25, () => 25);
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(actions.at(-1)).toEqual({ kind: 'scale', scale: 0.85 });
+  });
+
+  it('without the response check (?dynresResponse=0), keeps stepping down to the floor whatever the GPU time does', () => {
     const g = new PerfGovernor(opts({ dynres: true, dynresRequireResponse: false }));
     simulate(g, 15, () => 25, 33.3);
     expect(g.scale).toBe(0.51);

@@ -4,7 +4,8 @@
  *
  * three's `resolveTimestampsAsync('render')` sums the duration of every render pass. On Apple/Metal the passes
  * overlap (tile-based GPU, timestamps at stage boundaries), so ~20 post-processing passes summed to 9–23 ms for a
- * frame whose real cost was 1.15 ms (S-05). The span cannot double-count: it is one interval on one clock.
+ * frame whose real cost was 1.15 ms (S-05). The span does not add up overlapping passes: it is one interval between
+ * two timestamps (what that interval covers is discussed below).
  *
  *   begin(): a tiny compute pass that writes timestamp 0 at its start, submitted before the frame's first pass
  *   end():   a tiny compute pass that writes timestamp 1 at its end, then resolve → copy → map, after the last pass

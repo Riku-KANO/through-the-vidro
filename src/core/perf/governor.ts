@@ -47,8 +47,8 @@ export interface PerfGovernorOptions {
   gpuTiming: boolean;
   dynresTargetMs?: number;
   /**
-   * Stop dynamic resolution when steps down do not lower the GPU time (default true). Off only for the
-   * ?dynresTarget test hook, which drives the controller to its floor to test the wiring.
+   * Stop dynamic resolution when steps down do not lower the GPU time (default true). ?dynresResponse=0 turns it off
+   * for tests that check the wiring by driving the controller to its floor.
    */
   dynresRequireResponse?: boolean;
   /** Test hook (?autoForce): replace the recommendation to exercise the switch and verification path. */
