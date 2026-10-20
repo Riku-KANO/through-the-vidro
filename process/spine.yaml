@@ -17,7 +17,8 @@ slices:
 
   - id: S-01
     title: ガラス材質ライブラリと見本のシーン
-    status: todo
+    status: integrated
+    branch: claude/slice-s-01-glass-254305
     depends: [S-00]
     parallel: true
     requirements:
@@ -43,7 +44,8 @@ slices:
 
   - id: S-02
     title: 表と裏の層 — 覗く（裏の層の合成）と置く（実体化）
-    status: todo
+    status: integrated
+    branch: claude/slice-s-02-layers-542800
     depends: [S-00]
     parallel: true
     requirements:
@@ -71,7 +73,8 @@ slices:
 
   - id: S-03
     title: 一人称の移動と入力（キーボード＋マウス、ゲームパッド）
-    status: todo
+    status: integrated
+    branch: claude/slice-s-03-player-e1c811
     depends: [S-00]
     parallel: true
     requirements:
@@ -96,7 +99,8 @@ slices:
 
   - id: S-04
     title: 読み込み → ホーム → 玉の中へ潜る遷移
-    status: todo
+    status: integrated
+    branch: claude/slice-s-04-home-dive-09c08e
     depends: [S-00]
     parallel: true
     requirements:
@@ -122,7 +126,8 @@ slices:
 
   - id: S-05
     title: 性能 — 負荷シーン、品質の自動選択、動的解像度、実機計測
-    status: reviewed
+    status: integrated
+    branch: slice/S-05-perf
     depends: [S-00]
     parallel: true
     owner: 親セッション
