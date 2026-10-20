@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
 
 /**
@@ -7,6 +8,11 @@ import { defineConfig } from '@playwright/test';
  */
 const headed = process.env.HEADED === '1';
 
+// Each worktree gets its own preview port so parallel slices never test each other's build.
+const port =
+  Number(process.env.SENSOR_PORT) ||
+  4200 + (createHash('sha1').update(process.cwd()).digest().readUInt16BE(0) % 700);
+
 export default defineConfig({
   testDir: 'tests/e2e',
   outputDir: 'test-results',
@@ -15,7 +21,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: `http://localhost:${port}`,
     viewport: { width: 1280, height: 720 },
     headless: !headed,
     channel: 'chromium',
@@ -24,9 +30,9 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'pnpm exec vite preview --port 4173 --strictPort',
-    url: 'http://localhost:4173',
-    reuseExistingServer: !process.env.CI,
+    command: `pnpm exec vite preview --port ${port} --strictPort`,
+    url: `http://localhost:${port}`,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });
