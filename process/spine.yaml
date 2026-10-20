@@ -1,6 +1,6 @@
 # 開発スパイン: スライスの台帳。status は統合時に親セッションが更新する。
 # 各スライスの進捗・計測値・判断待ちは process/slices/<id>.md に書く。
-# status: todo | red | green | reviewed | integrated | blocked
+# status: todo | red | green | reviewed | integrated | blocked | closed（調べ終えて、作らないと決めた）
 # requirements は docs/design-snapshot.md の節名（「大見出し > 小見出し」）。
 # paths はそのスライスが編集してよい範囲。範囲外の変更は記録ファイルに提案として書く。
 version: 1
@@ -188,24 +188,34 @@ slices:
   # M0 の残りを待つ間に並べて進めるスライス（2026-10-21 追加）
   - id: S-08
     title: GPU のフレーム時間を正しく測る（最初のパスの開始から最後のパスの終わりまで）
-    status: todo
+    status: integrated
+    branch: slice/S-08-gpu-span
+    accepted: 発案者がレビュー2巡の上限で受け入れ（2026-10-21）。止めっぱなしの件は S-11
     depends: [S-05]
     requirements:
       - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
     paths:
       - src/core/perf/**
+      - src/core/renderer.ts
+      - src/core/params.ts
+      - src/core/params.test.ts
+      - src/core/scene.ts（約束のコメントだけ）
       - src/main.ts
+      - scripts/bench-*.mjs
       - tests/e2e/S-08-*.spec.ts
+      - tests/e2e/S-05-perf.spec.ts（dynresResponse=0 の明示だけ）
       - process/slices/S-08.md
       - src/core/CHANGELOG.md
     acceptance:
       - WebGPU で、フレームの最初と最後に自前のタイムスタンプを置き、その差を GPU のフレーム時間として取れる。three の描画パスの合計とは別に持つ
-      - 静かな状態で、垂直同期なしのフレーム時間と比べて妥当（同程度以下）であることを、Apple の機械で確かめる
+      - 静かな状態で、GPU が律速する負荷のシーンでは、垂直同期なしのフレーム時間と同程度以下であることを Apple の機械で確かめる（毎秒数千フレームのほぼ空のシーンでは前後のフレームが重なって長く出る。既知の例外）
       - 妥当なら Apple でも動的解像度を GPU 時間で動かせるようにする。妥当でなければ理由を記録して止める
 
   - id: S-09
     title: 音の基礎 — 音階、ガラスの音（合成）、ビードロの「ぽぺん」、立体音響と残響
-    status: todo
+    status: integrated
+    branch: slice/S-09-audio
+    accepted: 発案者がレビュー2巡の上限で受け入れ（2026-10-21）。耳での確認は発案者に依頼中
     depends: [S-00]
     parallel: true
     requirements:
@@ -216,6 +226,7 @@ slices:
       - UI/UX設計 > 画面ごとの設計（読み込み: 操作があるまで音を鳴らせない）
     paths:
       - src/core/audio/**
+      - src/audio/**
       - src/scenes/audio-lab.scene.ts
       - tests/e2e/S-09-*.spec.ts
       - process/slices/S-09.md
@@ -230,7 +241,9 @@ slices:
 
   - id: S-10
     title: 透過の背景画像の解像度を品質プリセットに従わせる
-    status: todo
+    status: closed
+    branch: slice/S-10-record（参考の実装は slice/S-10-transmission-scale、main には入れない）
+    closed: r186 では背景画像を縮小して写せない。読み出し側の近似は効果約2%で見た目の代償が大きいので採らない（process/slices/S-10.md）
     depends: [S-01, S-05]
     requirements:
       - 技術設計 > 品質プリセット（透過の背景画像 1/4・1/2・等倍）
@@ -242,4 +255,25 @@ slices:
     acceptance:
       - r186 の透過の背景画像の解像度を下げる方法を調べ、品質プリセットの transmissionScale に従わせる（できなければ代わりの近似と理由を記録）
       - 負荷シーンの実機ベンチ（QUIET=1）で品質ごとの差を測り、COST_FACTOR を較正し直す
+
+  - id: S-11
+    title: 動的解像度の止めっぱなしの解消と、センサーの警告の数え上げ
+    status: todo
+    depends: [S-08]
+    requirements:
+      - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
+    paths:
+      - src/core/perf/**
+      - src/main.ts
+      - src/core/params.ts
+      - src/core/params.test.ts
+      - tests/e2e/scenes.spec.ts
+      - tests/e2e/S-11-*.spec.ts
+      - scripts/bench-*.mjs
+      - process/slices/S-11.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - 手応えの検査で止めた後も、GPU 時間が止めた時点の水準から3割以上上がったら（新しい重さ）、検査を数え直して動的解像度を再開する。再開の回数には上限を置き、行き来を防ぐ。止まった・再開したの理由を probe に出す。単体テスト（途中から重くなる、垂直同期の下で軽い負荷が揺れる、一定の重さ）
+      - 静かな実機の閉ループ（scripts/bench-dynres.mjs、垂直同期あり、GROW_AT で途中から重くする）で、軽い負荷で止まった後に重くなったら再開して下げることを確かめる
+      - ブラウザセンサー（scenes.spec.ts）が console の warning も数え、既知の警告だけを許す一覧で管理する。WebGL2 の three r186 のタイムスタンプのプールの警告（beginQuery: a query is already active）がまだ出るなら main.ts 側で直し、S-06 のシーン側の回避策を消せるようにする
 
