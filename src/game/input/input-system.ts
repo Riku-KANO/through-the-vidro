@@ -42,7 +42,8 @@ export const DEFAULT_INPUT_SETTINGS: Readonly<InputSettings> = Object.freeze({
 });
 
 export type InputEvent =
-  | { type: 'peekStart' | 'peekEnd' | 'interact' | 'ring' | 'pause'; device: Device }
+  /** peekDenied: a peek was asked for while canPeek() is false (S-06: the placed orb trembles). */
+  | { type: 'peekStart' | 'peekEnd' | 'peekDenied' | 'interact' | 'ring' | 'pause'; device: Device }
   | { type: 'orbStep'; delta: -1 | 1; device: Device }
   | { type: 'orbSelect'; index: 0 | 1 | 2; device: Device };
 
@@ -350,6 +351,10 @@ export class InputSystem {
   }
 
   private setPeek(active: boolean, device: Device): void {
+    if (active && !this.peekActive && !this.canPeek()) {
+      this.emit({ type: 'peekDenied', device });
+      return;
+    }
     if (active && !this.canPeek()) return;
     if (active === this.peekActive) return;
     this.peekActive = active;

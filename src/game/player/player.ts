@@ -69,6 +69,12 @@ export interface PlayerOptions {
    * colliders outside the materialised spheres. Sensors are always ignored.
    */
   filter?: (collider: RAPIER.Collider) => boolean;
+  /**
+   * Extra say over where ground counts as ground, per point (S-06: back-layer footing only inside a
+   * materialized sphere, the invisible fence at its boundary). Refused ground reads as no ground: the
+   * body eases to a stop before it like at any edge and never steps onto it.
+   */
+  allowGround?: (x: number, y: number, z: number, collider: RAPIER.Collider) => boolean;
 }
 
 /** The subset of a three.js PerspectiveCamera the player drives (keeps this module free of three). */
@@ -106,6 +112,7 @@ export class PlayerController {
   private readonly collider: RAPIER.Collider;
   private readonly kcc: RAPIER.KinematicCharacterController;
   private readonly filter?: (collider: RAPIER.Collider) => boolean;
+  private readonly allowGround?: PlayerOptions['allowGround'];
   private vel: PlanarVelocity = { x: 0, z: 0 };
   private vy = 0;
   /** What the body actually did last step (after collisions), for probes and the walking bob. */
@@ -125,6 +132,7 @@ export class PlayerController {
     this.pitch = clampPitch(opts.pitch ?? 0);
     this.settingsValue = sanitize({ ...DEFAULT_PLAYER_SETTINGS, ...opts.settings });
     this.filter = opts.filter;
+    this.allowGround = opts.allowGround;
 
     this.collider = world.createCollider(
       RAPIER.ColliderDesc.capsule(HALF_HEIGHT - BODY_RADIUS, BODY_RADIUS).setTranslation(
@@ -167,8 +175,10 @@ export class PlayerController {
       );
       if (hit) {
         // Starting inside something (a wall) reads as ground at the start height.
-        if (hit.timeOfImpact <= 1e-6) return { y: fromY, ny: 1, fat: false };
-        return { y: fromY - hit.timeOfImpact, ny: Math.abs(hit.normal.y), fat: false };
+        const y = hit.timeOfImpact <= 1e-6 ? fromY : fromY - hit.timeOfImpact;
+        // Ground the owner refuses here (S-06: back footing outside the spheres) is no ground at all.
+        if (this.allowGround && !this.allowGround(x, y, z, hit.collider)) return null;
+        return { y, ny: hit.timeOfImpact <= 1e-6 ? 1 : Math.abs(hit.normal.y), fat: false };
       }
       if (!fat) return null;
       const cast = w.castShape(
@@ -186,12 +196,10 @@ export class PlayerController {
         this.filter,
       );
       if (!cast) return null;
-      if (cast.time_of_impact <= 1e-6) return { y: fromY, ny: 1, fat: true };
-      return {
-        y: fromY - cast.time_of_impact - GROUND_PROBE_RADIUS,
-        ny: Math.abs(cast.normal1.y),
-        fat: true,
-      };
+      const inside = cast.time_of_impact <= 1e-6;
+      const y = inside ? fromY : fromY - cast.time_of_impact - GROUND_PROBE_RADIUS;
+      if (this.allowGround && !this.allowGround(x, y, z, cast.collider)) return null;
+      return { y, ny: inside ? 1 : Math.abs(cast.normal1.y), fat: true };
     };
   }
 
