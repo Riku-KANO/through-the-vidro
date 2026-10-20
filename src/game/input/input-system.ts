@@ -53,9 +53,14 @@ export interface InputSystemOptions {
 
 /** Mouse deltas larger than this in one event are browser glitches (seen right after locking). */
 const MAX_MOUSE_DELTA = 400;
-/** Wheel: pixels of scroll per orb step, and the shortest time between steps (trackpads fire many events). */
-const WHEEL_STEP = 50;
-const WHEEL_COOLDOWN_MS = 120;
+/**
+ * Wheel: scroll needed for an orb step (a Firefox line notch is 3 × 16 px), and the pause that ends a
+ * scroll gesture. One gesture steps at most once, so a trackpad fling with inertia is one step, not eight.
+ */
+const WHEEL_STEP = 40;
+const WHEEL_GESTURE_GAP_MS = 150;
+/** After the lock drops (Esc), an Esc key event that some browsers also deliver is the same press. */
+const ESC_ECHO_MS = 300;
 
 export class InputSystem {
   bindings: Bindings;
@@ -81,7 +86,10 @@ export class InputSystem {
   private exitingLock = false;
   private drag: { x: number; y: number } | null = null;
   private wheelAccum = 0;
-  private lastWheelStep = 0;
+  private wheelStepped = false;
+  private lastWheelEvent = Number.NEGATIVE_INFINITY;
+  private lockLostAt = Number.NEGATIVE_INFINITY;
+  private suspendedValue = false;
   private readonly listeners = new Set<(e: InputEvent) => void>();
   private readonly cleanup: (() => void)[] = [];
 
@@ -111,6 +119,23 @@ export class InputSystem {
 
   get locked(): boolean {
     return this.lockedValue;
+  }
+
+  /**
+   * While true, input is held back (操作とカメラ > カメラ: 演出でカメラを動かすときは入力を預かる; also a
+   * settings screen that captures keys): no movement, no look, no events. Suspending ends a peek.
+   */
+  get suspended(): boolean {
+    return this.suspendedValue;
+  }
+
+  set suspended(value: boolean) {
+    if (value && !this.suspendedValue) {
+      this.releaseAll();
+      this.cancelPeek();
+      this.look = { yaw: 0, pitch: 0 };
+    }
+    this.suspendedValue = value;
   }
 
   on(listener: (e: InputEvent) => void): () => void {
@@ -160,8 +185,9 @@ export class InputSystem {
     const x = keyMove.x + padMove.x;
     const y = keyMove.y + padMove.y;
     const len = Math.hypot(x, y);
-    this.move = len > 1 ? { x: x / len, y: y / len } : { x, y };
-    this.sprint = isHeld(this.bindings, 'keyboardMouse', 'sprint', this.keys) || this.padSprint;
+    this.move = this.suspendedValue ? { x: 0, y: 0 } : len > 1 ? { x: x / len, y: y / len } : { x, y };
+    this.sprint =
+      !this.suspendedValue && (isHeld(this.bindings, 'keyboardMouse', 'sprint', this.keys) || this.padSprint);
     if (this.peekActive && !this.canPeek()) this.setPeek(false, this.lastDevice);
   }
 
@@ -188,6 +214,8 @@ export class InputSystem {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
+    // macOS sends no keyup for keys released while Cmd is down: let go of everything instead.
+    if (e.key === 'Meta') this.releaseAll();
     if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
     if (this.keys.has(e.code) || e.repeat) return;
     this.keys.add(e.code);
@@ -195,11 +223,13 @@ export class InputSystem {
   }
 
   private onKeyUp(code: string): void {
+    if (code === 'MetaLeft' || code === 'MetaRight') this.releaseAll();
     if (!this.keys.delete(code)) return;
     this.release('keyboardMouse', code);
   }
 
   private onMouseDown(e: MouseEvent): void {
+    if (this.suspendedValue) return;
     if (e.button === 0 && !this.lockedValue) {
       // The click that takes the mouse does nothing else; until the lock arrives (or if it never does)
       // dragging turns the view.
@@ -231,6 +261,7 @@ export class InputSystem {
     } else {
       return;
     }
+    if (this.suspendedValue) return;
     if (Math.abs(dx) > MAX_MOUSE_DELTA || Math.abs(dy) > MAX_MOUSE_DELTA) return;
     const d = mouseLookDelta(dx, dy, this.settings.mouseSensitivity, this.settings.invertY);
     this.look.yaw += d.yaw;
@@ -239,14 +270,18 @@ export class InputSystem {
   }
 
   private onWheel(e: WheelEvent): void {
+    const now = performance.now();
+    if (now - this.lastWheelEvent > WHEEL_GESTURE_GAP_MS) {
+      this.wheelAccum = 0;
+      this.wheelStepped = false;
+    }
+    this.lastWheelEvent = now;
+    if (this.wheelStepped) return;
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
     this.wheelAccum += e.deltaY * scale;
-    const now = performance.now();
-    if (Math.abs(this.wheelAccum) < WHEEL_STEP || now - this.lastWheelStep < WHEEL_COOLDOWN_MS) return;
-    const code = this.wheelAccum < 0 ? 'WheelUp' : 'WheelDown';
-    this.wheelAccum = 0;
-    this.lastWheelStep = now;
-    this.press('keyboardMouse', code);
+    if (Math.abs(this.wheelAccum) < WHEEL_STEP) return;
+    this.wheelStepped = true;
+    this.press('keyboardMouse', this.wheelAccum < 0 ? 'WheelUp' : 'WheelDown');
   }
 
   private onLockChange(): void {
@@ -254,13 +289,17 @@ export class InputSystem {
     const lost = this.lockedValue && !locked;
     this.lockedValue = locked;
     if (locked) this.drag = null;
-    // Esc while locked never reaches the page as a key: the browser just drops the lock. ポーズ = Esc.
-    if (lost && !this.exitingLock) this.emit({ type: 'pause', device: 'keyboardMouse' });
+    // Esc while locked usually never reaches the page as a key: the browser just drops the lock. ポーズ = Esc.
+    if (lost && !this.exitingLock && !this.suspendedValue) {
+      this.lockLostAt = performance.now();
+      this.emit({ type: 'pause', device: 'keyboardMouse' });
+    }
     this.exitingLock = false;
   }
 
   /** Runs the actions bound to a pressed input. Returns whether anything was bound to it. */
   private press(device: Device, code: string): boolean {
+    if (this.suspendedValue) return false;
     this.lastDevice = device;
     const actions = actionsForPress(this.bindings, device, code, {
       peeking: this.peekActive,
@@ -279,6 +318,7 @@ export class InputSystem {
           // Browsers normally swallow Esc while locked and drop the lock themselves (see onLockChange);
           // when the key does reach the page, release the mouse here so Esc always frees it.
           this.exitLock();
+          if (device === 'keyboardMouse' && performance.now() - this.lockLostAt < ESC_ECHO_MS) break;
           this.emit({ type: action, device });
           break;
         case 'orbPrev':
@@ -349,8 +389,10 @@ export class InputSystem {
     const move = stick(this.bindings.sticks.move);
     const look = stick(this.bindings.sticks.look);
     const d = stickLookDelta(look.x, look.y, dt, this.settings.padLookSpeed, this.settings.invertY);
-    this.look.yaw += d.yaw;
-    this.look.pitch += d.pitch;
+    if (!this.suspendedValue) {
+      this.look.yaw += d.yaw;
+      this.look.pitch += d.pitch;
+    }
     this.padSprint = nextSprintLatch(this.padSprint, false, Math.hypot(move.x, move.y));
     if (move.x !== 0 || move.y !== 0 || d.yaw !== 0 || d.pitch !== 0) this.lastDevice = 'gamepad';
     // The Gamepad API has y down; movement uses y forward.

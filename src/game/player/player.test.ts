@@ -4,6 +4,7 @@ import { EYE_HEIGHT, PEEK_MODIFIER, SPRINT_SPEED, WALK_SPEED } from './constants
 import { LEDGE_DEFAULTS } from './ledge';
 import { createWorld, initPhysics } from './physics';
 import { PlayerController, type PlayerIntent } from './player';
+import { addFieldColliders, HIGH, LOOKOUT, SPAWNS, walkLabParts } from './walk-lab-field';
 
 /**
  * Behaviour of the character controller in a real Rapier world (Node, no browser).
@@ -179,6 +180,131 @@ describe('round walls (空間の可読性 4: 丸い壁に沿って滑らかに�
     expect(s.every((p) => Math.hypot(p.x, p.z) < 4)).toBe(true);
     // No snagging on the mesh facets while there is still a sideways push.
     expect(Math.min(...s.slice(30, 180).map((p) => p.speed))).toBeGreaterThan(0.35);
+  });
+});
+
+describe('falling and footing (落下死はない、でも宙には浮かない)', () => {
+  it('a body put in the air falls, lands and walks on', () => {
+    const world = floorWorld();
+    const player = new PlayerController(world, { feet: { x: 0, y: 0, z: 0 } });
+    run(player, world, still, 0.5);
+    player.teleport({ x: 2, y: 1, z: 8 });
+    run(player, world, still, 1.5);
+    expect(player.grounded).toBe(true);
+    expect(player.feet.y).toBeCloseTo(0, 1);
+    run(player, world, forward, 1.5);
+    expect(8 - player.feet.z).toBeGreaterThan(1.2);
+  });
+
+  it('falls when the ground it stands on goes away (S-02: a back-layer segment switched off)', () => {
+    const world = floorWorld();
+    const block = world.createCollider(R.ColliderDesc.cuboid(2, 0.6, 2).setTranslation(0, 0.6, 0));
+    const player = new PlayerController(world, { feet: { x: 0, y: 1.2, z: 0 } });
+    run(player, world, still, 0.5);
+    expect(player.feet.y).toBeCloseTo(1.2, 1);
+    block.setEnabled(false);
+    run(player, world, forward, 1.5);
+    expect(player.grounded).toBe(true);
+    expect(player.feet.y).toBeCloseTo(0, 1);
+    expect(-player.feet.z).toBeGreaterThan(0.5);
+  });
+
+  it('never sinks into the floor while walking across it', () => {
+    for (const dx of [-0.05, -0.01, -2e-5, 0, 2e-5, 0.01, 0.05]) {
+      const world = floorWorld();
+      const player = new PlayerController(world, { feet: { x: dx, y: 0.03, z: 2 } });
+      const s = run(player, world, forward, 3);
+      expect(Math.min(...s.map((p) => p.y)), `dx=${dx}`).toBeGreaterThan(-0.01);
+    }
+  });
+
+  it('a step that can be walked down can be walked back up (no pits)', () => {
+    for (const h of [0.2, 0.3, 0.33, 0.4, 0.6]) {
+      const world = floorWorld();
+      world.createCollider(R.ColliderDesc.cuboid(4, h / 2, 1).setTranslation(0, h / 2, 0));
+      const player = new PlayerController(world, { feet: { x: 0, y: h, z: 0 }, yaw: Math.PI });
+      run(player, world, forward, 2.5);
+      const descended = player.feet.y < h - 0.1;
+      player.teleport(player.feet, 0);
+      run(player, world, forward, 3);
+      if (descended) expect(player.feet.y, `climb back ${h} m`).toBeCloseTo(h, 1);
+      if (h <= 0.3) expect(descended, `walk down ${h} m`).toBe(true);
+      if (h >= 0.4) expect(descended, `stop at ${h} m`).toBe(false);
+    }
+  });
+});
+
+describe('walk-lab field (the same shapes the scene draws)', () => {
+  function lab() {
+    const world = createWorld();
+    addFieldColliders(R, world, walkLabParts());
+    world.step();
+    return world;
+  }
+  const spawn = (world: RAPIER.World, name: string) => {
+    const s = SPAWNS[name];
+    if (!s) throw new Error(name);
+    return new PlayerController(world, { feet: s.feet, yaw: s.yaw });
+  };
+  /** Lowest actual speed while walking, after accelerating and before reaching `done`. */
+  const slowest = (s: ReturnType<typeof run>, done: (p: ReturnType<typeof run>[number]) => boolean) => {
+    const end = s.findIndex(done);
+    return Math.min(...s.slice(30, end < 0 ? undefined : end).map((p) => p.speed));
+  };
+
+  it('crosses the bridge onto the round lookout', () => {
+    const world = lab();
+    const player = spawn(world, 'bridge');
+    const s = run(player, world, forward, 6);
+    expect(s.every((p) => p.grounded && Math.abs(p.y - HIGH.top) < 0.03)).toBe(true);
+    expect(player.feet.z).toBeLessThan(LOOKOUT.z - 0.5);
+    expect(slowest(s, (p) => p.z < LOOKOUT.z)).toBeGreaterThan(1.2);
+  });
+
+  it('climbs the stairs and walks back down them without stopping at the seams', () => {
+    const world = lab();
+    const player = spawn(world, 'steps');
+    run(player, world, forward, 5);
+    expect(player.feet.y).toBeCloseTo(HIGH.top, 1);
+    player.teleport({ x: -7, y: HIGH.top, z: -5 }, Math.PI);
+    const s = run(player, world, forward, 5);
+    expect(player.feet.y).toBeCloseTo(0, 1);
+    expect(slowest(s, (p) => p.y < 0.01)).toBeGreaterThan(1.0);
+  });
+
+  it('walks up the ramp and back down it', () => {
+    const world = lab();
+    const player = spawn(world, 'slope');
+    run(player, world, forward, 6);
+    expect(player.feet.y).toBeCloseTo(HIGH.top, 1);
+    player.teleport({ x: -5, y: HIGH.top, z: -6 }, -Math.PI / 2);
+    const s = run(player, world, forward, 5);
+    expect(player.feet.y).toBeCloseTo(0, 1);
+    expect(slowest(s, (p) => p.y < 0.01)).toBeGreaterThan(1.0);
+  });
+
+  it('flows around the round pillar and along the curved wall as drawn (triangle meshes)', () => {
+    const world = lab();
+    const pillar = spawn(world, 'pillar');
+    const s = run(pillar, world, forward, 4.5);
+    expect(1 - pillar.feet.z).toBeGreaterThan(4.5);
+    expect(Math.min(...s.slice(30, 180).map((p) => p.speed))).toBeGreaterThan(0.5);
+    const curve = spawn(world, 'curve');
+    const c = run(curve, world, forward, 4);
+    const travelled = c.reduce(
+      (acc, p, i) => (i === 0 ? 0 : acc + Math.hypot(p.x - (c[i - 1]?.x ?? 0), p.z - (c[i - 1]?.z ?? 0))),
+      0,
+    );
+    expect(travelled).toBeGreaterThan(3.5);
+  });
+
+  it('slides along the platform edge and stops in its corner without falling', () => {
+    const world = lab();
+    const player = new PlayerController(world, { feet: { x: -9.2, y: HIGH.top, z: -4 } });
+    const s = run(player, world, { ...forward, move: { x: -Math.SQRT1_2, y: Math.SQRT1_2 } }, 5);
+    expect(s.every((p) => p.grounded && Math.abs(p.y - HIGH.top) < 0.03 && p.x > HIGH.minX)).toBe(true);
+    expect(player.feet.z).toBeLessThan(-7);
+    expect(player.feet.z).toBeGreaterThan(HIGH.minZ);
   });
 });
 

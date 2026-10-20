@@ -14,6 +14,8 @@ interface Vec3 {
 }
 interface WalkProbe {
   ready: boolean;
+  /** Scene time in seconds: the clock the movement runs on (it lags wall time when frames stall). */
+  time: number;
   spawn: string;
   position: Vec3;
   velocity: Vec3;
@@ -47,14 +49,36 @@ async function boot(page: Page, spawn: string, extra = ''): Promise<void> {
 
 const probe = (page: Page) => page.evaluate(() => window.__vidro.sceneProbe as unknown as WalkProbe);
 
-async function sample(page: Page, ms: number, every = 50): Promise<WalkProbe[]> {
+/** Samples the probe until `done` holds (or the time limit passes); returns every sample. */
+async function sampleUntil(
+  page: Page,
+  done: (p: WalkProbe) => boolean,
+  limitMs: number,
+): Promise<WalkProbe[]> {
   const out: WalkProbe[] = [];
-  const end = Date.now() + ms;
+  const end = Date.now() + limitMs;
   while (Date.now() < end) {
-    out.push(await probe(page));
-    await page.waitForTimeout(every);
+    const p = await probe(page);
+    out.push(p);
+    if (done(p)) break;
+    await page.waitForTimeout(40);
   }
   return out;
+}
+
+/** Waits until the body has been at rest for 0.3 s of scene time. */
+async function settle(page: Page): Promise<WalkProbe> {
+  let stillSince: number | null = null;
+  const path = await sampleUntil(
+    page,
+    (p) => {
+      if (p.speed > 0.01) stillSince = null;
+      else stillSince ??= p.time;
+      return stillSince !== null && p.time - stillSince > 0.3;
+    },
+    5000,
+  );
+  return path[path.length - 1] ?? probe(page);
 }
 
 const flat = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.z - b.z);
@@ -66,17 +90,21 @@ test.describe('S-03 walk-lab', () => {
     expect(p0.grounded).toBe(true);
     expect(p0.eyeHeight).toBeCloseTo(1.6, 1);
     await page.keyboard.down('KeyW');
+    const down = await probe(page);
     await page.waitForTimeout(1500);
     const mid = await probe(page);
     await page.waitForTimeout(500);
+    const up = await probe(page);
     await page.keyboard.up('KeyW');
-    await page.waitForTimeout(800);
-    const p1 = await probe(page);
+    const p1 = await settle(page);
     expect(mid.speed).toBeGreaterThan(1.3);
     expect(mid.speed).toBeLessThan(1.5);
-    expect(flat(p0.position, p1.position)).toBeGreaterThan(2.45);
-    expect(flat(p0.position, p1.position)).toBeLessThan(3.15);
-    expect(p1.speed).toBeLessThan(0.05);
+    // Judged on the scene's own clock: 1.4 m/s for as long as W was held, give or take the short inertia.
+    const held = up.time - down.time;
+    expect(held, 'frames stalled: W was held much less than 2 s of scene time').toBeGreaterThan(1.6);
+    const distance = flat(p0.position, p1.position);
+    expect(distance).toBeGreaterThan(1.4 * held - 0.2);
+    expect(distance).toBeLessThan(1.4 * held + 0.3);
     expect(Math.abs(p1.position.y - p0.position.y)).toBeLessThan(0.02);
   });
 
@@ -99,7 +127,8 @@ test.describe('S-03 walk-lab', () => {
     expect(ledge).not.toBeNull();
     await page.screenshot({ path: join(root, 'artifacts/screens/walk-lab-edge-approach.png') });
     await page.keyboard.down('KeyW');
-    const path = await sample(page, 5000);
+    // Keep pushing for 4 s of scene time.
+    const path = await sampleUntil(page, (p) => p.time - p0.time > 4, 15_000);
     await page.keyboard.up('KeyW');
     await page.screenshot({ path: join(root, 'artifacts/screens/walk-lab-edge.png') });
     for (const p of path) {
@@ -118,10 +147,9 @@ test.describe('S-03 walk-lab', () => {
     await boot(page, 'steps');
     const p0 = await probe(page);
     await page.keyboard.down('KeyW');
-    await page.waitForTimeout(4500);
+    await sampleUntil(page, (p) => p.position.y - p0.position.y > 1.15 && p.position.z < -3.5, 15_000);
     await page.keyboard.up('KeyW');
-    await page.waitForTimeout(400);
-    const p1 = await probe(page);
+    const p1 = await settle(page);
     expect(p1.grounded).toBe(true);
     expect(p1.position.y - p0.position.y).toBeGreaterThan(1.15);
     expect(p1.position.y - p0.position.y).toBeLessThan(1.25);
@@ -132,9 +160,9 @@ test.describe('S-03 walk-lab', () => {
     await boot(page, 'slope');
     const p0 = await probe(page);
     await page.keyboard.down('KeyW');
-    await page.waitForTimeout(5000);
+    await sampleUntil(page, (p) => p.position.y - p0.position.y > 1.15 && p.position.x < -4.5, 15_000);
     await page.keyboard.up('KeyW');
-    const p1 = await probe(page);
+    const p1 = await settle(page);
     expect(p1.grounded).toBe(true);
     expect(p1.position.y - p0.position.y).toBeGreaterThan(1.15);
   });
@@ -143,12 +171,24 @@ test.describe('S-03 walk-lab', () => {
     await boot(page, 'pillar');
     const p0 = await probe(page);
     await page.keyboard.down('KeyW');
-    const path = await sample(page, 4500);
+    const path = await sampleUntil(page, (p) => p0.position.z - p.position.z > 4.5, 15_000);
     await page.keyboard.up('KeyW');
-    const moving = path.slice(10, 60);
-    expect(Math.min(...moving.map((p) => p.speed))).toBeGreaterThan(0.3);
+    // From 0.5 s of scene time on (after speeding up) until past the pillar, the body never stalls.
+    const moving = path.filter((p) => p.time - p0.time > 0.5);
+    expect(moving.length).toBeGreaterThan(10);
+    expect(Math.min(...moving.map((p) => p.speed))).toBeGreaterThan(0.5);
     const end = path[path.length - 1];
     expect(p0.position.z - (end?.position.z ?? 0)).toBeGreaterThan(4.5);
+  });
+
+  test('橋を渡って見晴らし台に立てる', async ({ page }) => {
+    await boot(page, 'bridge');
+    const p0 = await probe(page);
+    await page.keyboard.down('KeyW');
+    const path = await sampleUntil(page, (p) => p.position.z < -13.8, 15_000);
+    await page.keyboard.up('KeyW');
+    expect(path.every((p) => p.grounded && Math.abs(p.position.y - p0.position.y) < 0.03)).toBe(true);
+    expect(path[path.length - 1]?.position.z).toBeLessThan(-13.8);
   });
 
   test('視点: クリックで Pointer Lock、マウスで向きが変わり、Esc で解除', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { SNAP_TO_GROUND, SPRINT_SPEED, STEP_HEIGHT } from './constants';
+import { SPRINT_SPEED, STEP_HEIGHT } from './constants';
 import type { PlanarVelocity } from './motion';
 
 /**
@@ -11,8 +11,10 @@ import type { PlanarVelocity } from './motion';
  */
 
 /**
- * Casts straight down from (x, fromY, z) for at most `depth`. Returns the height of the first surface,
+ * Looks straight down from (x, fromY, z) for at most `depth`. Returns the height of the first surface,
  * `fromY` itself when the start point is inside something solid (a wall), or null when nothing is hit.
+ * A probe may be fat (a small sphere cast): it then also finds ground up to `probeRadius` to the side,
+ * which bridges seams between pieces of floor; findLedges corrects the edge distance for it.
  */
 export type GroundProbe = (x: number, z: number, fromY: number, depth: number) => number | null;
 
@@ -23,6 +25,8 @@ export interface LedgeOptions {
   margin: number;
   /** A drop between neighbouring samples larger than this is an edge (smaller ones are stepped down). */
   stepDown: number;
+  /** Sideways reach of the probe (0 for a ray). */
+  probeRadius: number;
   /** Samples start this high above the last ground, so climbable steps read as ground and not as walls. */
   probeUp: number;
   directions: number;
@@ -37,7 +41,9 @@ export interface LedgeOptions {
 export const LEDGE_DEFAULTS: Readonly<LedgeOptions> = Object.freeze({
   senseRadius: 0.6,
   margin: 0.3,
-  stepDown: SNAP_TO_GROUND,
+  // Only drops that can also be climbed back up count as steps (no pits you can walk into but not out of).
+  stepDown: STEP_HEIGHT + 0.02,
+  probeRadius: 0,
   probeUp: STEP_HEIGHT + 0.1,
   directions: 16,
   marchSteps: 4,
@@ -60,7 +66,9 @@ export function findLedges(
   probe: GroundProbe,
   opts: Readonly<LedgeOptions> = LEDGE_DEFAULTS,
 ): Ledge[] {
-  const { senseRadius, stepDown, probeUp, directions, marchSteps, refineSteps } = opts;
+  const { senseRadius, stepDown, probeUp, directions, marchSteps, refineSteps, probeRadius } = opts;
+  // A fat probe still finds ground probeRadius past the real edge, so look that much further.
+  const reach = senseRadius + probeRadius;
   const depth = probeUp + stepDown;
   // Already over the void (airborne past an edge): nothing to hold on to.
   if (probe(x, z, groundY + probeUp, depth) === null) return [];
@@ -74,7 +82,7 @@ export function findLedges(
     let prevH = groundY;
     let edge: number | null = null;
     for (let j = 1; j <= marchSteps; j++) {
-      const d = (senseRadius * j) / marchSteps;
+      const d = (reach * j) / marchSteps;
       const from = prevH + probeUp;
       const h = probe(x + dx * d, z + dz * d, from, depth);
       if (h !== null && h >= from - 1e-6) break; // a wall: the character controller handles it
@@ -90,7 +98,7 @@ export function findLedges(
         if (probe(x + dx * mid, z + dz * mid, from, depth) === null) hi = mid;
         else lo = mid;
       }
-      edge = (lo + hi) / 2;
+      edge = Math.max(0, (lo + hi) / 2 - probeRadius);
       break;
     }
     edgeAt.push(edge);

@@ -5,6 +5,7 @@ import {
   EYE_HEIGHT,
   FOV_DEFAULT,
   GRAVITY,
+  GROUND_PROBE_RADIUS,
   MAX_FALL_SPEED,
   MAX_SLOPE_DEG,
   SKIN,
@@ -81,6 +82,9 @@ export interface CameraLike {
 const MAX_SUBSTEP = 1 / 60;
 const HALF_HEIGHT = BODY_HEIGHT / 2;
 const FILTER = RAPIER.QueryFilterFlags.EXCLUDE_SENSORS;
+const LEDGES = Object.freeze({ ...LEDGE_DEFAULTS, probeRadius: GROUND_PROBE_RADIUS });
+/** How far the feet may dip below the probed ground before they are put back on it (inside the skin). */
+const SINK_TOLERANCE = 0.01;
 
 /**
  * First-person body on Rapier's kinematic character controller.
@@ -140,14 +144,26 @@ export class PlayerController {
     this.eyeBase = opts.feet.y + EYE_HEIGHT;
     this.groundY = opts.feet.y;
 
+    // A ray first, a small sphere where the ray finds nothing. Rays slip through the seam between two floor
+    // pieces and, now and then, past the start of a rounded edge; sphere casts miss rarely too, but never
+    // at the same spots (measured on round cuboids). The sphere's reach is corrected for in findLedges.
     const ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
+    const ball = new RAPIER.Ball(GROUND_PROBE_RADIUS);
+    const rotation = { x: 0, y: 0, z: 0, w: 1 };
     this.probe = (x, z, fromY, depth) => {
       ray.origin.x = x;
       ray.origin.y = fromY;
       ray.origin.z = z;
-      const hit = this.world.castRay(
-        ray,
-        depth,
+      const w = this.world;
+      const hit = w.castRay(ray, depth, true, FILTER, undefined, this.collider, undefined, this.filter);
+      if (hit) return fromY - hit.timeOfImpact; // toi 0 (inside something, a wall) gives fromY
+      const fat = w.castShape(
+        ray.origin,
+        rotation,
+        ray.dir,
+        ball,
+        0,
+        depth - GROUND_PROBE_RADIUS,
         true,
         FILTER,
         undefined,
@@ -155,7 +171,8 @@ export class PlayerController {
         undefined,
         this.filter,
       );
-      return hit ? fromY - hit.timeOfImpact : null;
+      if (!fat) return null;
+      return fat.time_of_impact <= 1e-6 ? fromY : fromY - fat.time_of_impact - GROUND_PROBE_RADIUS;
     };
   }
 
@@ -208,6 +225,9 @@ export class PlayerController {
     this.vel = { x: 0, z: 0 };
     this.vy = 0;
     this.moved = { x: 0, y: 0, z: 0 };
+    // Wherever it lands, the body has to find its footing again (it may have been put in the air).
+    this.groundedValue = false;
+    this.ledgesValue = [];
     this.groundY = feet.y;
     this.eyeBase = feet.y + EYE_HEIGHT;
   }
@@ -244,7 +264,7 @@ export class PlayerController {
 
   /** Ground height under a body centre (collider position), or null over a drop. */
   private groundUnder(centre: Vec3): number | null {
-    const { probeUp, stepDown } = LEDGE_DEFAULTS;
+    const { probeUp, stepDown } = LEDGES;
     return this.probe(centre.x, centre.z, centre.y - HALF_HEIGHT - SKIN + probeUp, probeUp + stepDown);
   }
 
@@ -254,19 +274,16 @@ export class PlayerController {
     let v = approachVelocity(this.vel, wishVelocity(intent.move, this.yaw, speed), h);
 
     const pos = this.collider.translation();
-    const feetY = pos.y - HALF_HEIGHT - SKIN;
-    const { probeUp, stepDown } = LEDGE_DEFAULTS;
+    // Ground under the body now; null means it is (or is about to be) in the air.
+    const groundHere = this.groundUnder(pos);
     this.ledgesValue = [];
-    if (this.groundedValue) {
-      const ground = this.probe(pos.x, pos.z, feetY + probeUp, probeUp + stepDown);
-      if (ground !== null) {
-        this.ledgesValue = findLedges(pos.x, pos.z, ground, this.probe);
-        v = limitVelocityAtLedges(v, this.ledgesValue);
-      }
+    if (this.groundedValue && groundHere !== null) {
+      this.ledgesValue = findLedges(pos.x, pos.z, groundHere, this.probe, LEDGES);
+      v = limitVelocityAtLedges(v, this.ledgesValue, LEDGES);
     }
 
-    // Grounded bodies stay on the ground through snap-to-ground; pushing them down with gravity every
-    // step only makes the feet saw up and down inside the controller's skin.
+    // No push down while grounded: snap-to-ground keeps the feet on the floor, and a push would sink the
+    // capsule into its skin far enough to catch on the foot of walls (where a pillar meets the floor).
     this.vy = this.groundedValue ? 0 : Math.max(-MAX_FALL_SPEED, this.vy - GRAVITY * h);
     const desired = { x: v.x * h, y: this.vy * h, z: v.z * h };
     this.kcc.computeColliderMovement(this.collider, desired, FILTER, undefined, this.filter);
@@ -302,15 +319,20 @@ export class PlayerController {
       kccGrounded ||= this.kcc.computedGrounded();
     }
 
-    // Safety net behind the soft edges: a grounded body never moves onto a spot with no ground under it
-    // (e.g. a wall slide that leads over an edge).
+    // Safety net behind the soft edges: a body standing on ground never moves onto a spot with no ground
+    // under it (e.g. a wall slide that leads over an edge). A body with no ground under it falls instead.
     let ground = this.groundUnder(next);
     let held = false;
-    if (this.groundedValue && ground === null) {
+    if (this.groundedValue && ground === null && groundHere !== null) {
       next = { x: pos.x, y: pos.y, z: pos.z };
       v = { x: 0, z: 0 };
       held = true;
       ground = this.groundUnder(next);
+    }
+    // Rapier's snap-to-ground now and then pushes a grounded body down into the floor (seen when crossing
+    // the middle of a box collider). The feet never go below the ground under the body.
+    if (this.groundedValue && ground !== null && next.y - HALF_HEIGHT - SKIN < ground - SINK_TOLERANCE) {
+      next = { x: next.x, y: ground + SKIN + HALF_HEIGHT, z: next.z };
     }
 
     this.collider.setTranslation(next);

@@ -47,6 +47,11 @@ export const STEP_HEIGHT = 0.3;
 export const STEP_MIN_WIDTH = 0.2;
 /** 調整値 — descending steps and slopes keep the feet on the ground within this distance. */
 export const SNAP_TO_GROUND = 0.35;
+/**
+ * 調整値 — the ground probe is a small sphere, so seams and cracks narrower than about twice this
+ * (between floor pieces, or S-02's back-layer footing segments) are not mistaken for edges.
+ */
+export const GROUND_PROBE_RADIUS = 0.1;
 /** 調整値 — walkable slope. Steeper ground acts as a wall. */
 export const MAX_SLOPE_DEG = 40;
 export const SLIDE_SLOPE_DEG = 50;
