@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
-import { splitFooting, type Vec3 } from '../../layers/footing';
+import { segmentsUnder, splitFooting, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
 import { glassEase } from '../../layers/tween';
 import type { DiveWorld } from '../../ui/home/dive-host';
@@ -259,6 +259,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
   };
   const candidates: TargetCandidate<TargetKind>[] = [];
   const dropFrom = new THREE.Vector3(...DROP);
+  const feetAt: [number, number, number] = [0, 0, 0];
   const dropTo = new THREE.Vector3();
 
   const interactTarget = (): InteractTarget | null =>
@@ -332,7 +333,10 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       }
     }
     field.setSpheres(fieldList);
-    footing.sync(fieldList.map((s) => ({ center: s.center, radius: s.radius })));
+    // colliders follow the session's spheres (the same array until the orbs change); the dev hold its own
+    footing.sync(
+      opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius })),
+    );
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;
@@ -384,30 +388,20 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     const main = session.spheres().find((s) => s.kind === 'main');
     probe.sphereRadius = main?.radius ?? 0;
     probe.bridgeColliders = footing.activeCount;
-    let onFooting = false;
-    for (const id of footing.activeIds) {
-      const s = footing.segments.find((x) => x.id === id);
-      if (
-        s &&
-        f.x >= s.min[0] &&
-        f.x < s.max[0] &&
-        f.z >= s.min[2] &&
-        f.z < s.max[2] &&
-        Math.abs(f.y - s.max[1]) < 0.25
-      )
-        onFooting = true;
-    }
-    probe.onBackFooting = onFooting;
+    // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now
+    feetAt[0] = f.x;
+    feetAt[1] = f.y;
+    feetAt[2] = f.z;
+    probe.onBackFooting = segmentsUnder(feetAt, footing.segments).some((seg) =>
+      footing.activeIds.includes(seg.id),
+    );
     probe.shaking = session.shake > 0;
     probe.target = target;
     probe.drop = session.dropState;
     probe.dropTaken = session.dropState === 'taken';
     probe.dropMaterialized = session.dropMaterialized();
     probe.backPassFrames = pipeline.backPassFrames;
-    const circle = orbScreenCircle(frame.center, HAND_ORB_RADIUS, camera.fov, camera.aspect);
-    probe.orbScreen.x = circle.x;
-    probe.orbScreen.y = circle.y;
-    probe.orbScreen.r = circle.r;
+    orbScreenCircle(frame.center, HAND_ORB_RADIUS, camera.fov, camera.aspect, probe.orbScreen);
     probe.orbScreen.visible = frame.visible;
     if (probe.autoplay && opts.autopilot) {
       probe.autoplay.step = opts.autopilot.current;
@@ -428,7 +422,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
       const away = Math.max(0, outPos.length() - 25);
       art.fogRange.near.value = 18 + away;
-      art.fogRange.far.value = 150 + away * 1.8;
+      art.fogRange.far.value = 150 + away * 3;
     },
     prepare() {},
     warm() {

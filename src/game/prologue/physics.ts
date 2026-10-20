@@ -148,6 +148,7 @@ export class BackFooting {
 
   /** Switches the colliders for the current spheres. Returns whether anything changed. */
   sync(spheres: readonly Sphere[]): boolean {
+    if (spheres === this.spheres) return false;
     this.spheres = spheres;
     const next = activeSegmentIds(this.segments, spheres);
     if (next.length === this.active.length && next.every((id, i) => id === this.active[i])) return false;

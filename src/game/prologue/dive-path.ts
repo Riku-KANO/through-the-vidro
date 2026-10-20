@@ -25,8 +25,8 @@ export function createDivePath(): DivePath {
   const positions = new THREE.CatmullRomCurve3(
     [
       // high above and behind the workshop, the town and its lighthouse across the valley
-      new THREE.Vector3(14, 62, 70),
-      new THREE.Vector3(5, 26, 28),
+      new THREE.Vector3(12, 32, 40),
+      new THREE.Vector3(4, 17, 18),
       // over the skylight, then just under it
       new THREE.Vector3(0.25, 5.6, 0.3),
       new THREE.Vector3(-0.75, 2.5, -0.35),
@@ -37,8 +37,8 @@ export function createDivePath(): DivePath {
   );
   const targets = new THREE.CatmullRomCurve3(
     [
-      new THREE.Vector3(2, 0, -45),
-      new THREE.Vector3(1, 0, -24),
+      new THREE.Vector3(2, 4, -68),
+      new THREE.Vector3(1, 0, -30),
       new THREE.Vector3(-0.3, 0.2, -6),
       new THREE.Vector3(-1.4, 0.8, -3.2),
       eye.clone().add(look),

@@ -12,6 +12,7 @@ import {
   min,
   mix,
   normalWorld,
+  positionView,
   positionWorld,
   positionWorldDirection,
   pow,
@@ -93,9 +94,11 @@ export interface FloatUniform {
 }
 
 /** 夜明け前の青: the sky (アートディレクション > 光と時間帯). */
-const ZENITH = new THREE.Color(0.035, 0.07, 0.17);
-const HORIZON_COOL = new THREE.Color(0.32, 0.4, 0.55);
-const HORIZON_WARM = new THREE.Color(0.95, 0.64, 0.44);
+const ZENITH = new THREE.Color(0.014, 0.03, 0.09);
+const HORIZON_COOL = new THREE.Color(0.21, 0.28, 0.41);
+const HORIZON_WARM = new THREE.Color(0.98, 0.6, 0.38);
+/** The sea of mist in the valley, close by; far away it pales into the horizon. */
+const MIST_DEEP = new THREE.Color(0.1, 0.14, 0.24);
 /** Where the sun is about to rise: low, ahead and to the right of the way. */
 const DAWN = new THREE.Vector3(0.78, 0, -0.62).normalize();
 /** 奥ほど霞ませる (空間の可読性と導線 8): the fog in the colour of the cool horizon. 仮 distances. */
@@ -105,6 +108,9 @@ const FOG_FAR = 150;
 const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
 /** The valley floor, far below the mist. */
 const VALLEY_Y = -32;
+/** The mist rises to just below the walkable tops. */
+const MIST_FROM = -1.5;
+const MIST_TO = 0.0;
 
 const c3 = (c: THREE.Color) => vec3(c.r, c.g, c.b);
 
@@ -130,13 +136,12 @@ function stoneMaterial(tile: number): THREE.MeshStandardNodeMaterial {
   const edge = min(min(cell.x, float(1).sub(cell.x)), min(cell.y, float(1).sub(cell.y)));
   const grout = smoothstep(0.0, 0.05, edge);
   const n = hash(floor(q).dot(vec2(1, 57)));
-  const stone = vec3(0.56, 0.58, 0.62).mul(n.mul(0.14).add(0.86));
-  const top = mix(vec3(0.27, 0.29, 0.33), stone, grout);
-  const side = vec3(0.17, 0.19, 0.24).mul(
-    hash(floor(positionWorld.y.mul(2.5)))
-      .mul(0.12)
-      .add(0.88),
-  );
+  const stone = vec3(0.47, 0.5, 0.55).mul(n.mul(0.16).add(0.84));
+  const top = mix(vec3(0.21, 0.23, 0.27), stone, grout);
+  // rock faces: layered, streaked downwards, dark against the mist
+  const layer = hash(floor(positionWorld.y.mul(2.2)));
+  const streak = hash(floor(positionWorld.x.add(positionWorld.z).mul(3.0)));
+  const side = vec3(0.11, 0.13, 0.18).mul(layer.mul(0.18).add(streak.mul(0.1)).add(0.82));
   m.colorNode = vec4(mix(side, top, smoothstep(0.45, 0.75, normalWorld.y)), 1);
   return m;
 }
@@ -160,8 +165,8 @@ function deckMaterial(): THREE.MeshPhysicalNodeMaterial {
         .abs(),
     ),
   );
-  m.colorNode = vec4(mix(vec3(0.84, 0.87, 0.9), vec3(0.74, 0.62, 0.44), joint), 1);
-  m.emissiveNode = vec3(0.95, 0.74, 0.46).mul(joint.mul(0.7).add(0.06));
+  m.colorNode = vec4(mix(vec3(0.7, 0.75, 0.8), vec3(0.74, 0.62, 0.44), joint), 1);
+  m.emissiveNode = vec3(0.95, 0.74, 0.46).mul(joint.mul(0.5).add(0.04));
   return m;
 }
 
@@ -199,23 +204,22 @@ export function buildRoomArt(
     c3(HORIZON_WARM),
     towardDawn.mul(float(1).sub(smoothstep(0, 0.28, dirY))),
   );
+  // below the horizon the sky is the far mist (no hard line where the mist sea meets the sky)
   const sky = mix(
     mix(horizon, c3(ZENITH), smoothstep(0.0, 0.62, dirY)),
-    c3(HORIZON_COOL).mul(0.8),
-    float(1).sub(smoothstep(-0.2, 0.0, dirY)),
+    horizon.mul(0.86),
+    float(1).sub(smoothstep(-0.12, 0.0, dirY)),
   );
   scene.backgroundNode = sky;
   const fogNear = uniform(FOG_NEAR);
   const fogFar = uniform(FOG_FAR);
-  // the valley fills with mist: everything below the way sinks into a deeper blue, so the gap reads as depth
+  // the valley fills with mist: everything below the way sinks into a deeper blue, so the gap reads as depth;
+  // far away the mist pales into the horizon (空間の可読性と導線 8: 奥ほど霞ませる)
   const mist = float(1)
-    .sub(smoothstep(-9, -0.6, positionWorld.y))
+    .sub(smoothstep(MIST_FROM, MIST_TO, positionWorld.y))
     .mul(0.97);
-  const deep = vec3(0.045, 0.07, 0.14);
-  scene.fogNode = fog(
-    mix(c3(HORIZON_COOL), deep, mist.mul(0.85)),
-    max(rangeFogFactor(fogNear, fogFar), mist),
-  );
+  const mistColor = mix(c3(MIST_DEEP), horizon.mul(0.86), rangeFogFactor(fogNear.mul(0.7), fogFar.mul(1.1)));
+  scene.fogNode = fog(mix(horizon.mul(0.92), mistColor, mist), max(rangeFogFactor(fogNear, fogFar), mist));
 
   // reflections: the same sky, the dawn glow and a dark band of the town around the horizon, so the edges
   // of the glass have something to mirror (S-01: ガラスの縁は、映る物がないと読めない)
@@ -244,13 +248,13 @@ export function buildRoomArt(
   scene.environment = envTarget.texture;
 
   // ---- lights (one dawn light + the sky; warm points from the furnace, the bench lamp, the orb) --------
-  const hemi = new THREE.HemisphereLight(0x8ea8d2, 0x262c3a, 1.15);
+  const hemi = new THREE.HemisphereLight(0x7890c0, 0x181c28, 0.8);
   put(hemi, 'shared');
-  const sun = new THREE.DirectionalLight(0xffcf9e, 1.9);
+  const sun = new THREE.DirectionalLight(0xffbd86, 2.5);
   sun.position
     .copy(DAWN)
     .multiplyScalar(30)
-    .setY(9)
+    .setY(7)
     .add(new THREE.Vector3(0, 0, -8));
   sun.target.position.set(0, 0, -8);
   scene.add(sun.target);
@@ -275,14 +279,14 @@ export function buildRoomArt(
     sun.shadow.normalBias = 0.03;
     sun.shadow.radius = 1;
   }
-  put(sun, 'shared');
+  put(keep(sun), 'shared');
   const sunDirection = sun.position.clone().sub(sun.target.position).normalize();
 
   // ---- materials -----------------------------------------------------------------------------
   const brass = keep(createBrassMaterial());
   const stone = keep(stoneMaterial(0.62));
   const rock = keep(stoneMaterial(1.4));
-  const frostFloor = keep(createFrostedFloorMaterial({ tileSize: 0.9 }));
+  const frostFloor = keep(createFrostedFloorMaterial({ tileSize: 0.9, frostColor: 0xa7b1bc }));
   const wood = keep(new THREE.MeshStandardNodeMaterial({ color: 0x5c4637, roughness: 0.78, metalness: 0 }));
   const dark = keep(new THREE.MeshStandardNodeMaterial({ color: 0x1b2433, roughness: 1, metalness: 0 }));
   const glass = (
@@ -296,9 +300,9 @@ export function buildRoomArt(
   const shardGlass = glass('clear', { placement: 'behind-glass', haze: TOWN_HAZE, thickness: 0.03 });
   const townGlass = glass('clear', { placement: 'far', haze: TOWN_HAZE, thickness: 0.06 });
   const panelGlass = glass('clear', { placement: 'near', thickness: 0.03 });
-  const lampMilk = glass('milky', { glow: { color: 0xffc58a, intensity: 3.2 } });
-  const cupMilk = glass('milky', { glow: { color: 0xffd7a8, intensity: 0.9 } });
-  const lanternMilk = glass('milky', { glow: { color: 0xffb870, intensity: 4.2 } });
+  const lampMilk = glass('milky', { glow: { color: 0xffbf80, intensity: 1.5 } });
+  const cupMilk = glass('milky', { glow: { color: 0xffd2a0, intensity: 1.1 } });
+  const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
 
   // ---- the workshop (序章「工房」) ---------------------------------------------------------------
   {
@@ -475,11 +479,7 @@ export function buildRoomArt(
     put(slab(PATH.minX, PATH.maxX, PATH.minZ, PATH.maxZ, 7, stone), 'shared');
     put(slab(FAR.minX, FAR.maxX, FAR.minZ, FAR.maxZ, 7, stone), 'shared');
     // beyond the gate the way goes on toward the town (seen, not walked: the gate is closed)
-    put(slab(FAR.minX, FAR.maxX, -40, FAR.minZ - 0.02, 7, stone), 'shared');
-    // the town's plateau across the valley
-    const plateau = mesh(new THREE.CylinderGeometry(46, 52, 9, 72), rock);
-    plateau.position.set(LIGHTHOUSE[0], -4.5, LIGHTHOUSE[2]);
-    put(plateau, 'shared');
+    put(slab(FAR.minX, FAR.maxX, -46, FAR.minZ - 0.02, 7, stone), 'shared');
     const valley = mesh(new THREE.PlaneGeometry(600, 600), dark);
     valley.rotation.x = -Math.PI / 2;
     valley.position.y = VALLEY_Y;
@@ -582,27 +582,27 @@ export function buildRoomArt(
     // They stand where the bridge will be and melt away inside the sphere.
     const rand = rng(61);
     const shards: THREE.BufferGeometry[] = [];
-    for (let i = 0; i < 7; i++) {
-      const w = 0.22 + rand() * 0.3;
-      const h = 0.18 + rand() * 0.5;
-      const g = new RoundedBoxGeometry(w, h, 0.025, 1, 0.01);
-      g.rotateY((rand() - 0.5) * 1.2);
-      g.rotateZ((rand() - 0.5) * 0.6);
-      g.translate(-0.9 + (i / 6) * 1.8 + (rand() - 0.5) * 0.15, h * 0.4, EDGE_Z - 0.06 - rand() * 0.12);
+    for (let i = 0; i < 5; i++) {
+      const w = 0.16 + rand() * 0.2;
+      const h = 0.12 + rand() * 0.26;
+      const g = new RoundedBoxGeometry(w, h, 0.02, 1, 0.008);
+      g.rotateY((rand() - 0.5) * 0.8);
+      g.rotateZ((rand() - 0.5) * 0.5);
+      g.translate(-0.7 + (i / 4) * 1.4 + (rand() - 0.5) * 0.12, h * 0.42, EDGE_Z + 0.04 - rand() * 0.08);
       shards.push(g);
     }
     const shardMesh = mesh(merged(shards), shardGlass);
     shardMesh.renderOrder = 3;
     put(shardMesh, 'surface');
     const rubble: THREE.BufferGeometry[] = [];
-    for (let i = 0; i < 10; i++) {
-      const g = new THREE.DodecahedronGeometry(0.08 + rand() * 0.12, 0);
-      g.scale(1, 0.55, 1);
+    for (let i = 0; i < 8; i++) {
+      const g = new THREE.DodecahedronGeometry(0.05 + rand() * 0.07, 0);
+      g.scale(1, 0.5, 1);
       const side = i % 2 === 0 ? -1 : 1;
-      g.translate(side * (0.95 + rand() * 0.3), 0.03, EDGE_Z + 0.05 - rand() * 0.25);
+      g.translate(side * (0.9 + rand() * 0.35), 0.02, EDGE_Z + 0.06 - rand() * 0.16);
       rubble.push(g);
     }
-    put(mesh(merged(rubble), stone), 'surface');
+    put(mesh(merged(rubble), rock), 'surface');
   }
 
   // ---- the back layer: the bridge, its rails, glass panels and lanterns, the light drop ----------
@@ -656,7 +656,7 @@ export function buildRoomArt(
         28,
       );
     const coreMat = keep(new THREE.MeshBasicNodeMaterial());
-    coreMat.colorNode = vec4(4.6, 3.8, 2.6, 1);
+    coreMat.colorNode = vec4(2.4, 1.9, 1.25, 1);
     drop.add(mesh(shape(0.55), coreMat));
     drop.add(mesh(shape(1), glass('iridescent', { role: 'drop', placement: 'near', thickness: 0.06 })));
     drop.position.set(...DROP);
@@ -695,17 +695,19 @@ export function buildRoomArt(
   orbLight.position.set(PEDESTAL_ORB[0], PEDESTAL_ORB[1] + 0.1, PEDESTAL_ORB[2]);
   put(orbLight, 'shared');
 
-  // ---- the town and its lighthouse across the valley (遠景: cheap glass, 灯塔) ---------------------
+  // ---- the town and its lighthouse across the valley, rising out of the mist (遠景: cheap glass, 灯塔) -----
   {
     const rand = rng(20261021);
     const spheres: { p: THREE.Vector3; r: number }[] = [];
+    const rings: THREE.BufferGeometry[] = [];
     const [lx, , lz] = LIGHTHOUSE;
-    for (let k = 0; k < 30; k++) {
-      const a = (k / 30) * Math.PI * 2 + rand() * 0.2;
-      const rad = 10 + rand() * 30;
+    for (let k = 0; k < 34; k++) {
+      const a = (k / 34) * Math.PI * 2 + rand() * 0.25;
+      const rad = 9 + rand() * 32;
       const c = new THREE.Vector3(lx + Math.sin(a) * rad, 0, lz + Math.cos(a) * rad);
-      const main = 2.0 + rand() * 2.6;
-      spheres.push({ p: c.clone().setY(main * (0.3 + rand() * 0.25)), r: main });
+      const main = 2.4 + rand() * 3.4;
+      const base = -2.5 + rand() * 2.0;
+      spheres.push({ p: c.clone().setY(base + main * (0.35 + rand() * 0.3)), r: main });
       const count = 1 + Math.floor(rand() * 3);
       for (let i = 0; i < count; i++) {
         const r = main * (0.35 + rand() * 0.45);
@@ -716,18 +718,25 @@ export function buildRoomArt(
           p: c
             .clone()
             .add(o)
-            .setY(r * (0.3 + rand() * 0.7)),
+            .setY(base + r * (0.3 + rand() * 0.9) + (rand() < 0.3 ? main * 0.8 : 0)),
           r,
         });
       }
     }
-    for (const [r, y] of [
-      [4.0, 2.0],
-      [3.0, 6.0],
-      [2.2, 9.2],
-      [1.6, 11.8],
-    ] as const)
+    // 灯塔: stacked bubbles, brass bands, a brass spire and the great orb, broken (光が失われた理由: 大玉が割れ)
+    const tower: [number, number][] = [
+      [5.0, 1.0],
+      [3.9, 7.0],
+      [3.0, 11.8],
+      [2.3, 15.6],
+      [1.7, 18.6],
+    ];
+    for (const [r, y] of tower) {
       spheres.push({ p: new THREE.Vector3(lx, y, lz), r });
+      rings.push(
+        new THREE.TorusGeometry(r * 0.99, 0.07, 8, 72).rotateX(Math.PI / 2).translate(lx, y - r * 0.15, lz),
+      );
+    }
     // far → near from the way, so the transparent bubbles blend in order
     const from = new THREE.Vector3(0, 1.6, -14);
     spheres.sort((a, b) => b.p.distanceToSquared(from) - a.p.distanceToSquared(from));
@@ -745,26 +754,30 @@ export function buildRoomArt(
     town.renderOrder = 1;
     instanced.push(town);
     put(town, 'shared');
-    // 灯塔: a brass spire and the great orb, broken (光が失われた理由: 大玉が割れ)
-    const spire = mesh(new THREE.CylinderGeometry(0.15, 0.3, 4.6, 12), brass);
-    spire.position.set(lx, 14.8, lz);
-    put(spire, 'shared');
+    const spireY = 23;
+    rings.push(new THREE.CylinderGeometry(0.16, 0.34, 6.4, 12).translate(lx, spireY - 1.4, lz));
+    // a brass cage round the great orb, the orb itself cracked open
+    for (let i = 0; i < 3; i++)
+      rings.push(
+        new THREE.TorusGeometry(3.15, 0.07, 8, 96)
+          .rotateX(Math.PI / 2)
+          .rotateZ((i * Math.PI) / 3 + 0.3)
+          .translate(lx, spireY + 4.2, lz),
+      );
+    put(mesh(merged(rings), brass), 'shared');
     const great = mesh(
-      new THREE.SphereGeometry(2.6, 48, 32, 0.4, Math.PI * 2 - 1.1, 0, Math.PI * 0.82),
+      new THREE.SphereGeometry(2.9, 48, 32, 0.4, Math.PI * 2 - 1.1, 0, Math.PI * 0.82),
       townGlass,
     );
-    great.position.set(lx, 19.6, lz);
+    great.position.set(lx, spireY + 4.2, lz);
     great.rotation.z = 0.25;
     great.renderOrder = 1;
     put(great, 'shared');
-    const greatRing = mesh(new THREE.TorusGeometry(2.85, 0.06, 8, 96), brass);
-    greatRing.position.set(lx, 19.6, lz);
-    greatRing.rotation.set(1.25, 0.3, 0);
-    put(greatRing, 'shared');
   }
 
   // ---- light motes over the gap, drifting toward the far shore (光の粒の流れ, ルール7) ---------------
-  const MOTES = 36;
+  // They hint at the back layer at the dead end (行き止まりの理由: 裏の層の気配) and fade near the eye.
+  const MOTES = 28;
   const moteMat = keep(
     new THREE.MeshBasicNodeMaterial({
       transparent: true,
@@ -772,19 +785,20 @@ export function buildRoomArt(
       blending: THREE.AdditiveBlending,
     }),
   );
-  moteMat.colorNode = vec4(1.6, 1.25, 0.8, 1);
+  moteMat.colorNode = vec4(1.3, 1.0, 0.62, 1);
+  moteMat.opacityNode = smoothstep(0.8, 2.6, positionView.length());
   moteMat.fog = false;
-  const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.012, 0)), moteMat, MOTES);
+  const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.008, 0)), moteMat, MOTES);
   motes.frustumCulled = false;
   instanced.push(motes);
   put(motes, 'shared');
   const moteSeeds = Array.from({ length: MOTES }, (_, i) => {
     const r = rng(500 + i);
     return {
-      x: (r() - 0.5) * 2.2,
-      y: 0.3 + r() * 1.8,
+      x: (r() - 0.5) * 2.6,
+      y: 0.2 + r() * 1.9,
       phase: r(),
-      speed: 0.05 + r() * 0.06,
+      speed: 0.04 + r() * 0.05,
       wobble: r() * 6,
     };
   });
@@ -792,7 +806,7 @@ export function buildRoomArt(
   const motePos = new THREE.Vector3();
   const moteRot = new THREE.Quaternion();
   const moteScale = new THREE.Vector3();
-  const span = 7; // from a little before the edge to over the far shore
+  const span = EDGE_Z - FAR.maxZ + 1.2; // from just over the edge to the far shore
 
   return {
     scene,
@@ -812,7 +826,7 @@ export function buildRoomArt(
         motePos.set(
           s.x + 0.15 * Math.sin(t * 0.7 + s.wobble),
           s.y + 0.12 * Math.sin(t * 0.9 + s.wobble * 2),
-          EDGE_Z + 2 - u * span,
+          EDGE_Z + 0.2 - u * span,
         );
         moteScale.setScalar(0.4 + 0.9 * fade);
         motes.setMatrixAt(i, moteMatrix.compose(motePos, moteRot, moteScale));

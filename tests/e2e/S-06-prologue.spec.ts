@@ -43,6 +43,7 @@ interface RoomProbe {
   dropTaken: boolean;
   events: string[];
   backPassFrames: number;
+  autoplay: { step: string; done: boolean } | null;
   layout: {
     edgeZ: number;
     farZ: number;
@@ -304,6 +305,42 @@ for (const backend of backends) {
       join(root, `artifacts/S-06/run-${backend}.json`),
       JSON.stringify({ backend, final: await room(page), errors }, null, 2),
     );
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-06 key frames in the middle of the transitions (held) [${backend}]`, async ({ page }) => {
+    test.setTimeout(120_000);
+    mkdirSync(shotDir, { recursive: true });
+    const errors = collectErrors(page);
+    // ?peekHold / ?growHold freeze the peek and a placed orb's growth, so the frame is exactly mid-way
+    const frames: [string, string][] = [
+      ['hold-peek-0.5', 'spawn=dead-end&peekHold=0.5'],
+      ['hold-peek-1.0', 'spawn=dead-end&peekHold=1'],
+      ['hold-grow-0.35', 'spawn=dead-end&growHold=0.35'],
+      ['hold-grow-1.0', 'spawn=dead-end&growHold=1'],
+      ['hold-far', 'spawn=far&growHold=1'],
+    ];
+    for (const [name, q] of frames) {
+      await page.goto(`/?scene=prologue-proto&${q}${webgl}`);
+      await waitRoom(page, 'r.ready === true', 60_000);
+      await page.waitForTimeout(800);
+      await page.screenshot({ path: join(shotDir, `${name}.png`) });
+    }
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-06 ?autoplay=1 plays home → dive → the drop by script [${backend}]`, async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors = collectErrors(page);
+    await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
+    await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 90_000);
+    expect(done.events).toEqual(
+      expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
+    );
+    expect(done.position.z).toBeLessThan(done.layout.farZ);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
