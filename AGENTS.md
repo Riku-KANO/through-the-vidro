@@ -25,9 +25,13 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 速い検査（型・lint・単体・ビルド） | `scripts/check.sh` |
 | 全検査（＋ブラウザセンサー） | `scripts/check.sh --full`、対象を絞るなら `SCENES=a,b scripts/check.sh --full` |
 | 計測結果の表 | `node scripts/bench-report.mjs` |
+| URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`） |
+| 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
 | 整形 | `pnpm format` |
 
-URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `webgl=1`（WebGL2経路の強制） `stats=1`。
+URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
+`dynres=0|1` `dynresTarget=<ms>`（試験用） `webgl=1`（WebGL2経路の強制） `stats=1` `debug=1`（`window.__vidroDebug.renderer` を出す）。
+シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
 ## センサー（ループが自分の仕事を確かめる手段）
 
@@ -39,7 +43,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `we
 - **シーン固有の検証**: シーンは `window.__vidro.sceneProbe` に状態（例: 覗いているか、実体化半径、プレイヤー位置）を公開できる。
   入力を送って状態を確かめるテストは `tests/e2e/<slice-id>.spec.ts` に書く。
 - **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。複数のセッションが同時に計測すると GPU を取り合うため、fps の比較は同時に走らせない。
-- **fpsの扱い**: ヘッドレスのfpsは参考値。ゲートの判定は実機（ヘッドあり、`HEADED=1 pnpm e2e`）とスライスS-07の計測で行う。
+- **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
 
@@ -78,3 +82,14 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `we
 - トーンマッピングは AgX。モーションブラーは使わない。黒い画面での切り替えはしない。
 - 数値は設計書の値をそのまま定数にし、出典の節名をコメントに書く（例: 実体化半径4m、覗く遷移0.25秒、歩行1.4m/s）。
 - 単体テストは振る舞いを書く。実装の細部を固定するテストは書かない。
+- **画面と違う大きさの RenderTarget に透過（transmission）の材質を描かない。** WebGPU 経路（r186）では、そのフレームで背景用のテクスチャが
+  途中で破棄され、「Destroyed texture used in a submit」が毎フレーム出て描画が捨てられる（WebGL2 では出ない）。覗くパスの裏の層や
+  ホームの玉の中の縮図は、iridescence・透明度・発光など透過以外で表現し、玉の屈折は `texture(rt, screenUV + 屈折オフセット)` の自前合成で描く。
+  画面と同じ大きさの描画先（`pass()` による仕上げのパスなど）に透過を描くのは問題ない。（S-05 で発見、2026-10-21）
+- **影のカメラの layers を明示する。** 影マップは1フレームに1回、最初にそれを使う描画で作られる。影のカメラが既定（layer 0 だけ）のままだと、
+  three はその時点のカメラの layers を写すので、覗くパス（共通＋裏）が先に走ると表の層の物が影を落とさなくなる。
+  `light.shadow.camera.layers.enable(<表の層>)` のように、影を落とす層を必ず指定する。（S-05 のレビューで発見）
+- **GPU のタイムスタンプを GPU 時間として信じない。** three の `resolveTimestampsAsync` は描画パスごとの時間の合計で、
+  Apple/Metal では仕上げのパスが多いと重なって約10倍に膨らむ（S-05: 実際 約1ms のフレームが 11〜22ms と出た）。
+  性能の判断は垂直同期を外したフレーム時間（`scripts/bench-headed.mjs`）で行う。実行時の制御（`src/core/perf/governor.ts`）は、
+  GPU 時間がフレーム時間を超えたら信用せずフレーム時間に切り替える。

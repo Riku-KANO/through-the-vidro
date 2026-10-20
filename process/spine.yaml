@@ -132,6 +132,8 @@ slices:
       - 技術設計 > 開発用ツール（性能表示）
     paths:
       - src/core/perf/**
+      - src/core/renderer.ts
+      - src/core/params.ts
       - src/dev/**
       - src/main.ts
       - src/scenes/stress.scene.ts
