@@ -31,7 +31,8 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
-`gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `debug=1`（`window.__vidroDebug` に renderer と setScale を出す）。
+`gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `gpuSpan=0`（自前の span を測らない） `gpuPasses=0`（three のパスごとのタイムスタンプを使わない）
+`dynresResponse=0`（手応えの検査を切る。配線だけを確かめる試験用） `debug=1`（`window.__vidroDebug` に renderer と setScale を出す）。
 `quality=auto` と `bench` を一緒に使うと計測の途中でプリセットが変わるので、計測は固定のプリセットで行う。
 シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
@@ -51,11 +52,11 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 
 | 場所 | 中身 | 持ち主 |
 |---|---|---|
-| `src/core/` | 共通部品（描画の初期化、品質プリセット、計測、ガラス材質、遷移の曲線）。案2と共有 | 変更は CHANGELOG に記録 |
+| `src/core/` | 共通部品（描画の初期化、品質プリセット、計測、ガラス材質、遷移の曲線、音の仕組み `core/audio`）。案2と共有。ゲーム固有の規則や調整値は持たない | 変更は CHANGELOG に記録 |
 | `src/layers/` | 表と裏の層、実体化 | S-02 |
 | `src/game/` | 手の玉、プレイヤー、入力、ギミック、進行、セーブ | S-02, S-03 |
 | `src/ui/` | DOMの画面と言語ファイル | S-04 |
-| `src/audio/` | 音と生成音楽 | M1以降 |
+| `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）。生成音楽は M1以降 | S-09 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/dev/` | 開発用ツール（性能表示など） | 共通 |
 | `process/` | ループの台帳（スパイン）とスライスごとの記録 | — |
@@ -91,8 +92,15 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **影のカメラの layers を明示する。** 影マップは1フレームに1回、最初にそれを使う描画で作られる。影のカメラが既定（layer 0 だけ）のままだと、
   three はその時点のカメラの layers を写すので、覗くパス（共通＋裏）が先に走ると表の層の物が影を落とさなくなる。
   `light.shadow.camera.layers.enable(<表の層>)` のように、影を落とす層を必ず指定する。（S-05 のレビューで発見）
-- **GPU のタイムスタンプを GPU 時間として信じない。** three の `resolveTimestampsAsync` は描画パスごとの時間の合計で、
-  Apple/Metal では仕上げのパスが多いと重なって約10倍に膨らむ（S-05: 実際 約1ms のフレームが 11〜22ms と出た）。
-  性能の判断は垂直同期を外したフレーム時間（`scripts/bench-headed.mjs`）で行う。実行時の制御（`src/core/perf/governor.ts`）は、
-  Apple/Metal では GPU 時間を判断に使わず、それ以外でも GPU 時間が平均フレーム時間を超えたら信用しない。そのとき動的解像度は止まり、
-  品質の判定と検証はフレーム時間で行う（垂直同期の下ではフレーム時間で上限と過負荷を見分けられないため、解像度は動かさない）。
+- **GPU 時間は自前の span で測る。** three の `resolveTimestampsAsync` は描画パスごとの時間の合計で、Apple/Metal では
+  重なって約10倍に膨らむ（S-05）。`src/core/perf/gpu-span.ts` が描画の前後に自前のタイムスタンプを置き、その差（span）を GPU 時間にする（S-08）。
+  GPU が律速する負荷では垂直同期なしのフレーム時間と0〜7%で一致した。ほぼ空のシーンを毎秒数千フレームで回すと長く出る（既知の例外）。
+  2つの印が three のパスを確実に挟む保証はないので、span は実測で確かめた値として扱う。GPU への submit は `render()` の中で行う（`scene.ts` の約束）。
+  動的解像度は、3段下げても GPU 時間が1割以上下がらなければプリセットの倍率へ戻して止まる（S-08）。性能の比較そのものは、
+  垂直同期を外したフレーム時間（`scripts/bench-headed.mjs`、`QUIET=1`）で行う。
+- **透過の背景画像の解像度は品質で変えられない（three r186、S-10）。** 背景は描画先と同じ大きさで写されるので、
+  品質プリセットの `transmissionScale` は効かない。効くのは描画解像度（renderScale）と動的解像度だけ。
+- **Web Audio の音の経路は、鳴り終わるまで JS から参照する（S-09）。** 参照の切れた ConvolverNode とその下流の GainNode は、
+  鳴っている途中でも GC で切り離され、残響の尾が切れる。AudioContext は作った直後に止め、最初のユーザー操作で再開する
+  （ヘッドレスの Chromium は操作なしで running から始まる）。
+

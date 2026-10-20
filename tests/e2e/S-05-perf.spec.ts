@@ -55,7 +55,8 @@ for (const backend of ['webgpu', 'webgl2'] as const) {
     const errors = collectErrors(page);
     // A 0.1 ms target cannot be met even at the lowest scale, so the controller must step down to its floor.
     // gpuTrust: on Apple/Metal timestamps do not drive decisions by default; the plausibility check still applies.
-    await page.goto(`/?scene=hello&dynresTarget=0.1&gpuTrust=1${webgl}`);
+    // dynresResponse=0: this checks the wiring, not whether the GPU time follows the resolution (S-08).
+    await page.goto(`/?scene=hello&dynresTarget=0.1&gpuTrust=1&dynresResponse=0${webgl}`);
     await page.waitForFunction(() => window.__vidro?.status === 'running');
     const before = await page.evaluate(() => document.querySelector('canvas')?.width ?? 0);
     await page.waitForFunction(() => window.__vidro.renderScale <= 0.6, undefined, { timeout: 20_000 });
