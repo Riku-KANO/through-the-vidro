@@ -1,5 +1,20 @@
 import type { RenderCounters } from '../core/bench';
 
+export interface StatsExtras {
+  /** GPU time of the latest resolved frame, null when unavailable. */
+  gpuMs: number | null;
+  /** False when the governor found the timestamps implausible (shown, but marked). */
+  gpuReliable: boolean;
+  /** renderer.info.memory.texturesSize (render targets included). */
+  texturesBytes: number;
+  /** Vertex + index buffers (renderer.info.memory.attributesSize + indexAttributesSize). */
+  buffersBytes: number;
+  renderScale: number;
+  quality: string;
+}
+
+const MB = 1048576;
+
 /** Small perf overlay (開発用ツール > 性能表示). Toggle with ?stats=1 or the ` key. */
 export class StatsOverlay {
   private readonly el: HTMLDivElement;
@@ -25,17 +40,27 @@ export class StatsOverlay {
     return this.el.style.display !== 'none';
   }
 
-  tick(dt: number, counters: RenderCounters): void {
+  /** Cheap per frame; formats text only twice a second. */
+  tick(dt: number, counters: RenderCounters, extras?: StatsExtras): void {
     this.frames++;
     this.elapsed += dt;
     if (this.elapsed < 0.5) return;
     const fps = this.frames / this.elapsed;
     this.frames = 0;
     this.elapsed = 0;
+    if (!this.visible) return;
+    const gpu =
+      extras?.gpuMs == null
+        ? 'gpu n/a'
+        : `gpu ${extras.gpuMs.toFixed(1)} ms${extras.gpuReliable ? '' : ' (ts unreliable)'}`;
+    const mem = extras
+      ? `tex ${(extras.texturesBytes / MB).toFixed(0)} MB  geo ${(extras.buffersBytes / MB).toFixed(0)} MB`
+      : '';
+    const scale = extras ? `${extras.quality} ×${extras.renderScale.toFixed(2)}` : '';
     this.el.textContent =
-      `${fps.toFixed(0)} fps  ${(1000 / fps).toFixed(1)} ms\n` +
+      `${fps.toFixed(0)} fps  ${(1000 / fps).toFixed(1)} ms  ${gpu}\n` +
       `draws ${counters.drawCalls}  tris ${(counters.triangles / 1000).toFixed(0)}k\n` +
-      `${this.backend}`;
+      `${mem}\n${this.backend}  ${scale}`;
   }
 
   dispose(): void {

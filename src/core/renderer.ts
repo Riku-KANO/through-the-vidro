@@ -10,23 +10,38 @@ export interface RendererOptions {
 export interface RendererHandle {
   renderer: THREE.WebGPURenderer;
   backend: Backend;
+  /** Device pixel ratio before the quality scale (capped at 2). */
+  baseDpr: number;
+  /** True when the backend can measure GPU time per frame (timestamp queries). */
+  gpuTiming: boolean;
 }
 
 /**
  * Creates the single WebGPURenderer for the app (falls back to WebGL2 automatically).
  * Color pipeline follows アートディレクション > 画面の仕上げ: AgX tone mapping, sRGB output.
+ * Timestamp queries are requested so quality selection and dynamic resolution can see GPU cost.
  */
 export async function createRenderer(container: HTMLElement, opts: RendererOptions): Promise<RendererHandle> {
-  const renderer = new THREE.WebGPURenderer({ antialias: false, forceWebGL: opts.forceWebGL });
+  const renderer = new THREE.WebGPURenderer({
+    antialias: false,
+    forceWebGL: opts.forceWebGL,
+    trackTimestamp: true,
+  });
   renderer.toneMapping = THREE.AgXToneMapping;
   renderer.toneMappingExposure = 1;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2) * opts.renderScale);
+  const baseDpr = Math.min(window.devicePixelRatio, 2);
+  renderer.setPixelRatio(baseDpr * opts.renderScale);
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
   await renderer.init();
-  const backend: Backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend
-    ? 'webgpu'
-    : 'webgl2';
-  return { renderer, backend };
+  const backendInfo = renderer.backend as {
+    isWebGPUBackend?: boolean;
+    hasTimestamp?: boolean;
+    trackTimestamp?: boolean;
+  };
+  const backend: Backend = backendInfo.isWebGPUBackend ? 'webgpu' : 'webgl2';
+  // Public getter (WebGPU: always; WebGL2: EXT_disjoint_timer_query_webgl2) + the option we passed.
+  const gpuTiming = backendInfo.hasTimestamp === true && backendInfo.trackTimestamp === true;
+  return { renderer, backend, baseDpr, gpuTiming };
 }

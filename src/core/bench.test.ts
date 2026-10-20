@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkBudget, percentile, summarizeFrameTimes } from './bench';
+import { checkBudget, percentile, summarizeFrameTimes, summarizeGpuTimes } from './bench';
 
 describe('summarizeFrameTimes', () => {
   it('returns zeros for no frames', () => {
@@ -45,5 +45,15 @@ describe('checkBudget', () => {
       'drawCalls',
       'triangles',
     ]);
+  });
+});
+
+describe('summarizeGpuTimes', () => {
+  it('counts samples rather than frames and has no fps', () => {
+    const g = summarizeGpuTimes([2, 4, 6]);
+    expect(g?.samples).toBe(3);
+    expect(g?.avgMs).toBe(4);
+    expect(g && 'avgFps' in g).toBe(false);
+    expect(summarizeGpuTimes([])).toBeNull();
   });
 });
