@@ -53,6 +53,19 @@ describe('transmission overlap sensor', () => {
     expect(overlaps.map((o) => [o.front, o.back])).toEqual([['specimen', 'building']]);
   });
 
+  it('finds stacks near the edge of the view, where silhouettes look larger', () => {
+    // Seen ~42° and ~47° off-axis; their silhouettes overlap by about 1.6°.
+    const objects = [ball('nearer', 4.5, 1.6, 0, 0.4), ball('farther', 10.7, 1.6, -5, 0.8)];
+    expect(findTransmissionOverlaps(objects, view).map((o) => [o.front, o.back])).toEqual([
+      ['nearer', 'farther'],
+    ]);
+  });
+
+  it('does not treat a big sphere right beside the camera as covering the whole view', () => {
+    const objects = [ball('beside', 2, 1.6, 4, 1.5), ball('ahead', 0, 1.6, -5, 0.3)];
+    expect(findTransmissionOverlaps(objects, view)).toEqual([]);
+  });
+
   it('honours a safety margin around silhouettes', () => {
     // Just apart on screen: no overlap without a margin, an overlap with one.
     const objects = [ball('a', -0.45, 1.6, 0, 0.4), ball('b', 0.45, 1.6, -0.1, 0.4)];

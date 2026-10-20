@@ -9,8 +9,12 @@ import { GLASS_SPECS, type GlassKind } from './kinds';
  * 空間の可読性と導線 > 画面をうるさくしない (8: 遠景のガラスは単純な表現に切り替える).
  */
 
-/** Near glass is drawn with transmission; far glass may switch to the cheap path. Level design decides. */
-export type GlassPlacement = 'near' | 'far';
+/**
+ * Set by level design. near: always transmission. far: the cheap path unless the preset allows far
+ * transmission. behind-glass: stands behind other transmissive glass on a main sightline, so it stays on
+ * the cheap path on every preset (技術設計 > ガラスの描画 > 対策1: 重なる場所は遠景側を安価な表現に切り替える).
+ */
+export type GlassPlacement = 'near' | 'far' | 'behind-glass';
 
 /**
  * What the glass is for. 技術設計 > ガラスの描画: 分散と薄膜干渉は手の玉・光の雫・見せ場に限って使う.
@@ -61,6 +65,7 @@ export function resolveGlassFeatures(
 ): GlassFeatures {
   let path: GlassPath;
   if (GLASS_SPECS[kind].transmission === 0) path = 'opaque';
+  else if (use.placement === 'behind-glass') path = 'cheap';
   else if (use.placement === 'far' && !preset.farGlassTransmission) path = 'cheap';
   else path = 'transmission';
 

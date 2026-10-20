@@ -7,6 +7,7 @@ import {
   max,
   mix,
   normalWorldGeometry,
+  oneMinus,
   positionLocal,
   pow,
   smoothstep,
@@ -23,6 +24,7 @@ import {
   createInnerBubbleMaterial,
   findTransmissionOverlaps,
   fusedBubbleGeometry,
+  fusedBubbleSilhouette,
   type GlassFeatures,
   type GlassKind,
   type GlassPlacement,
@@ -179,7 +181,7 @@ function polar(angleDeg: number, distance: number): [number, number] {
 function cameraPose(t: number, position: THREE.Vector3, target: THREE.Vector3): void {
   const a = (t / PERIOD) * Math.PI * 2;
   position.set(0.45 * Math.sin(a), EYE_HEIGHT, ARC.cz - 0.25 * (1 - Math.cos(a)));
-  target.set(0.25 * Math.sin(a + 0.8), 0.05, -6);
+  target.set(0.25 * Math.sin(a + 0.8), 0.45, -6);
 }
 
 /** Sky colour for a direction (shared by the background and the environment capture). */
@@ -237,8 +239,8 @@ function arcadeWallMaterial(): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ color: 0x84919c, roughness: 0.8, side: THREE.BackSide });
   const u = fract(uv().x.mul(22));
   const v = uv().y;
-  const across = smoothstep(0.3, 0.26, abs(u.sub(0.5)));
-  const up = smoothstep(0.22, 0.24, v).mul(smoothstep(0.56, 0.54, v));
+  const across = oneMinus(smoothstep(0.26, 0.3, abs(u.sub(0.5))));
+  const up = smoothstep(0.22, 0.24, v).mul(oneMinus(smoothstep(0.54, 0.56, v)));
   m.emissiveNode = color(0xffd39c).mul(across.mul(up).mul(1.6));
   return m;
 }
@@ -263,15 +265,17 @@ const create: SceneFactory = async (ctx) => {
   // Static sun shadow (stands for the baked shadows of 光と時間帯; rendered once).
   const previousShadowMap = { enabled: renderer.shadowMap.enabled, type: renderer.shadowMap.type };
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   const sun = new THREE.DirectionalLight(SKY.sun, 2.1);
-  sun.target.position.set(0, 0, -4);
+  sun.target.position.set(0, 0, -6.5);
   sun.position.copy(sun.target.position).addScaledVector(SUN_DIR, 40);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -17, right: 17, top: 17, bottom: -17, near: 1, far: 90 });
+  // Covers the specimens, the lamps and the dais only (±12 m), for crisp texels.
+  Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 80 });
   sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.02;
+  sun.shadow.normalBias = 0.03;
+  sun.shadow.radius = 3;
   sun.shadow.autoUpdate = false;
   sun.shadow.needsUpdate = true;
   scene.add(sun, sun.target);
@@ -415,7 +419,7 @@ const create: SceneFactory = async (ctx) => {
       register('house', 'clear', 'near', 'scenery', { thicknessScale: 1.2 }),
     ),
   );
-  silhouettes.set('house', { id: 'house', spheres: HOUSE.map((b) => ({ ...b, r: b.r + 0.2 })) });
+  silhouettes.set('house', { id: 'house', spheres: fusedBubbleSilhouette(HOUSE, houseSurface) });
   const ribs: THREE.Vector3[][] = [];
   for (let k = 0; k < 12; k++) {
     ribs.push(surfaceLine(houseSurface, { column: Math.round((k * houseSurface.columns) / 12) }, 0.02));
@@ -483,7 +487,7 @@ const create: SceneFactory = async (ctx) => {
       thicknessScale: 2.5 * f.scale,
     });
     scene.add(new THREE.Mesh(own(fusedBubbleGeometry(surface)), material));
-    silhouettes.set(f.id, { id: f.id, spheres: bubbles.map((b) => ({ ...b, r: b.r + 0.3 * f.scale })) });
+    silhouettes.set(f.id, { id: f.id, spheres: fusedBubbleSilhouette(bubbles, surface) });
   }
 
   const brassMesh = new THREE.Mesh(own(mergeGeometries(brassParts)), brass);
@@ -510,10 +514,11 @@ const create: SceneFactory = async (ctx) => {
   envScene.add(envSun, new THREE.HemisphereLight(SKY.zenith, SKY.ground, 1.2));
   for (const o of [floor, terrace, brassMesh, wall, ...opaqueGlass]) envScene.add(o.clone());
   envScene.fog = scene.fog;
-  const pmrem = own(new THREE.PMREMGenerator(renderer));
+  const pmrem = new THREE.PMREMGenerator(renderer);
   const envTarget = own(
     pmrem.fromScene(envScene, 0.02, 0.1, 200, { position: new THREE.Vector3(0, 1.2, 2.5) }),
   );
+  pmrem.dispose(); // its ping-pong targets and blur material are only needed for the capture
   scene.environment = envTarget.texture;
 
   // --- sensors ---

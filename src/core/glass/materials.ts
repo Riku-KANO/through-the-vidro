@@ -18,14 +18,16 @@ import {
   positionWorld,
   pow,
   smoothstep,
+  texture,
   uniform,
+  uv,
   vec3,
   vec4,
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import type { QualityPreset } from '../quality';
 import { GLASS_DISPERSION, GLASS_IOR, GLASS_SPECS, type GlassKind, type GlassSpec, THIN_FILM } from './kinds';
-import { beerLambert, fresnelF0 } from './optics';
+import { beerLambert, fresnelF0, SHELL_MIN_COS, SOLID_MIN_COS } from './optics';
 import { type GlassFeatures, type GlassPlacement, type GlassRole, resolveGlassFeatures } from './policy';
 
 /**
@@ -35,7 +37,10 @@ import { type GlassFeatures, type GlassPlacement, type GlassRole, resolveGlassFe
  * Lifetime: every factory returns a new material; the caller disposes it.
  */
 
-/** Distance haze for far glass (空間の可読性と導線 > 8 奥ほど霞ませる). Values are 仮 until a scene sets them. */
+/**
+ * Distance haze for far glass (空間の可読性と導線 > 8 奥ほど霞ませる). Linear like THREE.Fog, so pass the
+ * scene's fog colour and distances. DEFAULT_HAZE (仮) is only a fallback.
+ */
 export interface HazeSpec {
   color: THREE.ColorRepresentation;
   near: number;
@@ -49,9 +54,14 @@ export interface GlassOptions {
   role?: GlassRole;
   /** Face-on thickness in metres (wall of a shell, depth of a solid). Default: the kind's spec. */
   thickness?: number;
-  /** 厚みは場所ごとにムラをつける: ± fraction of thickness varied across the surface (仮 0.35). */
+  /**
+   * Thickness map of an asset (glTF thickness texture: G channel, scaled by `thickness`). 技術設計 >
+   * ガラスの描画: 厚みは厚みマップで場所ごとに変える. When given, it replaces the procedural ムラ below.
+   */
+  thicknessMap?: THREE.Texture;
+  /** Procedural ムラ for shapes without a map: ± fraction of thickness (仮 0.35). 0 turns it off. */
   thicknessVariation?: number;
-  /** Size of the thickness ripples, metres (仮 0.45). */
+  /** Size of the procedural thickness ripples, metres (仮 0.45). Match it to the object's size. */
   thicknessScale?: number;
   /** Haze for the cheap far path. */
   haze?: HazeSpec;
@@ -91,27 +101,36 @@ const cosView = () => abs(dot(normalView, positionViewDirection)).clamp(0, 1);
 const surfaceNoise = (scale: number) => mx_noise_float(positionLocal.div(scale)).mul(0.5).add(0.5);
 
 function thicknessNode(spec: GlassSpec, options: GlassOptions) {
-  const base = options.thickness ?? spec.thickness;
+  const base = float(options.thickness ?? spec.thickness);
   const variation = options.thicknessVariation ?? 0.35;
-  const mura = float(1).add(
-    surfaceNoise(options.thicknessScale ?? 0.45)
+  let local: THREE.Node<'float'> = base;
+  if (options.thicknessMap) local = base.mul(texture(options.thicknessMap, uv()).g);
+  else if (variation > 0) {
+    const ripple = surfaceNoise(options.thicknessScale ?? 0.45)
       .sub(0.5)
-      .mul(2 * variation),
-  );
-  // Shell: the light crosses the wall edge-on at the silhouette, so the path (and the green) grows there.
-  // Solid: the chord through the body shrinks towards the rim.
-  const angle = spec.body === 'shell' ? float(1).div(max(cosView(), 0.12)) : max(cosView(), 0.08);
-  return float(base).mul(mura).mul(angle);
+      .mul(2 * variation);
+    local = base.mul(float(1).add(ripple));
+  }
+  // Same law as optics.viewPathFactor: a shell is crossed edge-on at its silhouette (the green of 断面の縁),
+  // the chord through a solid shrinks towards its rim.
+  const c = cosView();
+  const angle = spec.body === 'shell' ? float(1).div(max(c, SHELL_MIN_COS)) : max(c, SOLID_MIN_COS);
+  return local.mul(angle);
 }
 
-/** View-angle rainbow standing in for thin-film where the preset does not allow the real one. */
-function rainbowSheen(strength: number) {
-  const c = cosView();
-  const t = oneMinus(c).mul(1.4).add(surfaceNoise(0.3).mul(0.35));
-  const rainbow = cos(t.add(vec3(0, 0.33, 0.67)).mul(Math.PI * 2))
+/** 0..1 rainbow that shifts with the view angle, standing in for thin-film where the real one is off. */
+function rainbow() {
+  const t = oneMinus(cosView()).mul(1.4).add(surfaceNoise(0.3).mul(0.35));
+  return cos(t.add(vec3(0, 0.33, 0.67)).mul(Math.PI * 2))
     .mul(0.5)
     .add(0.5);
-  return rainbow.mul(smoothstep(0.0, 0.85, oneMinus(c)).mul(0.75).add(0.25)).mul(strength);
+}
+
+/** Light drops glow (アセットリスト > 3Dモデル: 光の雫 = 虹色ガラス＋発光), strongest towards the rim. */
+function dropGlow(strength: number) {
+  return rainbow()
+    .mul(smoothstep(0.0, 0.85, oneMinus(cosView())).mul(0.75).add(0.25))
+    .mul(strength);
 }
 
 function transmissiveGlass(
@@ -136,11 +155,14 @@ function transmissiveGlass(
     m.iridescence = 1;
     m.iridescenceIOR = THIN_FILM.ior;
     m.iridescenceThicknessNode = mix(THIN_FILM.thicknessNm[0], THIN_FILM.thicknessNm[1], surfaceNoise(0.25));
+  } else if (features.thinFilm === 'cheap') {
+    // Tint the reflection, like a film would: the rainbow appears only where something is reflected,
+    // so iridescent things do not glow in the dark (F0 0.016–0.18 instead of 0.04).
+    m.specularColorNode = rainbow().mul(4).add(0.4);
   }
-  // The cheap sheen stands in for thin-film; light drops keep it on every preset because they glow
-  // (アセットリスト > 3Dモデル: 光の雫 = 虹色ガラス＋発光).
-  if (features.thinFilm === 'cheap' || (features.thinFilm === 'film' && options.role === 'drop')) {
-    m.emissiveNode = rainbowSheen(0.6);
+  if (features.thinFilm !== 'none' && options.role === 'drop') {
+    // Weaker over the real film so the film still shows.
+    m.emissiveNode = dropGlow(features.thinFilm === 'film' ? 0.3 : 0.6);
   }
   return m;
 }
@@ -165,14 +187,19 @@ function cheapGlass(
     roughness: Math.max(spec.roughness, 0.05),
     fog: false, // the haze below replaces scene fog; both would double it
   });
-  m.colorNode = color(new THREE.Color(...tint)).mul(0.2 + 0.6 * saturation);
+  const body = color(new THREE.Color(...tint)).mul(0.2 + 0.6 * saturation);
+  m.colorNode = features.thinFilm === 'none' ? body : mix(body, rainbow(), 0.5);
   const f0 = fresnelF0(GLASS_IOR);
   const fresnel = float(f0).add(float(1 - f0).mul(pow(oneMinus(cosView()), 5)));
   const baseAlpha = 0.14 + 0.4 * saturation + (spec.roughness > 0.3 ? 0.3 : 0);
   m.opacityNode = mix(float(baseAlpha), float(1), fresnel);
-  if (features.thinFilm !== 'none') m.emissiveNode = rainbowSheen(0.5);
+  if (features.thinFilm !== 'none' && options.role === 'drop') m.emissiveNode = dropGlow(0.5);
   const hazeColor = uniform(new THREE.Color(haze.color));
-  const h = smoothstep(haze.near, haze.far, positionView.length());
+  const h = positionView
+    .length()
+    .sub(haze.near)
+    .div(Math.max(haze.far - haze.near, 1e-3))
+    .clamp(0, 1);
   // Far glass melts into the haze: its colour goes to the haze and it lets more of the (equally hazy)
   // background through, so stacked far shapes lose contrast instead of turning into solid silhouettes.
   m.outputNode = vec4(mix(output.rgb, hazeColor, h), output.a.mul(oneMinus(h.mul(0.25))));
@@ -225,7 +252,11 @@ export function createFrostedFloorMaterial(
   const f = p.fract().sub(0.5).abs();
   const toJoint = float(0.5).sub(max(f.x, f.y)).mul(tile); // metres to the nearest joint
   const aa = max(fwidth(toJoint), 1e-4);
-  const joint = oneMinus(smoothstep(float(jointHalf).sub(aa), float(jointHalf).add(aa), toJoint));
+  // Fade the joints out where a pixel covers more floor than a joint is wide (no moiré towards the horizon).
+  const resolvable = oneMinus(smoothstep(jointHalf * 2, jointHalf * 8, aa));
+  const joint = oneMinus(smoothstep(float(jointHalf).sub(aa), float(jointHalf).add(aa), toJoint)).mul(
+    resolvable,
+  );
   // Each tile catches light a little differently, and glows softly in the middle (light through frost).
   const tileTone = hash(cell.x.add(cell.y.mul(57.0)))
     .mul(0.06)

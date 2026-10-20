@@ -34,6 +34,31 @@ export function fusedBubbleField(
   };
 }
 
+/**
+ * Bounding spheres for a built fused surface (e.g. for the transmission overlap sensor): each bubble grows
+ * just enough to cover the surface points nearest to it, so the blended seams are covered too.
+ */
+export function fusedBubbleSilhouette(bubbles: readonly Bubble[], surface: FusedBubbleSurface): Bubble[] {
+  const out = bubbles.map((b) => ({ ...b }));
+  const p = surface.positions;
+  for (let i = 0; i < p.length; i += 3) {
+    const x = p[i] ?? 0;
+    const y = p[i + 1] ?? 0;
+    const z = p[i + 2] ?? 0;
+    let owner: Bubble | undefined;
+    let best = Number.POSITIVE_INFINITY;
+    for (const b of out) {
+      const gap = Math.hypot(x - b.x, y - b.y, z - b.z) - b.r;
+      if (gap < best) {
+        best = gap;
+        owner = b;
+      }
+    }
+    if (owner && best > 0) owner.r += best;
+  }
+  return out;
+}
+
 export interface FusedBubbleSurface {
   positions: Float32Array;
   normals: Float32Array;

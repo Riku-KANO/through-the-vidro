@@ -87,7 +87,7 @@ export const GLASS_SPECS: Readonly<Record<GlassKind, Readonly<GlassSpec>>> = {
     thickness: 0.22,
     body: 'solid',
   },
-  // 内部に細かな泡: clear solid glass; the bubbles are separate small shapes inside (inner-bubbles.ts).
+  // 内部に細かな泡: clear solid glass; the bubbles are separate small shapes inside (scatterInnerBubbles + innerBubbleMesh).
   bubble: {
     roughness: CLEAR_ROUGHNESS,
     transmission: GLASS_TRANSMISSION,

@@ -27,37 +27,51 @@ export interface ViewSpec {
 export interface TransmissionOverlap {
   front: string;
   back: string;
-  /** How far the silhouettes overlap, in tangent-plane units (≈ radians for small angles). */
+  /** How far the silhouettes overlap, radians of view angle. */
   amount: number;
 }
 
-interface Projected {
-  u: number;
-  v: number;
-  rho: number;
-  depth: number;
+interface Cone {
+  /** Unit direction from the eye to the sphere's centre, view space. */
+  dx: number;
+  dy: number;
+  dz: number;
+  /** Angular radius of the silhouette, radians (π when the eye is inside the sphere). */
+  alpha: number;
+  distance: number;
 }
 
-function project(s: GlassSphere, view: ViewSpec): Projected | null {
+/** The sphere's silhouette as a cone from the eye, or null when it is entirely outside the view. */
+function project(s: GlassSphere, view: ViewSpec): Cone | null {
   const m = view.viewMatrix;
   const vx = (m[0] ?? 0) * s.x + (m[4] ?? 0) * s.y + (m[8] ?? 0) * s.z + (m[12] ?? 0);
   const vy = (m[1] ?? 0) * s.x + (m[5] ?? 0) * s.y + (m[9] ?? 0) * s.z + (m[13] ?? 0);
   const vz = (m[2] ?? 0) * s.x + (m[6] ?? 0) * s.y + (m[10] ?? 0) * s.z + (m[14] ?? 0);
+  const distance = Math.hypot(vx, vy, vz);
+  if (distance <= s.r) return { dx: 0, dy: 0, dz: -1, alpha: Math.PI, distance }; // the eye is inside it
+
+  // Frustum test in view space (symmetric frustum through the eye).
   const depth = -vz;
-  if (depth + s.r <= view.near) return null; // entirely behind the camera
-  if (depth <= s.r) return { u: 0, v: 0, rho: Number.POSITIVE_INFINITY, depth }; // camera inside it
-  const u = vx / depth;
-  const v = vy / depth;
-  const rho = s.r / Math.sqrt(depth * depth - s.r * s.r);
-  const tanY = view.tanHalfFovY;
-  const tanX = tanY * view.aspect;
-  if (Math.abs(u) - rho > tanX || Math.abs(v) - rho > tanY) return null; // off screen
-  return { u, v, rho, depth };
+  if (depth + s.r < view.near) return null;
+  const hy = Math.atan(view.tanHalfFovY);
+  const hx = Math.atan(view.tanHalfFovY * view.aspect);
+  const outside = (lateral: number, half: number) =>
+    Math.abs(lateral) * Math.cos(half) - depth * Math.sin(half) > s.r;
+  if (outside(vx, hx) || outside(vy, hy)) return null;
+
+  return {
+    dx: vx / distance,
+    dy: vy / distance,
+    dz: vz / distance,
+    alpha: Math.asin(s.r / distance),
+    distance,
+  };
 }
 
 /**
- * Pairs of transmissive objects whose silhouettes overlap on screen. `margin` asks for an extra gap
- * between silhouettes (tangent-plane units) so small camera moves stay safe.
+ * Pairs of transmissive objects whose silhouettes overlap on screen. Each bounding sphere is seen as a
+ * cone from the eye; two cones overlap when the angle between them is less than the sum of their radii.
+ * `margin` asks for an extra gap between silhouettes (radians) so small camera moves stay safe.
  */
 export function findTransmissionOverlaps(
   objects: readonly GlassSilhouette[],
@@ -66,7 +80,7 @@ export function findTransmissionOverlaps(
 ): TransmissionOverlap[] {
   const margin = options.margin ?? 0;
   const projected = objects.map((o) =>
-    o.spheres.map((s) => project(s, view)).filter((p): p is Projected => p !== null),
+    o.spheres.map((s) => project(s, view)).filter((p): p is Cone => p !== null),
   );
   const out: TransmissionOverlap[] = [];
   for (let i = 0; i < objects.length; i++) {
@@ -74,9 +88,10 @@ export function findTransmissionOverlaps(
       let best: { amount: number; iFront: boolean } | null = null;
       for (const a of projected[i] ?? []) {
         for (const b of projected[j] ?? []) {
-          const amount = a.rho + b.rho + margin - Math.hypot(a.u - b.u, a.v - b.v);
+          const cos = Math.min(1, Math.max(-1, a.dx * b.dx + a.dy * b.dy + a.dz * b.dz));
+          const amount = a.alpha + b.alpha + margin - Math.acos(cos);
           if (amount > 0 && (best === null || amount > best.amount)) {
-            best = { amount, iFront: a.depth <= b.depth };
+            best = { amount, iFront: a.distance <= b.distance };
           }
         }
       }

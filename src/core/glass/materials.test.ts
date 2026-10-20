@@ -6,6 +6,19 @@ import { createFrostedFloorMaterial, createGlass } from './materials';
 
 const mid = QUALITY_PRESETS.mid;
 
+/** Whether a node graph samples the given texture. */
+function usesTexture(node: THREE.Node | null, map: THREE.Texture, seen = new Set<THREE.Node>()): boolean {
+  if (!node || seen.has(node)) return false;
+  seen.add(node);
+  if (
+    (node as { isTextureNode?: boolean; value?: unknown }).isTextureNode &&
+    (node as { value?: unknown }).value === map
+  )
+    return true;
+  for (const child of node.getChildren()) if (usesTexture(child, map, seen)) return true;
+  return false;
+}
+
 function physical(material: THREE.Material): THREE.MeshPhysicalNodeMaterial {
   expect(material).toBeInstanceOf(THREE.MeshPhysicalNodeMaterial);
   return material as THREE.MeshPhysicalNodeMaterial;
@@ -45,10 +58,10 @@ describe('near glass materials', () => {
     expect(jade.g).toBeGreaterThan(jade.r);
   });
 
-  it('varies thickness across the surface so absorption shows thick and thin places', () => {
-    for (const kind of ['clear', 'amber', 'bubble'] as const) {
-      expect(physical(createGlass(kind, mid).material).thicknessNode, kind).not.toBeNull();
-    }
+  it("takes the thickness from an asset's thickness map when one is given (glTF thickness texture)", () => {
+    const map = new THREE.Texture();
+    const m = physical(createGlass('amber', mid, { thicknessMap: map }).material);
+    expect(usesTexture(m.thicknessNode, map)).toBe(true);
   });
 
   it('turns dispersion and thin-film on only where the preset allows', () => {
@@ -61,6 +74,15 @@ describe('near glass materials', () => {
     expect(dropMid.iridescence).toBe(0);
     expect(dropMid.emissiveNode, 'cheap sheen stands in for thin-film').not.toBeNull();
     expect(dropHigh.iridescence).toBeGreaterThan(0);
+  });
+
+  it('does not make ordinary iridescent glass glow: its rainbow stays in the reflection', () => {
+    for (const preset of [QUALITY_PRESETS.low, mid, QUALITY_PRESETS.high]) {
+      for (const placement of ['near', 'far'] as const) {
+        const m = createGlass('iridescent', preset, { role: 'scenery', placement }).material;
+        expect((m as THREE.MeshStandardNodeMaterial).emissiveNode, placement).toBeNull();
+      }
+    }
   });
 
   it('lets light drops glow on every preset (アセットリスト: 光の雫 = 虹色ガラス＋発光)', () => {

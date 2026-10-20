@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildFusedBubbleSurface, fusedBubbleField, scatterInnerBubbles } from './fused-bubbles';
+import {
+  buildFusedBubbleSurface,
+  fusedBubbleField,
+  fusedBubbleSilhouette,
+  scatterInnerBubbles,
+} from './fused-bubbles';
 
 function vertex(positions: Float32Array, i: number): [number, number, number] {
   return [positions[i * 3] ?? 0, positions[i * 3 + 1] ?? 0, positions[i * 3 + 2] ?? 0];
@@ -45,6 +50,26 @@ describe('fused bubble surface (泡が溶け合った形)', () => {
     const blended = fusedBubbleField([a, b], 0.4);
     expect(blended(0, seamRadius, 0)).toBeLessThan(0);
     expect(fusedBubbleField([a, b], 0)(0, seamRadius, 0)).toBeCloseTo(0, 6);
+  });
+
+  it('gives bounding spheres that cover the blended surface, seams included', () => {
+    const bubbles = [
+      { x: 0, y: 1, z: 0, r: 1.6 },
+      { x: 1.9, y: 0.6, z: 0.3, r: 1.0 },
+      { x: -1.4, y: 2.4, z: -0.4, r: 0.9 },
+    ];
+    const blend = 0.9;
+    const surface = buildFusedBubbleSurface(bubbles, { blend, columns: 64, rows: 48 });
+    const cover = fusedBubbleSilhouette(bubbles, surface);
+    for (let i = 0; i < surface.positions.length / 3; i++) {
+      const [x, y, z] = vertex(surface.positions, i);
+      const inside = cover.some((s) => Math.hypot(x - s.x, y - s.y, z - s.z) <= s.r + 1e-5);
+      expect(inside).toBe(true);
+    }
+    // ...and stay tight: no bubble grows by more than the blend.
+    cover.forEach((s, i) => {
+      expect(s.r - (bubbles[i]?.r ?? 0)).toBeLessThanOrEqual(blend);
+    });
   });
 
   it('is deterministic', () => {

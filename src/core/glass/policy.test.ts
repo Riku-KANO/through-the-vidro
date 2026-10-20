@@ -25,6 +25,13 @@ describe('glass render path', () => {
     ).toBe('transmission');
   });
 
+  it('keeps glass placed behind other glass on the cheap path even on high (対策1)', () => {
+    const behind = { placement: 'behind-glass', role: 'scenery' } as const;
+    for (const level of levels) {
+      expect(resolveGlassFeatures('clear', behind, QUALITY_PRESETS[level]).path, level).toBe('cheap');
+    }
+  });
+
   it('keeps milky glass opaque so other glass can see it through their backdrop', () => {
     for (const level of levels) {
       for (const placement of ['near', 'far'] as const) {

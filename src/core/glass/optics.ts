@@ -27,3 +27,21 @@ export function beerLambert(color: Rgb, distance: number, pathLength: number): [
   const k = pathLength / distance;
   return [color[0] ** k, color[1] ** k, color[2] ** k];
 }
+
+/**
+ * Lower bounds on |cos| of the view angle used for the path length (仮). They keep the shell's path finite
+ * at the silhouette and the solid's rim from going fully clear.
+ */
+export const SHELL_MIN_COS = 0.12;
+export const SOLID_MIN_COS = 0.08;
+
+/**
+ * How much longer (or shorter) the light path through the glass is than its face-on thickness, for a view
+ * at |cos| = cosTheta to the surface. A shell wall is crossed edge-on at its silhouette, so the path grows
+ * there (and the green of 断面の縁 shows); the chord through a solid body shrinks towards its rim.
+ * The TSL material uses the same law and bounds.
+ */
+export function viewPathFactor(body: 'shell' | 'solid', cosTheta: number): number {
+  const c = Math.min(1, Math.abs(cosTheta));
+  return body === 'shell' ? 1 / Math.max(c, SHELL_MIN_COS) : Math.max(c, SOLID_MIN_COS);
+}
