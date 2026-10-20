@@ -67,3 +67,26 @@ export function checkBudget(counters: RenderCounters): BudgetViolation[] {
   }
   return out;
 }
+
+/** GPU time statistics (timestamp queries). One sample per resolved reading, not per frame. */
+export interface GpuStats {
+  samples: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+}
+
+export function summarizeGpuTimes(gpuMs: readonly number[]): GpuStats | null {
+  const s = summarizeFrameTimes(gpuMs);
+  if (s.frames === 0) return null;
+  return {
+    samples: s.frames,
+    avgMs: s.avgMs,
+    p50Ms: s.p50Ms,
+    p95Ms: s.p95Ms,
+    p99Ms: s.p99Ms,
+    maxMs: s.maxMs,
+  };
+}

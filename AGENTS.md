@@ -25,9 +25,15 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 速い検査（型・lint・単体・ビルド） | `scripts/check.sh` |
 | 全検査（＋ブラウザセンサー） | `scripts/check.sh --full`、対象を絞るなら `SCENES=a,b scripts/check.sh --full` |
 | 計測結果の表 | `node scripts/bench-report.mjs` |
+| URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`） |
+| 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
 | 整形 | `pnpm format` |
 
-URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `webgl=1`（WebGL2経路の強制） `stats=1`。
+URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
+`dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
+`gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `debug=1`（`window.__vidroDebug` に renderer と setScale を出す）。
+`quality=auto` と `bench` を一緒に使うと計測の途中でプリセットが変わるので、計測は固定のプリセットで行う。
+シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
 ## センサー（ループが自分の仕事を確かめる手段）
 
@@ -38,8 +44,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `we
 - **見た目の確認**: スクリーンショットは必ず Read で開いて目で見る。数値が緑でも絵が設計の柱に反していれば未完了。
 - **シーン固有の検証**: シーンは `window.__vidro.sceneProbe` に状態（例: 覗いているか、実体化半径、プレイヤー位置）を公開できる。
   入力を送って状態を確かめるテストは `tests/e2e/<slice-id>.spec.ts` に書く。
-- **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。複数のセッションが同時に計測すると GPU を取り合うため、fps の比較は同時に走らせない。
-- **fpsの扱い**: ヘッドレスのfpsは参考値。ゲートの判定は実機（ヘッドあり、`HEADED=1 pnpm e2e`）とスライスS-07の計測で行う。
+- **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
+- **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
 
@@ -78,3 +84,15 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high` `we
 - トーンマッピングは AgX。モーションブラーは使わない。黒い画面での切り替えはしない。
 - 数値は設計書の値をそのまま定数にし、出典の節名をコメントに書く（例: 実体化半径4m、覗く遷移0.25秒、歩行1.4m/s）。
 - 単体テストは振る舞いを書く。実装の細部を固定するテストは書かない。
+- **画面と違う大きさの RenderTarget に透過（transmission）の材質を描かない。** WebGPU 経路（r186）では、そのフレームで背景用のテクスチャが
+  途中で破棄され、「Destroyed texture used in a submit」が毎フレーム出て描画が捨てられる（WebGL2 では出ない）。覗くパスの裏の層や
+  ホームの玉の中の縮図は、iridescence・透明度・発光など透過以外で表現し、玉の屈折は `texture(rt, screenUV + 屈折オフセット)` の自前合成で描く。
+  画面と同じ大きさの描画先（`pass()` による仕上げのパスなど）に透過を描くのは問題ない。（S-05 で発見、2026-10-21）
+- **影のカメラの layers を明示する。** 影マップは1フレームに1回、最初にそれを使う描画で作られる。影のカメラが既定（layer 0 だけ）のままだと、
+  three はその時点のカメラの layers を写すので、覗くパス（共通＋裏）が先に走ると表の層の物が影を落とさなくなる。
+  `light.shadow.camera.layers.enable(<表の層>)` のように、影を落とす層を必ず指定する。（S-05 のレビューで発見）
+- **GPU のタイムスタンプを GPU 時間として信じない。** three の `resolveTimestampsAsync` は描画パスごとの時間の合計で、
+  Apple/Metal では仕上げのパスが多いと重なって約10倍に膨らむ（S-05: 実際 約1ms のフレームが 11〜22ms と出た）。
+  性能の判断は垂直同期を外したフレーム時間（`scripts/bench-headed.mjs`）で行う。実行時の制御（`src/core/perf/governor.ts`）は、
+  Apple/Metal では GPU 時間を判断に使わず、それ以外でも GPU 時間が平均フレーム時間を超えたら信用しない。そのとき動的解像度は止まり、
+  品質の判定と検証はフレーム時間で行う（垂直同期の下ではフレーム時間で上限と過負荷を見分けられないため、解像度は動かさない）。

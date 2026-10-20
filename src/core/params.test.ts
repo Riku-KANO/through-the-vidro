@@ -32,3 +32,34 @@ describe('parseParams', () => {
     expect(parseParams('?quality=ultra').quality).toBe('mid');
   });
 });
+
+describe('parseParams (S-05 perf switches)', () => {
+  it('starts auto quality at mid and measures 10 s by default', () => {
+    const p = parseParams('?scene=stress&quality=auto');
+    expect(p.autoQuality).toBe(true);
+    expect(p.quality).toBe('mid');
+    expect(p.autoWindowSeconds).toBe(10);
+  });
+
+  it('turns dynamic resolution on by default but off while benchmarking a fixed preset', () => {
+    expect(parseParams('?scene=a').dynres).toBe(true);
+    expect(parseParams('?scene=a&bench=5').dynres).toBe(false);
+    expect(parseParams('?scene=a&bench=5&dynres=1').dynres).toBe(true);
+    expect(parseParams('?scene=a&dynres=0').dynres).toBe(false);
+  });
+
+  it('lets auto quality start from another preset, and tests pin the recommendation', () => {
+    expect(parseParams('?quality=auto&autoFrom=low&autoForce=high').autoForce).toBe('high');
+    expect(parseParams('?quality=auto&autoForce=ultra').autoForce).toBeNull();
+    expect(parseParams('?quality=auto&autoFrom=low').quality).toBe('low');
+    expect(parseParams('?quality=high&autoFrom=low').quality).toBe('high');
+  });
+
+  it('reads test hooks for the auto window and the dynamic-resolution target', () => {
+    const p = parseParams('?autoWindow=2&dynresTarget=1&gpuTrust=1');
+    expect(p.autoWindowSeconds).toBe(2);
+    expect(p.dynresTargetMs).toBe(1);
+    expect(p.gpuTrust).toBe(true);
+    expect(parseParams('').gpuTrust).toBe(false);
+  });
+});

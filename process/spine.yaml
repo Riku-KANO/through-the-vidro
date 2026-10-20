@@ -122,7 +122,7 @@ slices:
 
   - id: S-05
     title: 性能 — 負荷シーン、品質の自動選択、動的解像度、実機計測
-    status: todo
+    status: reviewed
     depends: [S-00]
     parallel: true
     owner: 親セッション
@@ -132,10 +132,17 @@ slices:
       - 技術設計 > 開発用ツール（性能表示）
     paths:
       - src/core/perf/**
+      - src/core/renderer.ts
+      - src/core/params.ts
+      - src/core/params.test.ts
+      - src/core/bench.ts
+      - src/core/bench.test.ts
+      - src/core/VERSION
       - src/dev/**
       - src/main.ts
       - src/scenes/stress.scene.ts
       - scripts/bench-*.mjs
+      - scripts/lib/**
       - tests/e2e/S-05-*.spec.ts
       - process/slices/S-05.md
       - src/core/CHANGELOG.md
@@ -172,3 +179,62 @@ slices:
     acceptance:
       - 推奨環境に近い内蔵GPUのノートPC（Apple M1、Intel Iris Xe 相当）で、負荷シーンと試作部屋が中品質60fps
       - 発案者が試作部屋を遊び、覗く操作が気持ちいいと判断する。だめなら何が足りないかを記録して設計に戻す
+
+  # M0 の残りを待つ間に並べて進めるスライス（2026-10-21 追加）
+  - id: S-08
+    title: GPU のフレーム時間を正しく測る（最初のパスの開始から最後のパスの終わりまで）
+    status: todo
+    depends: [S-05]
+    requirements:
+      - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
+    paths:
+      - src/core/perf/**
+      - src/main.ts
+      - tests/e2e/S-08-*.spec.ts
+      - process/slices/S-08.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - WebGPU で、フレームの最初と最後に自前のタイムスタンプを置き、その差を GPU のフレーム時間として取れる。three の描画パスの合計とは別に持つ
+      - 静かな状態で、垂直同期なしのフレーム時間と比べて妥当（同程度以下）であることを、Apple の機械で確かめる
+      - 妥当なら Apple でも動的解像度を GPU 時間で動かせるようにする。妥当でなければ理由を記録して止める
+
+  - id: S-09
+    title: 音の基礎 — 音階、ガラスの音（合成）、ビードロの「ぽぺん」、立体音響と残響
+    status: todo
+    depends: [S-00]
+    parallel: true
+    requirements:
+      - サウンドデザイン > 音階の統一
+      - サウンドデザイン > ガラスの音
+      - サウンドデザイン > 環境音（立体音響、空間ごとの残響）
+      - サウンドデザイン > 制作方法（シンセサイザーで補う、音量の4系統）
+      - UI/UX設計 > 画面ごとの設計（読み込み: 操作があるまで音を鳴らせない）
+    paths:
+      - src/core/audio/**
+      - src/scenes/audio-lab.scene.ts
+      - tests/e2e/S-09-*.spec.ts
+      - process/slices/S-09.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - D メジャー・ペンタトニック（D E F# A B）の音程の計算と、大きさから音程を選ぶ規則（大きいほど低い、音階に揃える）が純粋関数として単体テストされている
+      - 音の基盤: 最初の操作で開始する AudioContext、全体/音楽/効果音/環境音の4系統の音量、HRTF の立体音響、空間ごとの残響（狭い工房は短く、ドームは長く。残響は合成で作る）
+      - ガラスの音を合成で作る: 触れる・叩く・玉が当たるの3段階の強さ × 大きさ。ガラスらしい非整数倍の倍音と減衰
+      - 手の玉の「ぽぺん」（長崎のビードロのような短い二音）を、覗く・置く・拾う・震えるの4種で鳴らせる
+      - audio-lab シーンで、大きさの違うガラスを鳴らし、音源が周りを回る立体音響を確かめられる
+      - センサー: OfflineAudioContext で音を書き出し、無音でないこと、基音が狙った音階の音から ±3% 以内であることを e2e で確かめる。両経路でエラーなし
+
+  - id: S-10
+    title: 透過の背景画像の解像度を品質プリセットに従わせる
+    status: todo
+    depends: [S-01, S-05]
+    requirements:
+      - 技術設計 > 品質プリセット（透過の背景画像 1/4・1/2・等倍）
+    paths:
+      - src/core/glass/**
+      - src/scenes/stress.scene.ts
+      - process/slices/S-10.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - r186 の透過の背景画像の解像度を下げる方法を調べ、品質プリセットの transmissionScale に従わせる（できなければ代わりの近似と理由を記録）
+      - 負荷シーンの実機ベンチ（QUIET=1）で品質ごとの差を測り、COST_FACTOR を較正し直す
+
