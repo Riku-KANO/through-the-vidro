@@ -9,8 +9,13 @@ function probeOf(heights: Heights): GroundProbe {
   return (x, z, fromY, depth) => {
     const h = heights(x, z);
     if (h === null) return null;
-    if (h >= fromY) return fromY;
-    return fromY - h <= depth ? h : null;
+    if (h >= fromY) return { y: fromY, ny: 1, fat: false };
+    if (fromY - h > depth) return null;
+    // Surface normal from the height field's slope.
+    const e = 1e-4;
+    const gx = ((heights(x + e, z) ?? h) - (heights(x - e, z) ?? h)) / (2 * e);
+    const gz = ((heights(x, z + e) ?? h) - (heights(x, z - e) ?? h)) / (2 * e);
+    return { y: h, ny: 1 / Math.hypot(1, gx, gz), fat: false };
   };
 }
 
@@ -81,6 +86,28 @@ describe('findLedges', () => {
     const ledges = findLedges(0, 0, 0, probeOf(drop));
     expect(ledges).toHaveLength(1);
     expect(ledges[0]?.distance).toBeCloseTo(0.4, 1);
+  });
+
+  it('treats a descent steeper than the climbable slope as an edge where it starts', () => {
+    const steep: Heights = (x) => (x > 0.4 ? -(x - 0.4) * Math.tan((50 * Math.PI) / 180) : 0);
+    const ledges = findLedges(0, 0, 0, probeOf(steep));
+    expect(ledges).toHaveLength(1);
+    expect(ledges[0]?.nx).toBeGreaterThan(0.95);
+    expect(ledges[0]?.distance).toBeCloseTo(0.4, 1);
+  });
+
+  it('lets you walk down slopes up to the climbable angle and stairs with short treads', () => {
+    const ramp38: Heights = (x) => -Math.max(0, x) * Math.tan((38 * Math.PI) / 180);
+    const stairs: Heights = (x) => -Math.max(0, Math.floor(x / 0.3)) * 0.2;
+    for (let x = -1; x < 2; x += 0.05) {
+      expect(findLedges(x, 0, ramp38(x, 0) ?? 0, probeOf(ramp38)), `38° at x=${x}`).toEqual([]);
+      expect(findLedges(x, 0, stairs(x, 0) ?? 0, probeOf(stairs)), `stairs at x=${x}`).toEqual([]);
+    }
+  });
+
+  it('does not pin a body that already stands on too steep a slope', () => {
+    const steep: Heights = (x) => -x * Math.tan((50 * Math.PI) / 180);
+    expect(findLedges(0, 0, 0, probeOf(steep))).toEqual([]);
   });
 
   it('does not hold an airborne body that is already past the edge', () => {

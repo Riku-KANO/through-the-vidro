@@ -218,6 +218,39 @@ describe('falling and footing (落下死はない、でも宙には浮かない)
     }
   });
 
+  it('a slope that can be walked down can be walked back up (no pits)', () => {
+    for (const deg of [30, 39, 45, 55]) {
+      const world = floorWorld();
+      const top = 1.2;
+      const angle = (deg * Math.PI) / 180;
+      const across = top / Math.tan(angle);
+      const t = 0.2;
+      // Platform over z in [-3, 0], ramp from its edge down toward +Z.
+      world.createCollider(R.ColliderDesc.cuboid(2, top / 2, 1.5).setTranslation(0, top / 2, -1.5));
+      world.createCollider(
+        R.ColliderDesc.cuboid(2, t / 2, top / Math.sin(angle) / 2)
+          .setRotation({ x: Math.sin(angle / 2), y: 0, z: 0, w: Math.cos(angle / 2) })
+          .setTranslation(0, top / 2 - (t / 2) * Math.cos(angle), across / 2 - (t / 2) * Math.sin(angle)),
+      );
+      const player = new PlayerController(world, { feet: { x: 0, y: top, z: -1.5 }, yaw: Math.PI });
+      run(player, world, forward, 4);
+      const descended = player.feet.y < top - 0.3;
+      player.yaw = 0;
+      run(player, world, forward, 5);
+      if (descended) expect(player.feet.y, `climb back ${deg}°`).toBeGreaterThan(top - 0.05);
+      expect(descended, `${deg}° walkable down`).toBe(deg <= 40);
+    }
+  });
+
+  it('footing that appears around the body does not throw the view up', () => {
+    const world = floorWorld();
+    const player = new PlayerController(world, { feet: { x: 0, y: 0, z: 0 } });
+    run(player, world, still, 0.5);
+    world.createCollider(R.ColliderDesc.cuboid(1, 1.25, 1).setTranslation(0, 1.25, 0));
+    const s = run(player, world, still, 1);
+    expect(Math.max(...s.map((p) => p.y))).toBeLessThan(0.36);
+  });
+
   it('a step that can be walked down can be walked back up (no pits)', () => {
     for (const h of [0.2, 0.3, 0.33, 0.4, 0.6]) {
       const world = floorWorld();

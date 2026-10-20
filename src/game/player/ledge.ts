@@ -1,22 +1,38 @@
-import { SPRINT_SPEED, STEP_HEIGHT } from './constants';
+import { MAX_SLOPE_DEG, SPRINT_SPEED, STEP_HEIGHT } from './constants';
 import type { PlanarVelocity } from './motion';
 
 /**
  * 足場の縁ではやわらかく止まる (コアメカニクス > 基本の動作: 落下死はない).
  *
- * The ground around the body is sampled on a ring of directions. Walking outward, a drop larger than a
- * step (or no ground at all) marks an edge. Each edge becomes a soft wall: the speed toward it is
- * limited in proportion to the remaining distance, so the body glides to rest a little inside the edge
- * and keeps any motion along it. Pure: the world is read only through `GroundProbe`.
+ * The ground around the body is sampled on a ring of directions. Walking outward, ground the body could not
+ * climb back up from marks an edge: a drop larger than a step, no ground at all, or a descent steeper than the
+ * walkable slope. Each edge becomes a soft wall: the speed toward it is limited in proportion to the remaining
+ * distance, so the body glides to rest a little inside the edge and keeps any motion along it.
+ * Pure: the world is read only through `GroundProbe`.
  */
 
+/** A surface found below a probe point. */
+export interface GroundSample {
+  /** Height of the surface; the probe's start height when it started inside something solid (a wall). */
+  y: number;
+  /** Up component of the surface normal: 1 on flat ground. */
+  ny: number;
+  /** Found only by the probe's sideways reach (a seam the plain ray fell through). */
+  fat: boolean;
+}
+
 /**
- * Looks straight down from (x, fromY, z) for at most `depth`. Returns the height of the first surface,
- * `fromY` itself when the start point is inside something solid (a wall), or null when nothing is hit.
- * A probe may be fat (a small sphere cast): it then also finds ground up to `probeRadius` to the side,
- * which bridges seams between pieces of floor; findLedges corrects the edge distance for it.
+ * Looks straight down from (x, fromY, z) for at most `depth`; null when nothing is there.
+ * With `fat`, the probe may also reach `probeRadius` sideways (a small sphere cast where the ray misses),
+ * which bridges seams between floor pieces. Without it, it is a plain ray: exact, used to place an edge.
  */
-export type GroundProbe = (x: number, z: number, fromY: number, depth: number) => number | null;
+export type GroundProbe = (
+  x: number,
+  z: number,
+  fromY: number,
+  depth: number,
+  fat: boolean,
+) => GroundSample | null;
 
 export interface LedgeOptions {
   /** Edges are sensed this far from the body centre; slowing starts inside it. */
@@ -25,7 +41,9 @@ export interface LedgeOptions {
   margin: number;
   /** A drop between neighbouring samples larger than this is an edge (smaller ones are stepped down). */
   stepDown: number;
-  /** Sideways reach of the probe (0 for a ray). */
+  /** Ground that slopes down more steeply than this (degrees) cannot be climbed back: an edge. */
+  maxSlopeDeg: number;
+  /** Sideways reach of the fat probe (0 for a ray); the march looks this much further. */
   probeRadius: number;
   /** Samples start this high above the last ground, so climbable steps read as ground and not as walls. */
   probeUp: number;
@@ -43,11 +61,12 @@ export const LEDGE_DEFAULTS: Readonly<LedgeOptions> = Object.freeze({
   margin: 0.3,
   // Only drops that can also be climbed back up count as steps (no pits you can walk into but not out of).
   stepDown: STEP_HEIGHT + 0.02,
+  maxSlopeDeg: MAX_SLOPE_DEG,
   probeRadius: 0,
   probeUp: STEP_HEIGHT + 0.1,
   directions: 16,
   marchSteps: 4,
-  refineSteps: 6,
+  refineSteps: 5,
   maxSpeed: SPRINT_SPEED,
   pushBack: 0.15,
 });
@@ -70,38 +89,65 @@ export function findLedges(
   // A fat probe still finds ground probeRadius past the real edge, so look that much further.
   const reach = senseRadius + probeRadius;
   const depth = probeUp + stepDown;
+  const cosMax = Math.cos((opts.maxSlopeDeg * Math.PI) / 180);
+  const centre = probe(x, z, groundY + probeUp, depth, true);
   // Already over the void (airborne past an edge): nothing to hold on to.
-  if (probe(x, z, groundY + probeUp, depth) === null) return [];
+  if (centre === null) return [];
+  // Already on ground too steep to climb (slid onto it): steep ground ahead must not pin the body there.
+  const watchSteep = centre.ny >= cosMax;
+  /** Steeper than walkable and going down from `refH`. Fat samples (seams) say nothing about slope. */
+  const steepDown = (s: GroundSample, refH: number) =>
+    watchSteep && !s.fat && s.ny < cosMax && s.y < refH - 1e-3;
 
   const edgeAt: (number | null)[] = [];
   for (let i = 0; i < directions; i++) {
     const a = (2 * Math.PI * i) / directions;
     const dx = Math.cos(a);
     const dz = Math.sin(a);
-    let prevD = 0;
+    // Last sample that a plain ray found walkable: the inner end of the bracket around an edge.
+    let goodD = 0;
+    let goodH = groundY;
     let prevH = groundY;
-    let edge: number | null = null;
+    let firstSteepD = 0;
+    let steepRun = 0;
+    let outer: number | null = null;
     for (let j = 1; j <= marchSteps; j++) {
       const d = (reach * j) / marchSteps;
       const from = prevH + probeUp;
-      const h = probe(x + dx * d, z + dz * d, from, depth);
-      if (h !== null && h >= from - 1e-6) break; // a wall: the character controller handles it
-      if (h !== null) {
-        prevD = d;
-        prevH = h;
+      const s = probe(x + dx * d, z + dz * d, from, depth, true);
+      if (s !== null && s.y >= from - 1e-6) break; // a wall: the character controller handles it
+      if (s !== null && !steepDown(s, prevH)) {
+        if (!s.fat) {
+          goodD = d;
+          goodH = s.y;
+        }
+        prevH = s.y;
+        steepRun = 0;
         continue;
       }
-      let lo = prevD;
-      let hi = d;
-      for (let k = 0; k < refineSteps; k++) {
-        const mid = (lo + hi) / 2;
-        if (probe(x + dx * mid, z + dz * mid, from, depth) === null) hi = mid;
-        else lo = mid;
+      if (s !== null) {
+        // Steep: one sample may be the rounded nosing of a step; two in a row is a slope.
+        if (steepRun++ === 0) firstSteepD = d;
+        prevH = s.y;
+        if (steepRun < 2) continue;
       }
-      edge = Math.max(0, (lo + hi) / 2 - probeRadius);
+      outer = steepRun > 0 ? firstSteepD : d;
       break;
     }
-    edgeAt.push(edge);
+    if (outer === null) {
+      edgeAt.push(null);
+      continue;
+    }
+    // Place the edge with plain rays: exact, and cheap next to the sphere.
+    let lo = goodD;
+    let hi = outer;
+    for (let k = 0; k < refineSteps; k++) {
+      const mid = (lo + hi) / 2;
+      const s = probe(x + dx * mid, z + dz * mid, goodH + probeUp, depth, false);
+      if (s !== null && !steepDown(s, goodH)) lo = mid;
+      else hi = mid;
+    }
+    edgeAt.push((lo + hi) / 2);
   }
 
   const ledges: Ledge[] = [];
