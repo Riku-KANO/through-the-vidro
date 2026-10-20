@@ -64,25 +64,26 @@ function walk(r: ReturnType<typeof room>, p: PlayerController, intent: PlayerInt
 describe('back-layer footing as Rapier colliders (技術設計 > 裏の層の実装 > 当たり判定)', () => {
   it('has one collider per segment, all off until a sphere overlaps them', () => {
     const r = room();
-    expect(r.footing.segments.length).toBe(7);
+    const count = Math.round((BRIDGE.max[2] - BRIDGE.min[2]) / FOOTING_SEGMENT);
+    expect(r.footing.segments.length).toBe(count);
     expect(r.footing.activeCount).toBe(0);
     const partial: Sphere = { center: PEDESTAL_ORB, radius: 1.6 };
     r.footing.sync([partial]);
     const expected = activeSegmentIds(r.footing.segments, [partial]);
     expect(expected.length).toBeGreaterThan(0);
-    expect(expected.length).toBeLessThan(7);
+    expect(expected.length).toBeLessThan(count);
     expect([...r.footing.activeIds]).toEqual(expected);
     expect(r.footing.activeCount).toBe(expected.length);
     r.footing.sync([fullSphere]);
-    expect(r.footing.activeCount).toBe(7);
+    expect(r.footing.activeCount).toBe(count);
     r.footing.sync([]);
     expect(r.footing.activeCount).toBe(0);
   });
 
   it('inside a sphere means inside the sphere, boundary included', () => {
-    expect(insideAnySphere([0, 1, 0], [{ center: [0, 0, 0], radius: 1 }])).toBe(true);
-    expect(insideAnySphere([0, 1.01, 0], [{ center: [0, 0, 0], radius: 1 }])).toBe(false);
-    expect(insideAnySphere([0, 0, 0], [])).toBe(false);
+    expect(insideAnySphere(0, 1, 0, [{ center: [0, 0, 0], radius: 1 }])).toBe(true);
+    expect(insideAnySphere(0, 1.01, 0, [{ center: [0, 0, 0], radius: 1 }])).toBe(false);
+    expect(insideAnySphere(0, 0, 0, [])).toBe(false);
   });
 });
 
@@ -143,7 +144,7 @@ describe('the one way (序章: 失敗のしようがない一本道)', () => {
     expect(s.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
     expect(p.feet.z).toBeLessThan(EDGE_Z - 0.2);
     for (const q of s) {
-      if (q.z < EDGE_Z) expect(insideAnySphere([q.x, q.y, q.z], [partial])).toBe(true);
+      if (q.z < EDGE_Z) expect(insideAnySphere(q.x, q.y, q.z, [partial])).toBe(true);
     }
     // Soft, like any edge.
     expect(s.some((q) => q.speed > 0.2 && q.speed < 1.1)).toBe(true);

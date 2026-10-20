@@ -28,7 +28,7 @@ export const WORKSHOP = {
   radius: 4.7,
   /** Radius of the skylight at the top. */
   oculus: 0.8,
-  /** Arched door toward -Z: half width, and height at its middle. */
+  /** Door toward -Z: half width at the floor (rounded to whole dome columns), and height. */
   door: { halfWidth: 0.85, height: 2.4 },
 } as const;
 /** Radius of the dome where it meets the floor. */
@@ -108,7 +108,10 @@ export function isSpawnName(value: unknown): value is SpawnName {
 }
 
 /** Unit vector the camera looks along for a yaw and pitch (three.js: 0 yaw looks down -Z). */
-export function lookDirection(yaw: number, pitch: number): Vec3 {
+export function lookDirection(yaw: number, pitch: number, out: [number, number, number] = [0, 0, 0]): Vec3 {
   const c = Math.cos(pitch);
-  return [-Math.sin(yaw) * c, Math.sin(pitch), -Math.cos(yaw) * c];
+  out[0] = -Math.sin(yaw) * c;
+  out[1] = Math.sin(pitch);
+  out[2] = -Math.cos(yaw) * c;
+  return out;
 }

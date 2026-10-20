@@ -53,10 +53,13 @@ describe('the dive into the prologue (トランジション設計 > ホーム �
   });
 
   it('stays inside the dome after the skylight (never through its glass)', () => {
-    for (let i = 0; i <= 400; i++) {
-      const u = 0.7 + (0.3 * i) / 400;
-      path.pose(u, pos, target);
-      if (pos.y > WORKSHOP_TOP) continue;
+    // the glass starts at the skylight's rim (above it the dome is open)
+    const rimY = WORKSHOP.sphereCenterY + Math.sqrt(WORKSHOP.radius ** 2 - WORKSHOP.oculus ** 2);
+    let below = false;
+    for (let i = 0; i <= 2000; i++) {
+      path.pose(i / 2000, pos, target);
+      below ||= pos.y < rimY;
+      if (!below) continue;
       const wallR = Math.sqrt(WORKSHOP.radius ** 2 - (pos.y - WORKSHOP.sphereCenterY) ** 2);
       expect(Math.hypot(pos.x, pos.z)).toBeLessThan(wallR - 0.3);
     }

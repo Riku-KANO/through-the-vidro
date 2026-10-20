@@ -263,6 +263,8 @@ export function buildRoomArt(
     // drawn once (like S-01's gallery). Nothing that moves casts a live shadow here (the vidro, the drop and
     // the materializing bridge are small or come and go), and a shadow map drawn every frame is a render
     // nested inside the main one, which trips three r186's WebGL2 timestamp pool (process/slices/S-06.md).
+    // Drawn once, with the layer state of that moment: only shared objects may cast (no sphere exists
+    // yet, so back objects would cast nothing and surface objects would keep casting after they vanish).
     const size = quality.dynamicShadowSize || 1024;
     sun.castShadow = true;
     sun.shadow.autoUpdate = false;
@@ -340,8 +342,9 @@ export function buildRoomArt(
         pts.push(new THREE.Vector3(...domePoint(from + ((to - from) * i) / 20, phi, 0.02)));
       tube(pts, 0.035);
     };
-    for (let i = 0; i < 8; i++) {
-      const phi = -Math.PI / 2 + Math.PI / 8 + (i * Math.PI) / 4;
+    // 12 meridians clear of the door: the glass itself is faint, the brass gives the dome its shape (ルール2)
+    for (let i = 0; i < 12; i++) {
+      const phi = -Math.PI / 2 + Math.PI / 12 + (i * Math.PI) / 6;
       meridian(phi, oculus, thetaFloor);
     }
     meridian(doorA, doorTop, thetaFloor);
@@ -384,7 +387,7 @@ export function buildRoomArt(
     bench.add(shelf);
     const pipe = mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.3, 8), brass);
     pipe.rotation.z = Math.PI / 2 - 0.06;
-    pipe.position.set(0.45, bh + 0.025, 0.22);
+    pipe.position.set(0.55, bh + 0.025, -0.24);
     bench.add(pipe);
     for (const c of bench.children) c.castShadow = true;
     bench.position.set(BENCH.center[0], 0, BENCH.center[2]);
@@ -613,7 +616,8 @@ export function buildRoomArt(
       new RoundedBoxGeometry(BRIDGE.max[0] - BRIDGE.min[0], 0.14, len + 0.3, 3, 0.04),
       keep(deckMaterial()),
     );
-    deck.position.set(0, -0.07, midZ);
+    // 3 mm under the shores' tops where it overlaps them (no z-fighting); the colliders stay at 0
+    deck.position.set(0, -0.073, midZ);
     deck.receiveShadow = true;
     put(deck, 'back');
     const rails: THREE.BufferGeometry[] = [];

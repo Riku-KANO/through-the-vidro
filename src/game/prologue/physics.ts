@@ -26,11 +26,11 @@ import { domeWall } from './shapes';
 const SLAB = 1;
 const ROUND = 0.05;
 
-/** True when `p` is inside (or on) one of the spheres. */
-export function insideAnySphere(p: Vec3, spheres: readonly Sphere[]): boolean {
+/** True when (x, y, z) is inside (or on) one of the spheres. */
+export function insideAnySphere(x: number, y: number, z: number, spheres: readonly Sphere[]): boolean {
   for (const s of spheres) {
     if (!(s.radius > 0)) continue;
-    if (Math.hypot(p[0] - s.center[0], p[1] - s.center[1], p[2] - s.center[2]) <= s.radius) return true;
+    if (Math.hypot(x - s.center[0], y - s.center[1], z - s.center[2]) <= s.radius) return true;
   }
   return false;
 }
@@ -164,7 +164,7 @@ export class BackFooting {
 
   /** PlayerController.allowGround: back footing is ground only inside a sphere. */
   readonly allowGround = (x: number, y: number, z: number, collider: RAPIER.Collider): boolean =>
-    !this.handles.has(collider.handle) || insideAnySphere([x, y, z], this.spheres);
+    !this.handles.has(collider.handle) || insideAnySphere(x, y, z, this.spheres);
 
   dispose(): void {
     for (const c of this.colliders.values()) this.world.removeCollider(c, false);

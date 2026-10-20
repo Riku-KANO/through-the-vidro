@@ -16,7 +16,7 @@ import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import type { Autopilot } from './autopilot';
 import { createDivePath } from './dive-path';
-import type { EventBus, PrologueEvent } from './events';
+import { EventBus, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
   BRIDGE,
@@ -33,7 +33,7 @@ import {
   SPAWNS,
   type SpawnName,
 } from './layout';
-import { addRoomColliders, BackFooting } from './physics';
+import { addRoomColliders, BackFooting, insideAnySphere } from './physics';
 import { buildRoomArt } from './room-art';
 import { type InteractTarget, PrologueSession, peekModifier, SHAKE_AMPLITUDE } from './session';
 import { pickTarget, type TargetCandidate } from './targets';
@@ -94,6 +94,9 @@ export interface RoomProbe {
   events: string[];
   lastAction: string | null;
   backPassFrames: number;
+  /** Render counters of the last frame (all passes). */
+  drawCalls: number;
+  triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   autoplay: { step: string; done: boolean } | null;
   layout: { edgeZ: number; farZ: number; pedestalOrb: Vec3; drop: Vec3 };
@@ -108,6 +111,8 @@ export interface PrologueRoom extends DiveWorld {
 /** 仮: how long the vidro glows after the light drop reaches it. */
 const DROP_ARRIVAL_GLOW_SECONDS = 0.9;
 const MAX_EVENTS = 40;
+/** 仮: how long the one-line controls hint stays while the mouse is free. */
+const HINT_SECONDS = 8;
 const STRINGS = {
   ja: {
     lock: 'クリックで視点を固定 ・ WASD 歩く ・ 右クリック 覗く ・ E 置く／拾う／調べる ・ Esc 解除',
@@ -138,8 +143,129 @@ function createPrompt(overlay: HTMLElement): HTMLElement {
   return el;
 }
 
-export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Promise<PrologueRoom> {
+/** What exists before the room is built: the host needs the camera and the probe at once. */
+interface Shell {
+  camera: THREE.PerspectiveCamera;
+  probe: RoomProbe;
+  events: EventBus<PrologueEvent>;
+}
+
+/** The built room: everything heavy (Rapier, the art, the pipelines). */
+interface BuiltRoom {
+  scene: THREE.Scene;
+  fogRange: { near: { value: number }; far: { value: number } };
+  warm(): void;
+  setPlaying(on: boolean): void;
+  update(dt: number, t: number): void;
+  render(): void;
+  resize(): void;
+  dispose(): void;
+}
+
+/**
+ * The room as a DiveWorld. Creating it is cheap; `prepare()` builds it (Rapier, art, pipelines), so the host
+ * can show its loading screen first and count the build into the loading (遷移のルール 2). Direct mode awaits
+ * `prepare()` itself.
+ */
+export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): PrologueRoom {
+  // S-04 home-dive's MINIATURE_FOV (the game camera while the home orb shows the town)
+  const miniatureFov = 44;
+  const camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.05, 420);
+  const s = SPAWNS[opts.spawn];
+  // until the body exists, the camera stands where the player will
+  camera.position.set(s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]);
+  const events = new EventBus<PrologueEvent>();
+  const probe: RoomProbe = {
+    ready: false,
+    playing: false,
+    time: 0,
+    position: { x: s.feet[0], y: s.feet[1], z: s.feet[2] },
+    grounded: false,
+    speed: 0,
+    eyeHeight: EYE_HEIGHT,
+    yaw: s.yaw,
+    pitch: s.pitch,
+    fov: FOV_DEFAULT,
+    locked: false,
+    peeking: false,
+    peekAmount: 0,
+    moveSpeed: 1,
+    orb: opts.orbStart,
+    pedestal: null,
+    handPresence: 0,
+    sphereRadius: 0,
+    bridgeColliders: 0,
+    bridgeSegments: splitFooting('bridge', BRIDGE, FOOTING_SEGMENT).length,
+    onBackFooting: false,
+    shaking: false,
+    target: null,
+    drop: 'waiting',
+    dropTaken: false,
+    dropMaterialized: false,
+    events: [],
+    lastAction: null,
+    backPassFrames: 0,
+    drawCalls: 0,
+    triangles: 0,
+    orbScreen: { x: 0, y: 0, r: 0, visible: false },
+    autoplay: opts.autopilot ? { step: '', done: false } : null,
+    layout: { edgeZ: EDGE_Z, farZ: FAR.maxZ, pedestalOrb: PEDESTAL_ORB, drop: DROP },
+  };
+  const dive = createDivePath();
+  const placeholder = new THREE.Scene();
+  let built: BuiltRoom | null = null;
+  let building: Promise<void> | null = null;
+  let disposed = false;
+  let playing = false;
+  return {
+    get scene() {
+      return built?.scene ?? placeholder;
+    },
+    camera,
+    pivot: dive.pivot,
+    miniatureFov,
+    standingFov: FOV_DEFAULT,
+    probe,
+    events,
+    pose(u, outPos, outTarget) {
+      dive.pose(u, outPos, outTarget);
+      if (!built) return;
+      // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
+      const away = Math.max(0, outPos.length() - 25);
+      built.fogRange.near.value = 18 + away;
+      built.fogRange.far.value = 150 + away * 3;
+    },
+    prepare() {
+      building ??= buildRoom(ctx, opts, { camera, probe, events }).then((b) => {
+        if (disposed) {
+          b.dispose();
+          return;
+        }
+        built = b;
+        b.setPlaying(playing);
+      });
+      return building;
+    },
+    warm: () => built?.warm(),
+    setPlaying(on) {
+      playing = on;
+      built?.setPlaying(on);
+    },
+    update: (dt, t) => built?.update(dt, t),
+    render: () => built?.render(),
+    resize: () => built?.resize(),
+    dispose() {
+      disposed = true;
+      built?.dispose();
+      built = null;
+      events.clear();
+    },
+  };
+}
+
+async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Promise<BuiltRoom> {
   const { renderer, canvas, overlay, quality } = ctx;
+  const { camera, probe, events } = shell;
   const R = await initPhysics();
   const world = createWorld();
   addRoomColliders(R, world);
@@ -151,7 +277,6 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
   const field = new LayerField();
   const art = buildRoomArt(renderer, quality, field);
   for (const m of field.membranes) art.scene.add(m);
-  const camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.05, 420);
   const pipeline = new PeekPipeline({
     renderer,
     scene: art.scene,
@@ -160,7 +285,6 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     peekScale: quality.peekScale,
     environment: art.environment,
   });
-  const dive = createDivePath();
 
   const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };
   const session = new PrologueSession({
@@ -193,45 +317,14 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
   }
 
-  const probe: RoomProbe = {
-    ready: false,
-    playing: false,
-    time: 0,
-    position: { x: 0, y: 0, z: 0 },
-    grounded: false,
-    speed: 0,
-    eyeHeight: EYE_HEIGHT,
-    yaw: 0,
-    pitch: 0,
-    fov: FOV_DEFAULT,
-    locked: false,
-    peeking: false,
-    peekAmount: 0,
-    moveSpeed: 1,
-    orb: session.orbPlace,
-    pedestal: null,
-    handPresence: 0,
-    sphereRadius: 0,
-    bridgeColliders: 0,
-    bridgeSegments: footing.segments.length,
-    onBackFooting: false,
-    shaking: false,
-    target: null,
-    drop: 'waiting',
-    dropTaken: false,
-    dropMaterialized: false,
-    events: [],
-    lastAction: null,
-    backPassFrames: 0,
-    orbScreen: { x: 0, y: 0, r: 0, visible: false },
-    autoplay: opts.autopilot ? { step: '', done: false } : null,
-    layout: { edgeZ: EDGE_Z, farZ: FAR.maxZ, pedestalOrb: PEDESTAL_ORB, drop: DROP },
-  };
+  probe.orb = session.orbPlace;
+  probe.bridgeSegments = footing.segments.length;
   const offEvents = session.events.on((e) => {
     const name = e.type === 'pickup' ? `pickup:${e.from}` : e.type === 'shake' ? `shake:${e.reason}` : e.type;
     probe.events.push(name);
     if (probe.events.length > MAX_EVENTS) probe.events.shift();
     if (e.type === 'dropTaken') arrivalGlow = DROP_ARRIVAL_GLOW_SECONDS;
+    events.emit(e);
   });
 
   let playing = false;
@@ -241,7 +334,14 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
   let arrivalGlow = 0;
   let target: TargetKind | null = null;
   let promptText = '';
+  let mainRadius = 0;
   const idle: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
+  const live: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
+  const peekInput = { wantPeek: false };
+  const peek = peekModifier(0);
+  const forward: [number, number, number] = [0, 0, -1];
+  /** Seconds the one-line controls hint has been up since the mouse was last free. */
+  let hintFor = 0;
   const eye: [number, number, number] = [0, 0, 0];
   const fieldSpheres: FieldSphere[] = Array.from({ length: 3 }, () => ({
     center: PEDESTAL_ORB,
@@ -274,23 +374,29 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     }
   };
 
+  /** The drop is real where it is drawn (the same as the session's rule, but also under the dev holds). */
+  const dropDrawn = (): boolean => insideAnySphere(DROP[0], DROP[1], DROP[2], fieldList);
+
   const chooseTarget = (): void => {
     candidates.length = 0;
     const place = session.orbPlace;
     if (place === 'bench') candidates.push({ target: 'bench', point: BENCH_ORB, reach: REACH });
     else candidates.push({ target: 'pedestal', point: PEDESTAL_ORB, reach: REACH });
-    if (session.dropState === 'waiting' && session.dropMaterialized())
+    if (session.dropState === 'waiting' && dropDrawn())
       candidates.push({ target: 'drop', point: DROP, reach: DROP_REACH });
     const e = player.eye;
     eye[0] = e.x;
     eye[1] = e.y;
     eye[2] = e.z;
-    target = pickTarget(eye, lookDirection(player.yaw, player.pitch), candidates, FACING_DEG);
+    target = pickTarget(eye, lookDirection(player.yaw, player.pitch, forward), candidates, FACING_DEG);
   };
 
   const updatePrompt = (): void => {
     let next = '';
-    if (playing && !input.locked && !opts.autopilot) next = text.lock;
+    // the controls hint shows only for a few seconds while the mouse is free (ゲーム中は常時表示なし), and
+    // never in the dev holds (clean screenshots)
+    const hint = !opts.autopilot && opts.peekHold === null && opts.growHold === null;
+    if (playing && !input.locked && hint && hintFor < HINT_SECONDS) next = text.lock;
     else if (playing && target === 'bench') next = text.take;
     else if (playing && target === 'drop') next = text.touch;
     else if (playing && target === 'pedestal')
@@ -308,6 +414,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     const shake = session.shake;
     const flash = shake * shake * 1.6 + (arrivalGlow / DROP_ARRIVAL_GLOW_SECONDS) * 1.4;
     let mainGlow = 0;
+    mainRadius = 0;
     fieldList.length = 0;
     for (let i = 0; i < spheres.length; i++) {
       const sp = spheres[i];
@@ -318,7 +425,10 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       f.center = sp.center;
       f.radius = held ? materializedRadius(m, MAIN_ORB_RADIUS) : sp.radius;
       f.glow = boundaryGlow(m) + (sp.kind === 'main' ? flash : 0);
-      if (sp.kind === 'main') mainGlow = f.glow;
+      if (sp.kind === 'main') {
+        mainGlow = f.glow;
+        mainRadius = f.radius;
+      }
       fieldList.push(f);
     }
     if (prewarm) {
@@ -385,8 +495,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     probe.orb = session.orbPlace;
     probe.pedestal = session.pedestal;
     probe.handPresence = session.handPresence;
-    const main = session.spheres().find((s) => s.kind === 'main');
-    probe.sphereRadius = main?.radius ?? 0;
+    probe.sphereRadius = mainRadius;
     probe.bridgeColliders = footing.activeCount;
     // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now
     feetAt[0] = f.x;
@@ -399,7 +508,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     probe.target = target;
     probe.drop = session.dropState;
     probe.dropTaken = session.dropState === 'taken';
-    probe.dropMaterialized = session.dropMaterialized();
+    probe.dropMaterialized = dropDrawn();
     probe.backPassFrames = pipeline.backPassFrames;
     orbScreenCircle(frame.center, HAND_ORB_RADIUS, camera.fov, camera.aspect, probe.orbScreen);
     probe.orbScreen.visible = frame.visible;
@@ -409,22 +518,9 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
     }
   };
 
-  const room: PrologueRoom = {
+  return {
     scene: art.scene,
-    camera,
-    pivot: dive.pivot,
-    miniatureFov: 44,
-    standingFov: FOV_DEFAULT,
-    probe,
-    events: session.events,
-    pose(u, outPos, outTarget) {
-      dive.pose(u, outPos, outTarget);
-      // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
-      const away = Math.max(0, outPos.length() - 25);
-      art.fogRange.near.value = 18 + away;
-      art.fogRange.far.value = 150 + away * 3;
-    },
-    prepare() {},
+    fogRange: art.fogRange,
     warm() {
       prewarm = true;
       stage();
@@ -436,6 +532,7 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       playing = on;
       input.suspended = !on || opts.autopilot !== null;
       if (on) {
+        hintFor = 0;
         art.fogRange.near.value = 18;
         art.fogRange.far.value = 150;
         // the dive ends exactly at the player's eye; from here the body owns the camera
@@ -452,7 +549,11 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       if (playing) {
         input.update(dt);
         const look = input.consumeLook();
-        intent = { move: input.move, sprint: input.sprint, lookYaw: look.yaw, lookPitch: look.pitch };
+        intent = live;
+        live.move = input.move;
+        live.sprint = input.sprint;
+        live.lookYaw = look.yaw;
+        live.lookPitch = look.pitch;
         wantPeek = input.peeking || opts.forcePeek;
         const pilot = opts.autopilot;
         if (pilot) {
@@ -474,11 +575,15 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
         for (const type of queue) handle(type);
       }
       queue.length = 0;
-      session.step(dt, { wantPeek });
+      peekInput.wantPeek = wantPeek;
+      session.step(dt, peekInput);
       arrivalGlow = Math.max(0, arrivalGlow - dt);
+      if (playing && !input.locked) hintFor += dt;
       const amount = opts.peekHold ?? session.peekAmount;
-      if (amount > 0) player.modifiers.set('peek', peekModifier(amount));
-      else player.modifiers.delete('peek');
+      if (amount > 0) {
+        peek.weight = amount;
+        player.modifiers.set('peek', peek);
+      } else player.modifiers.delete('peek');
       stage();
       world.step();
       if (playing) {
@@ -498,6 +603,9 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       frames++;
       if (frames >= 3) probe.ready = true;
       probe.backPassFrames = pipeline.backPassFrames;
+      // renderer.info is reset once per animation frame, so this is the whole frame so far
+      probe.drawCalls = renderer.info.render.drawCalls;
+      probe.triangles = renderer.info.render.triangles;
     },
     resize() {
       pipeline.resize();
@@ -517,5 +625,4 @@ export async function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): 
       renderer.shadowMap.enabled = shadowsBefore;
     },
   };
-  return room;
 }

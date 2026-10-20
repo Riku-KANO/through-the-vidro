@@ -15,7 +15,8 @@ export const title =
  *   (none)         the whole prologue: loading → home → dive → the workshop
  *   autoplay=1     the same, played by the script (S-04's home autoplay, then the in-room autopilot)
  *   direct=1       start in the workshop without the home; spawn=bench|path|dead-end|far
- *   bench=<s>      (sensor) direct at the dead end, the vidro in hand
+ *   bench=<s>      (sensor) direct at the dead end, the vidro in hand, peeking (the heaviest view; peek=free
+ *                  measures it at rest)
  *   peek=hold      keep peeking (the heaviest view, for measuring); peek=toggle: peek toggles per press
  *   peekHold=<0..1>, growHold=<0..1>   freeze the peek / a placed orb's growth (exact screenshots)
  * Publishes window.__vidro.sceneProbe.room (game/prologue/room.ts RoomProbe) next to the home/dive probe.
@@ -30,7 +31,8 @@ const unit = (v: string | null): number | null => {
  * Workaround (three r186, WebGL2): the timestamp query pool resets itself when it is full (1024 render
  * contexts) even in the middle of a nested render (a RenderPipeline pass, a shadow map), and the next
  * beginQuery then warns "a query is already active". main.ts only resolves the pool while it wants GPU
- * times, so here it is drained regularly from outside any render. Proposed for main.ts in S-06.md.
+ * times, so here it is drained regularly from outside any render. Proposed for main.ts in S-06.md;
+ * remove this once main.ts (S-08) resolves the pool itself.
  */
 const DRAIN_EVERY_FRAMES = 64;
 
@@ -54,11 +56,12 @@ const create: SceneFactory = async (ctx) => {
   const asked = params.get('spawn');
   const spawn: SpawnName = isSpawnName(asked) ? asked : bench ? 'dead-end' : 'bench';
   const growHold = direct ? unit(params.get('growHold')) : null;
-  const room = await createPrologueRoom(ctx, {
+  const peekParam = params.get('peek');
+  const room = createPrologueRoom(ctx, {
     spawn,
     orbStart: spawn === 'bench' && growHold === null ? 'bench' : 'hand',
-    peekMode: params.get('peek') === 'toggle' ? 'toggle' : 'hold',
-    forcePeek: params.get('peek') === 'hold',
+    peekMode: peekParam === 'toggle' ? 'toggle' : 'hold',
+    forcePeek: peekParam === 'hold' || (bench && peekParam === null),
     peekHold: direct ? unit(params.get('peekHold')) : null,
     growHold,
     autopilot: params.get('autoplay') === '1' ? new Autopilot() : null,
@@ -71,6 +74,7 @@ const create: SceneFactory = async (ctx) => {
     );
 
   window.__vidro.sceneProbe = { screen: 'game', room: room.probe };
+  await room.prepare();
   room.setPlaying(true);
   let first = true;
   const sandbox: SandboxScene = {

@@ -43,6 +43,8 @@ interface RoomProbe {
   dropTaken: boolean;
   events: string[];
   backPassFrames: number;
+  drawCalls: number;
+  triangles: number;
   autoplay: { step: string; done: boolean } | null;
   layout: {
     edgeZ: number;
@@ -68,6 +70,31 @@ function collectErrors(page: Page): string[] {
     if (m.type() === 'error' || m.type() === 'warning' || GPU_VALIDATION.test(text)) errors.push(text);
   });
   return errors;
+}
+
+const BUDGET = { drawCalls: 300, triangles: 1_500_000 };
+
+/** Mean luminance and share of near-black pixels of a PNG, decoded by the browser (as in S-04's e2e). */
+async function luminance(page: Page, png: Buffer): Promise<{ mean: number; dark: number }> {
+  return page.evaluate(async (b64) => {
+    const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+    const bmp = await createImageBitmap(blob);
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const g = c.getContext('2d');
+    if (!g) throw new Error('no 2d context');
+    g.drawImage(bmp, 0, 0);
+    const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+    let sum = 0;
+    let dark = 0;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4 * 5) {
+      const l = (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      sum += l;
+      if (l < 0.06) dark++;
+      n++;
+    }
+    return { mean: sum / n, dark: dark / n };
+  }, png.toString('base64'));
 }
 
 const room = (page: Page): Promise<RoomProbe> =>
@@ -176,8 +203,18 @@ for (const backend of backends) {
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(join(root, 'artifacts/S-06'), { recursive: true });
     const errors = collectErrors(page);
-    const snap = (name: string) => page.screenshot({ path: join(shotDir, `${name}.png`) });
+    // every shot is also checked for a black screen (黒い画面を使わない)
+    const shots: Record<string, { mean: number; dark: number }> = {};
+    const snap = async (name: string): Promise<void> => {
+      shots[name] = await luminance(page, await page.screenshot({ path: join(shotDir, `${name}.png`) }));
+    };
+    const navigated = Date.now();
     await page.goto(`/?scene=prologue-proto${webgl}`);
+
+    // the loading screen is up at once: the room is built inside the loading, not before it
+    await waitHome(page, 'true', 15_000);
+    const loadingShownMs = Date.now() - navigated;
+    await snap('loading');
 
     // 潜る: loading → home → dive, by the same clicks a player makes
     await waitHome(page, 'p.load.ready === true', 90_000);
@@ -213,6 +250,19 @@ for (const backend of backends) {
 
     // the one way: round the bench, out of the door, down to the broken edge
     await walkTo(page, 0.1, -3.6, 0.35);
+    // walking while peeking: really half the speed (0.7 m/s) and a 6° narrower view
+    await lookAt(page, [0, 1.4, -30]);
+    await page.mouse.down({ button: 'right' });
+    await waitRoom(page, 'r.peekAmount > 0.999');
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(1200);
+    const peekWalk = await room(page);
+    await page.keyboard.up('KeyW');
+    await page.mouse.up({ button: 'right' });
+    expect(peekWalk.speed).toBeGreaterThan(0.6);
+    expect(peekWalk.speed).toBeLessThan(0.8);
+    expect(peekWalk.fov).toBeCloseTo(64, 1);
+    await waitRoom(page, 'r.peekAmount === 0');
     await walkTo(page, 0, -11.5, 0.4);
     await lookAt(page, [0, 1.4, -30]);
     const push = await pushUntilStopped(page, 'KeyW');
@@ -251,6 +301,8 @@ for (const backend of backends) {
     expect(grown.time - t0).toBeLessThan(1.0);
     const full = await waitRoom(page, 'r.bridgeColliders === r.bridgeSegments && r.bridgeSegments > 0');
     expect(full.bridgeSegments).toBeGreaterThan(3);
+    await lookAt(page, [0, 0.7, farZ]);
+    await page.waitForTimeout(200);
     await snap('materialized');
 
     // 置いている間は覗けない: the right button only makes the placed orb tremble
@@ -262,6 +314,7 @@ for (const backend of backends) {
     expect((await room(page)).events).toContain('shake:peek');
 
     // 橋の上では拾えない: step sideways onto the bridge, still facing the pedestal, press E
+    await lookAt(page, pedestalOrb);
     await page.keyboard.down('KeyD');
     await waitRoom(page, `r.onBackFooting && r.position.z < ${edgeZ - 0.45}`, 8_000);
     await page.keyboard.up('KeyD');
@@ -289,7 +342,8 @@ for (const backend of backends) {
     await waitRoom(page, "r.target === 'drop'", 5_000);
     await page.keyboard.press('KeyE');
     await waitRoom(page, "r.drop === 'flying'", 3_000);
-    await page.waitForTimeout(350);
+    // the drop flies into the vidro on the pedestal: look where it goes
+    await lookAt(page, [pedestalOrb[0], pedestalOrb[1] + 0.4, pedestalOrb[2]]);
     await snap('drop-flying');
     const taken = await waitRoom(page, 'r.dropTaken === true', 5_000);
     expect(taken.events).toEqual(
@@ -301,10 +355,24 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     await snap('after');
 
+    // 罰がない (パズル設計 > 原則 3): back on solid ground the vidro comes back and the bridge goes away
+    await walkTo(page, 0, edgeZ + 0.5, 0.3);
+    await lookAt(page, pedestalOrb);
+    await waitRoom(page, "r.target === 'pedestal'", 5_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, "r.orb === 'hand'", 3_000);
+    const restored = await waitRoom(page, 'r.bridgeColliders === 0 && r.sphereRadius === 0', 3_000);
+    expect(restored.events).toContain('pickup:pedestal');
+    expect(restored.dropTaken).toBe(true);
+
     writeFileSync(
       join(root, `artifacts/S-06/run-${backend}.json`),
-      JSON.stringify({ backend, final: await room(page), errors }, null, 2),
+      JSON.stringify({ backend, loadingShownMs, shots, final: await room(page), errors }, null, 2),
     );
+    for (const [name, l] of Object.entries(shots)) {
+      expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
+      expect(l.mean, `mean luminance in ${name}`).toBeGreaterThan(0.12);
+    }
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -314,19 +382,69 @@ for (const backend of backends) {
     mkdirSync(shotDir, { recursive: true });
     const errors = collectErrors(page);
     // ?peekHold / ?growHold freeze the peek and a placed orb's growth, so the frame is exactly mid-way
-    const frames: [string, string][] = [
-      ['hold-peek-0.5', 'spawn=dead-end&peekHold=0.5'],
-      ['hold-peek-1.0', 'spawn=dead-end&peekHold=1'],
-      ['hold-grow-0.35', 'spawn=dead-end&growHold=0.35'],
-      ['hold-grow-1.0', 'spawn=dead-end&growHold=1'],
-      ['hold-far', 'spawn=far&growHold=1'],
+    const frames: [string, string, (r: RoomProbe) => void][] = [
+      [
+        'hold-peek-0.5',
+        'spawn=dead-end&peekHold=0.5',
+        (r) => {
+          expect(r.peekAmount).toBe(0.5);
+          expect(r.fov).toBeCloseTo(67, 1);
+        },
+      ],
+      ['hold-peek-1.0', 'spawn=dead-end&peekHold=1', (r) => expect(r.fov).toBeCloseTo(64, 1)],
+      [
+        'hold-grow-0.35',
+        'spawn=dead-end&growHold=0.35',
+        (r) => {
+          expect(r.sphereRadius).toBeGreaterThan(0.5);
+          expect(r.sphereRadius).toBeLessThan(3.5);
+        },
+      ],
+      [
+        'hold-grow-1.0',
+        'spawn=dead-end&growHold=1',
+        (r) => {
+          expect(r.sphereRadius).toBeCloseTo(4, 3);
+          expect(r.bridgeColliders).toBe(r.bridgeSegments);
+        },
+      ],
+      ['hold-far', 'spawn=far&growHold=1', (r) => expect(r.position.z).toBeLessThan(r.layout.farZ)],
     ];
-    for (const [name, q] of frames) {
+    for (const [name, q, check] of frames) {
       await page.goto(`/?scene=prologue-proto&${q}${webgl}`);
       await waitRoom(page, 'r.ready === true', 60_000);
       await page.waitForTimeout(800);
       await page.screenshot({ path: join(shotDir, `${name}.png`) });
+      const r = await room(page);
+      check(r);
+      expect(r.drawCalls, `draw calls in ${name}`).toBeLessThanOrEqual(BUDGET.drawCalls);
+      expect(r.triangles, `triangles in ${name}`).toBeLessThanOrEqual(BUDGET.triangles);
     }
+
+    // 見えない柵 with real input: half-grown sphere, walk onto the bridge along its right side and keep pushing
+    await page.goto(`/?scene=prologue-proto&spawn=dead-end&growHold=0.45${webgl}`);
+    const start = await waitRoom(page, 'r.ready === true', 60_000);
+    cursor.x = 640;
+    cursor.y = 360;
+    await page.mouse.move(cursor.x, cursor.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await waitRoom(page, 'r.locked === true');
+    await lookAt(page, [start.position.x, 1.4, -40]);
+    const push = await pushUntilStopped(page, 'KeyW', 10_000);
+    const end = push.at(-1) as RoomProbe;
+    // look down at the deck ahead: the cut and the boundary film the body stopped at
+    await lookAt(page, [end.position.x, 0, end.position.z - 1.4]);
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: join(shotDir, 'fence.png') });
+    const [cx, cy, cz] = end.layout.pedestalOrb;
+    const inside = (r: RoomProbe) =>
+      Math.hypot(r.position.x - cx, r.position.y - cy, r.position.z - cz) <= r.sphereRadius + 0.01;
+    expect(end.position.z).toBeLessThan(end.layout.edgeZ - 0.2);
+    expect(push.every((r) => r.grounded && Math.abs(r.position.y) < 0.03)).toBe(true);
+    expect(push.filter((r) => r.onBackFooting).every(inside)).toBe(true);
+    expect(end.speed).toBeLessThan(0.05);
+
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -341,6 +459,27 @@ for (const backend of backends) {
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
     );
     expect(done.position.z).toBeLessThan(done.layout.farZ);
+    // every phase in budget (the frame's all passes), and no compile stall in a transition or in play
+    const phases = await page.evaluate(
+      () =>
+        (
+          window.__vidro.sceneProbe as {
+            phases: Record<
+              string,
+              { frames: number; maxFrameMs: number; maxDrawCalls: number; maxTriangles: number }
+            >;
+          }
+        ).phases,
+    );
+    mkdirSync(join(root, 'artifacts/S-06'), { recursive: true });
+    writeFileSync(join(root, `artifacts/S-06/phases-${backend}.json`), JSON.stringify(phases, null, 2));
+    for (const [phase, st] of Object.entries(phases)) {
+      expect(st.maxDrawCalls, `draw calls in ${phase}`).toBeLessThanOrEqual(BUDGET.drawCalls);
+      expect(st.maxTriangles, `triangles in ${phase}`).toBeLessThanOrEqual(BUDGET.triangles);
+    }
+    // 200 ms as in S-04: headless jitter and other sessions sharing the GPU, but a compile stall shows
+    for (const phase of ['loading-home', 'home', 'home-game', 'game'])
+      expect(phases[phase]?.maxFrameMs ?? 0, `worst frame in ${phase}`).toBeLessThan(200);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });

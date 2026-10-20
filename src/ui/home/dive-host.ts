@@ -38,7 +38,7 @@ export interface DiveWorld {
   standingFov: number;
   /** Game camera pose along the dive: u = 0 the miniature view, u = 1 the pose play starts from. */
   pose(u: number, outPos: THREE.Vector3, outTarget: THREE.Vector3): void;
-  /** Once, first thing while loading (environment maps…). */
+  /** Once, first thing while loading: build the world (physics, art, environment maps…). */
   prepare(): Promise<void> | void;
   /** One real draw of the playable view to the canvas, so its pipelines compile while loading. */
   warm(): void;
@@ -212,7 +212,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     homeEnv = pmrem.fromScene(room, 0.04);
     home.environment = homeEnv.texture;
     room.dispose();
-    done('environment maps');
+    done('build the world, environment maps');
     await compileWith(null, late, outerCam, home, [membrane.mesh]);
     if (disposed) return;
     home.add(late);

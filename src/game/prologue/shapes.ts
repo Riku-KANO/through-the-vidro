@@ -1,14 +1,17 @@
 import type { MeshData } from '../player/walk-lab-field';
-import { WORKSHOP } from './layout';
+import { WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
 
 /**
  * Shapes of the prologue room as plain vertex data, so the drawn mesh and the Rapier triangle mesh are
  * the same triangles (空間の可読性と導線 4).
  */
 
-/** Columns around the dome; the door is DOOR_COLUMNS of them centred on -Z. */
+/** Columns around the dome; the door is DOOR_COLUMNS of them centred on -Z (its width at the floor). */
 const DOME_COLUMNS = 96;
-const DOOR_COLUMNS = 6;
+const DOOR_COLUMNS = Math.max(
+  2,
+  2 * Math.round(Math.asin(WORKSHOP.door.halfWidth / WORKSHOP_FLOOR_RADIUS) / ((2 * Math.PI) / DOME_COLUMNS)),
+);
 const ROWS_ABOVE_DOOR = 12;
 const ROWS_BESIDE_DOOR = 12;
 
