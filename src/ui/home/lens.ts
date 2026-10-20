@@ -21,6 +21,16 @@ import {
   vec3,
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import {
+  GLASS_IOR,
+  MAX_SHIFT,
+  REFRACTION_REACH,
+  RIM_REACH,
+  RIPPLE_AMP,
+  RIPPLE_FREQ,
+  RIPPLE_WIDTH2,
+  WARP_STRENGTH,
+} from './lens-math';
 
 /**
  * Shading shared by the home orb and the full-screen image of the dive, so that when the orb fills
@@ -29,26 +39,7 @@ import * as THREE from 'three/webgpu';
  * position bent by refraction through the orb's surface (アートディレクション > ガラスの種類: 屈折率1.5,
  * 断面の縁がわずかに緑).
  */
-export const GLASS_IOR = 1.5;
-
-/**
- * How far refraction displaces what is seen through the glass (screen units per unit of bend).
- * A thin shell barely moves the image except near its rim. M0 tuning value.
- */
-const REFRACTION_REACH = 0.032;
-const MAX_SHIFT = 0.3;
-/**
- * The rim band bends outwards (what lies just beyond the rim is squeezed into it, as in a glass ball).
- * An outward shift that grows towards the rim never folds the picture. M0 tuning value (screen units).
- */
-const RIM_REACH = 0.05;
-/**
- * Passing through the surface: a barrel warp over the whole screen and a ripple ring running outwards.
- * Kept below the slope at which the picture would fold (amplitude × frequency × 2 × aspect < 0.7 up to 21:9).
- */
-const WARP_STRENGTH = 0.06;
-const RIPPLE_FREQ = 12;
-const RIPPLE_AMP = 0.012;
+export { GLASS_IOR } from './lens-math';
 
 type V3 = THREE.Node<'vec3'>;
 type F = THREE.Node<'float'>;
@@ -84,14 +75,15 @@ function membraneShift(lens: LensUniforms): { shift: THREE.Node<'vec2'>; ring: F
   const ndc = vec2(screenUV.x.mul(2).sub(1), float(1).sub(screenUV.y.mul(2)));
   const q = ndc.mul(vec2(aspect, 1));
   const r2 = dot(q, q);
+  // radius measured against the screen corner (aspect² + 1), so the pull is the same on 4:3 and 21:9
   const barrel = ndc
-    .mul(r2)
+    .mul(r2.div(aspect.mul(aspect).add(1)))
     .mul(lens.warp)
     .mul(-WARP_STRENGTH / 2)
     .mul(vec2(1, -1));
   const r = r2.sqrt();
   const k = r.sub(lens.ringRadius);
-  const ring = exp(k.mul(k).negate().div(0.035)).mul(lens.ripple);
+  const ring = exp(k.mul(k).negate().div(RIPPLE_WIDTH2)).mul(lens.ripple);
   const wave = sin(k.mul(RIPPLE_FREQ)).mul(ring).mul(RIPPLE_AMP);
   const dir = q.div(max(r, float(1e-3))).mul(vec2(1, -1));
   return { shift: barrel.add(dir.mul(wave)), ring };

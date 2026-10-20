@@ -13,7 +13,8 @@ export const TRANSITIONS = {
 
 /**
  * 遷移のルール 2: if the game is not ready the dive waits at this pose on the curve — the orb is large
- * and still shows the miniature, well before the hand-over to the full screen and the crossing.
+ * and the game camera looks straight down onto the workshop dome, well before the hand-over to the
+ * full screen and the crossing. (The scene must keep drawing the orb's image while it waits.)
  */
 export const DIVE_HOLD_POSE = 0.5;
 const DIVE_HOLD_AT = glassEaseInverse(DIVE_HOLD_POSE);

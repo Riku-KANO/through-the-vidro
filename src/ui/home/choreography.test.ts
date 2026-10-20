@@ -83,7 +83,8 @@ describe('diveChoreography (ホーム → ゲーム開始)', () => {
     for (const aspect of [4 / 3, 16 / 9, 21 / 9]) {
       for (const p of steps(400)) {
         const c = diveChoreography(p);
-        if (c.fullscreen > 0) {
+        // the warp and the ripple are drawn by the orb too: they may only start once it covers the screen
+        if (c.fullscreen > 0 || c.warp > 0 || c.ripple > 0) {
           expect(
             orbCoversScreen(c.cameraDistance, orbRadius, fovDeg, aspect),
             `p=${p} aspect=${aspect}`,

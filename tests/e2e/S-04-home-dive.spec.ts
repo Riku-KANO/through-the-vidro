@@ -37,11 +37,14 @@ async function waitProbe(page: Page, fn: string, timeout = 30_000): Promise<void
   );
 }
 
+/** WebGPU validation problems can arrive as console warnings, e.g. "Destroyed texture … used in a submit". */
+const GPU_VALIDATION = /Destroyed texture|GPUValidationError|\[Invalid |used in a submit/i;
+
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text());
+    if (m.type() === 'error' || GPU_VALIDATION.test(m.text())) errors.push(m.text());
   });
   return errors;
 }
@@ -195,6 +198,12 @@ test.describe('S-04 input', () => {
     await page.waitForTimeout(450);
     expect((await probe(page)).hovered).toBe('continue');
     expect(await beadWidth()).toBeGreaterThan(before * 1.05);
+
+    // the orb's image follows the drawing buffer: resizing must not invalidate frames
+    await page.setViewportSize({ width: 1000, height: 640 });
+    await page.waitForTimeout(400);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.waitForTimeout(300);
 
     const vp = page.viewportSize() ?? { width: 1280, height: 720 };
     await page.mouse.move(vp.width * 0.95, vp.height * 0.08);

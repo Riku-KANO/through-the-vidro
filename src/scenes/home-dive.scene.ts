@@ -842,6 +842,13 @@ const create: SceneFactory = async ({ renderer, overlay, params }) => {
       } else {
         const orbOnScreen = orbReady && (flow.screen !== 'loading' || tr !== null);
         if (gameReady ? orbOnScreen : warmInner) {
+          // The orb's image always matches the drawing buffer, also when the render scale changes
+          // without a window resize (dynamic resolution). On WebGPU, transmission drawn into a
+          // target of another size than the canvas in the same frame invalidates the frame (S-05).
+          renderer.getDrawingBufferSize(drawSize);
+          if (innerRT.width !== drawSize.x || innerRT.height !== drawSize.y) {
+            innerRT.setSize(Math.max(1, drawSize.x), Math.max(1, drawSize.y));
+          }
           renderer.setRenderTarget(innerRT);
           renderer.render(world.scene, gameCam);
         }
