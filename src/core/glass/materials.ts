@@ -20,7 +20,6 @@ import {
   smoothstep,
   texture,
   uniform,
-  uv,
   vec3,
   vec4,
 } from 'three/tsl';
@@ -104,7 +103,8 @@ function thicknessNode(spec: GlassSpec, options: GlassOptions) {
   const base = float(options.thickness ?? spec.thickness);
   const variation = options.thicknessVariation ?? 0.35;
   let local: THREE.Node<'float'> = base;
-  if (options.thicknessMap) local = base.mul(texture(options.thicknessMap, uv()).g);
+  if (options.thicknessMap)
+    local = base.mul(texture(options.thicknessMap).g); // the map's own UV channel
   else if (variation > 0) {
     const ripple = surfaceNoise(options.thicknessScale ?? 0.45)
       .sub(0.5)
@@ -187,10 +187,11 @@ function cheapGlass(
     roughness: Math.max(spec.roughness, 0.05),
     fog: false, // the haze below replaces scene fog; both would double it
   });
-  const body = color(new THREE.Color(...tint)).mul(0.2 + 0.6 * saturation);
-  m.colorNode = features.thinFilm === 'none' ? body : mix(body, rainbow(), 0.5);
   const f0 = fresnelF0(GLASS_IOR);
   const fresnel = float(f0).add(float(1 - f0).mul(pow(oneMinus(cosView()), 5)));
+  const body = color(new THREE.Color(...tint)).mul(0.2 + 0.6 * saturation);
+  // A film colours what the glass reflects, so the stand-in rainbow sits where the reflection is: the rim.
+  m.colorNode = features.thinFilm === 'none' ? body : mix(body, rainbow(), fresnel.mul(0.9));
   const baseAlpha = 0.14 + 0.4 * saturation + (spec.roughness > 0.3 ? 0.3 : 0);
   m.opacityNode = mix(float(baseAlpha), float(1), fresnel);
   if (features.thinFilm !== 'none' && options.role === 'drop') m.emissiveNode = dropGlow(0.5);
@@ -251,7 +252,10 @@ export function createFrostedFloorMaterial(
   const cell = p.floor();
   const f = p.fract().sub(0.5).abs();
   const toJoint = float(0.5).sub(max(f.x, f.y)).mul(tile); // metres to the nearest joint
-  const aa = max(fwidth(toJoint), 1e-4);
+  // Floor covered by one pixel, from the unfolded world position (toJoint folds back at every joint, so
+  // its own derivative vanishes right on the joints).
+  const footprint = fwidth(positionWorld.xz);
+  const aa = max(max(footprint.x, footprint.y), 1e-4);
   // Fade the joints out where a pixel covers more floor than a joint is wide (no moiré towards the horizon).
   const resolvable = oneMinus(smoothstep(jointHalf * 2, jointHalf * 8, aa));
   const joint = oneMinus(smoothstep(float(jointHalf).sub(aa), float(jointHalf).add(aa), toJoint)).mul(

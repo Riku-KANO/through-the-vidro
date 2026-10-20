@@ -275,7 +275,7 @@ const create: SceneFactory = async (ctx) => {
   Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 80 });
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
-  sun.shadow.radius = 3;
+  sun.shadow.radius = 1; // r186 PCF jitters 5 taps per pixel; wider radii turn thin brass shadows grainy
   sun.shadow.autoUpdate = false;
   sun.shadow.needsUpdate = true;
   scene.add(sun, sun.target);
@@ -538,12 +538,16 @@ const create: SceneFactory = async (ctx) => {
       scratch.position.copy(pos);
       scratch.lookAt(target);
       scratch.updateMatrixWorld();
-      const found = findTransmissionOverlaps(objects, {
-        viewMatrix: scratch.matrixWorldInverse.elements,
-        tanHalfFovY: Math.tan(THREE.MathUtils.degToRad(FOV / 2)),
-        aspect,
-        near: scratch.near,
-      });
+      const found = findTransmissionOverlaps(
+        objects,
+        {
+          viewMatrix: scratch.matrixWorldInverse.elements,
+          tanHalfFovY: Math.tan(THREE.MathUtils.degToRad(FOV / 2)),
+          aspect,
+          near: scratch.near,
+        },
+        { margin: 0.005 },
+      ); // ~0.3°: room for the path between samples, now that silhouettes are tight
       for (const o of found) overlaps.push({ t, front: o.front, back: o.back });
     }
     return { samples, period: PERIOD, overlaps };

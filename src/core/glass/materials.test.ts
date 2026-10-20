@@ -76,6 +76,13 @@ describe('near glass materials', () => {
     expect(dropHigh.iridescence).toBeGreaterThan(0);
   });
 
+  it('keeps a rainbow in ordinary iridescent glass by tinting its reflection', () => {
+    for (const preset of [QUALITY_PRESETS.low, mid, QUALITY_PRESETS.high]) {
+      const m = physical(createGlass('iridescent', preset, { role: 'scenery' }).material);
+      expect(m.specularColorNode).not.toBeNull();
+    }
+  });
+
   it('does not make ordinary iridescent glass glow: its rainbow stays in the reflection', () => {
     for (const preset of [QUALITY_PRESETS.low, mid, QUALITY_PRESETS.high]) {
       for (const placement of ['near', 'far'] as const) {
