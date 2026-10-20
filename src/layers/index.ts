@@ -1,0 +1,40 @@
+/**
+ * 表と裏の層 (S-02). The surface every scene integrates with:
+ *  - LayerField.assign(object, 'surface' | 'back' | 'shared') puts objects on a layer and makes their
+ *    node materials obey the materialized spheres; add LayerField.membranes to the scene.
+ *  - LayerField.setSpheres() each frame from game/orb's orbSpheres() (+ boundaryGlow()).
+ *  - activeSegmentIds() tells the physics which back-layer footing colliders to enable.
+ */
+export { type FieldSphere, LayerField } from './field';
+export {
+  activeSegmentIds,
+  type Box,
+  type FootingSegment,
+  type Sphere,
+  segmentsUnder,
+  sphereOverlapsBox,
+  splitFooting,
+  type Vec3,
+} from './footing';
+export {
+  clipFor,
+  drawnIn,
+  LAYER_CHANNEL,
+  type LayerKind,
+  type LayerView,
+  layerMask,
+  viewMask,
+} from './layers';
+export {
+  boundaryGlow,
+  MAIN_ORB_RADIUS,
+  MATERIALIZE_SECONDS,
+  MAX_SPHERES,
+  type Materialization,
+  materializedRadius,
+  pickUpOrb,
+  placeOrb,
+  SMALL_ORB_RADIUS,
+  stepMaterialization,
+} from './materialize';
+export { glassEase, stepTween, type Tween } from './tween';
