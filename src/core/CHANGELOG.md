@@ -3,32 +3,9 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
-## 0.2.0 — 2026-10-21（S-05）
+## 0.3.0 — 2026-10-21（M0 統合: S-01 ガラス材質、S-04 遷移）
 
-- `perf/governor.ts`（新規）: 品質の自動選択 → 選んだプリセットへの切り替え → 測り直し → 動的解像度、をまとめた状態機械。
-  GPU のタイムスタンプは Apple/Metal では判断に使わず、それ以外でも平均フレーム時間を超えたら信用しない。そのとき動的解像度は止め、
-  品質の検証はフレーム時間（取りこぼしとジッタ）で行う。シーンの作り直しが失敗したら前のプリセットへ戻す（`sceneFailed`）
-- `perf/quality-select.ts`（新規）: 推奨プリセットの判定。段ごとのコスト係数（low 0.85 / mid 1 / high 1.7）、CPU 律速と
-  フレームレートの上限（30fps の省電力など）の見分け
-- `perf/dynamic-resolution.ts`（新規）: GPU 時間による動的解像度（5個の中央値＋EMA、ヒステリシス、待ち時間、上げすぎの抑制と、
-  落ち着いたらその抑制を戻す）
-- `bench.ts`: `GpuStats` と `summarizeGpuTimes` を追加
-- `renderer.ts`: `trackTimestamp` を有効化。戻り値に `baseDpr`、`gpuName`、`gpuTiming`、`gpuTimingTrusted`（Apple/Metal は false）を追加
-- `params.ts`: `quality=auto`、`autoWindow`、`autoFrom`、`autoForce`、`dynres`、`dynresTarget`、`gpuTrust` を追加
-- 注意（案2にも関係）: WebGPU（r186）では、画面と違う大きさの RenderTarget に transmission の材質を描くとフレームが捨てられる。
-  Apple/Metal では GPU のタイムスタンプの合計が約10倍に膨らむ。影のカメラの layers は明示する
-
-## 0.1.0 — 2026-10-21（S-00）
-
-- `renderer.ts`: WebGPURenderer の生成（WebGL2 への自動切替、AgX、sRGB、描画解像度の倍率）
-- `quality.ts`: 品質プリセット 低・中・高（設計書「品質プリセット」の表）
-- `bench.ts`: フレーム時間の統計（平均・p50/p95/p99・最大）と描画予算の判定
-- `params.ts`: URL スイッチ（scene / bench / warmup / quality / webgl / stats）
-- `scene.ts`: 検証用シーンの契約（SceneFactory / SandboxScene / SceneContext）
-
-## 未リリース（S-01、版は統合時に親が付ける）
-
-`VERSION` は S-01 の書き込み範囲の外なので上げていない。統合のときに版を決めて `VERSION` と見出しを合わせる。
+### S-01 ガラス材質
 
 - `glass/` を追加（ガラス材質ライブラリ）。`import { … } from '../core/glass'` で使う
   - `kinds.ts`: ガラスの種類（透明・曇り・琥珀・瑠璃・翡翠・気泡入り・虹色・乳白）の数値。屈折率1.5、透明の粗さ0、曇りの粗さ0.45（範囲0.4〜0.6）。
@@ -54,3 +31,38 @@
   半透明の合成で描く遠景の安価なガラスは、奥から順に描かれて透過物より先に載るため、近景の透過越しにも見える
 - 品質プリセットの `transmissionScale` は効かない（背景画像は描画バッファと同じ大きさで写される）
 - 曇りのぼかしは画面上で一様（ミップの段数 = log2(幅) × 粗さ）。ガラスのすぐ後ろの小さな物も消える
+
+### S-04 遷移
+
+- `transition/curve.ts`（新規）: 全遷移で共通の動きの曲線 `glassEase`（ゆっくり始まり、粘りながら止まる。
+  `cubic-bezier(0.55, 0, 0.2, 1)`、行き過ぎなし）。同じ曲線を DOM 用に `GLASS_EASE_CSS` として出す。
+  任意の制御点の `cubicBezier(x1, y1, x2, y2)` と、曲線上の位置からその時刻を求める `glassEaseInverse(y)` も公開。
+- `transition/transition.ts`（新規）: 遷移1本の進行 `Transition`（線形の `progress` と曲線上の `value`、
+  `reverse()` で同じ動きを逆再生、`holdAt` + `isReady` で次の場面の準備が間に合わないとき途中の姿勢で待つ、
+  `startAtEnd` で終点から戻る）。`acceptsEscape(spec)`（0.5秒を超える遷移は Esc を受け付ける）、
+  部分区間を 0..1 に写す `segment(p, from, to)`。
+- `transition/index.ts`: 上の再輸出。
+- 既存のファイルは変更なし。案2へは `src/core/transition/` をそのままコピーすればよい（three への依存なし）。
+
+## 0.2.0 — 2026-10-21（S-05）
+
+- `perf/governor.ts`（新規）: 品質の自動選択 → 選んだプリセットへの切り替え → 測り直し → 動的解像度、をまとめた状態機械。
+  GPU のタイムスタンプは Apple/Metal では判断に使わず、それ以外でも平均フレーム時間を超えたら信用しない。そのとき動的解像度は止め、
+  品質の検証はフレーム時間（取りこぼしとジッタ）で行う。シーンの作り直しが失敗したら前のプリセットへ戻す（`sceneFailed`）
+- `perf/quality-select.ts`（新規）: 推奨プリセットの判定。段ごとのコスト係数（low 0.85 / mid 1 / high 1.7）、CPU 律速と
+  フレームレートの上限（30fps の省電力など）の見分け
+- `perf/dynamic-resolution.ts`（新規）: GPU 時間による動的解像度（5個の中央値＋EMA、ヒステリシス、待ち時間、上げすぎの抑制と、
+  落ち着いたらその抑制を戻す）
+- `bench.ts`: `GpuStats` と `summarizeGpuTimes` を追加
+- `renderer.ts`: `trackTimestamp` を有効化。戻り値に `baseDpr`、`gpuName`、`gpuTiming`、`gpuTimingTrusted`（Apple/Metal は false）を追加
+- `params.ts`: `quality=auto`、`autoWindow`、`autoFrom`、`autoForce`、`dynres`、`dynresTarget`、`gpuTrust` を追加
+- 注意（案2にも関係）: WebGPU（r186）では、画面と違う大きさの RenderTarget に transmission の材質を描くとフレームが捨てられる。
+  Apple/Metal では GPU のタイムスタンプの合計が約10倍に膨らむ。影のカメラの layers は明示する
+
+## 0.1.0 — 2026-10-21（S-00）
+
+- `renderer.ts`: WebGPURenderer の生成（WebGL2 への自動切替、AgX、sRGB、描画解像度の倍率）
+- `quality.ts`: 品質プリセット 低・中・高（設計書「品質プリセット」の表）
+- `bench.ts`: フレーム時間の統計（平均・p50/p95/p99・最大）と描画予算の判定
+- `params.ts`: URL スイッチ（scene / bench / warmup / quality / webgl / stats）
+- `scene.ts`: 検証用シーンの契約（SceneFactory / SandboxScene / SceneContext）
