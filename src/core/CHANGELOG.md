@@ -6,13 +6,15 @@
 ## 0.2.0 — 2026-10-21（S-05）
 
 - `perf/governor.ts`（新規）: 品質の自動選択 → 選んだプリセットへの切り替え → 測り直し → 動的解像度、をまとめた状態機械。
-  GPU のタイムスタンプが実際のフレーム時間を超えたら信用せず、フレーム時間に切り替える
+  GPU のタイムスタンプは Apple/Metal では判断に使わず、それ以外でも平均フレーム時間を超えたら信用しない。そのとき動的解像度は止め、
+  品質の検証はフレーム時間（取りこぼしとジッタ）で行う。シーンの作り直しが失敗したら前のプリセットへ戻す（`sceneFailed`）
 - `perf/quality-select.ts`（新規）: 推奨プリセットの判定。段ごとのコスト係数（low 0.85 / mid 1 / high 1.7）、CPU 律速と
   フレームレートの上限（30fps の省電力など）の見分け
-- `perf/dynamic-resolution.ts`（新規）: 動的解像度（5個の中央値＋EMA、ヒステリシス、待ち時間、効かなければ戻す、上げすぎの抑制）
+- `perf/dynamic-resolution.ts`（新規）: GPU 時間による動的解像度（5個の中央値＋EMA、ヒステリシス、待ち時間、上げすぎの抑制と、
+  落ち着いたらその抑制を戻す）
 - `bench.ts`: `GpuStats` と `summarizeGpuTimes` を追加
-- `renderer.ts`: `trackTimestamp` を有効化。戻り値に `baseDpr` と `gpuTiming` を追加
-- `params.ts`: `quality=auto`、`autoWindow`、`autoFrom`、`dynres`、`dynresTarget` を追加
+- `renderer.ts`: `trackTimestamp` を有効化。戻り値に `baseDpr`、`gpuName`、`gpuTiming`、`gpuTimingTrusted`（Apple/Metal は false）を追加
+- `params.ts`: `quality=auto`、`autoWindow`、`autoFrom`、`autoForce`、`dynres`、`dynresTarget`、`gpuTrust` を追加
 - 注意（案2にも関係）: WebGPU（r186）では、画面と違う大きさの RenderTarget に transmission の材質を描くとフレームが捨てられる。
   Apple/Metal では GPU のタイムスタンプの合計が約10倍に膨らむ。影のカメラの layers は明示する
 

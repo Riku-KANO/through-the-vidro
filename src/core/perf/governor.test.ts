@@ -11,14 +11,16 @@ function simulate(
   g: PerfGovernor,
   seconds: number,
   gpuMs: ((level: string, scale: number) => number) | null,
-  frameMs = FRAME,
+  frameMs: number | ((i: number, level: string) => number) = FRAME,
 ): GovernorAction[] {
   const actions: GovernorAction[] = [];
   let switchingFrames = -1;
-  const frames = Math.round((seconds * 1000) / frameMs);
-  for (let i = 0; i < frames; i++) {
+  let elapsed = 0;
+  for (let i = 0; elapsed < seconds * 1000; i++) {
+    const ms = typeof frameMs === 'number' ? frameMs : frameMs(i, g.level);
+    elapsed += ms;
     if (gpuMs && i % 4 === 0) g.gpu(gpuMs(g.level, g.scale), g.epoch);
-    const a = g.frame(frameMs);
+    const a = g.frame(ms);
     if (a) {
       actions.push(a);
       if (a.kind === 'quality') switchingFrames = 5;
@@ -125,10 +127,65 @@ describe('PerfGovernor', () => {
     expect(g.decision?.basis).toBe('gpu');
   });
 
-  it('falls back to frame time for dynamic resolution when GPU time is implausible', () => {
+  it('turns dynamic resolution off when GPU time is implausible (frame time alone cannot tell a cap from overload)', () => {
     const g = new PerfGovernor(opts({ dynres: true }));
-    // Implausible 30 ms GPU readings while frames hold 60 Hz: no reason to lower the resolution.
     expect(simulate(g, 10, () => 30)).toEqual([]);
     expect(g.gpuReliable).toBe(false);
+  });
+
+  it('keeps trusting real GPU overload under vsync, where frames alternate 16.7 / 33.3 ms', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    // GPU 22 ms: two refresh intervals for most frames, one for some; the mean matches the GPU time.
+    const quantized = (i: number) => (i % 3 === 0 ? FRAME : FRAME * 2);
+    simulate(g, 10, () => 22, quantized);
+    expect(g.gpuReliable).toBe(true);
+    expect(g.scale).toBeLessThan(0.85);
+  });
+
+  it('distrusts GPU readings well above a steady 60 Hz frame', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulate(g, 5, () => 24);
+    expect(g.gpuReliable).toBe(false);
+  });
+
+  it('auto: verifies an upgrade with frame time when GPU readings become implausible', () => {
+    const g = new PerfGovernor(opts({ auto: true }));
+    // mid measures cheap; on high the GPU readings jump (implausible) and frames start missing vsync.
+    const gpu = (level: string) => (level === 'high' ? 40 : 5);
+    const frames = (i: number, level: string) => (level === 'high' && i % 2 === 0 ? FRAME * 2 : FRAME);
+    const actions = simulate(g, 30, gpu, frames);
+    expect(actions.map((a) => (a.kind === 'quality' ? a.level : a.kind))).toEqual(['high', 'mid']);
+    expect(g.verified).toBe(false);
+  });
+
+  it('auto without GPU timing: verifies an upgrade with frame time and steps down when frames miss', () => {
+    const g = new PerfGovernor(opts({ auto: true, gpuTiming: false }));
+    // 120 Hz display at mid suggests an upgrade; at high, frames start missing.
+    const frames = (i: number, level: string) => (level === 'high' ? (i % 2 === 0 ? 25 : 12) : 8.3);
+    const actions = simulate(g, 30, null, frames);
+    expect(actions.map((a) => (a.kind === 'quality' ? a.level : a.kind))).toEqual(['high', 'mid']);
+    expect(g.verified).toBe(false);
+  });
+
+  it('restores the previous preset when recreating the scene fails', () => {
+    const g = new PerfGovernor(opts({ auto: true }));
+    let action: GovernorAction | null = null;
+    for (let i = 0; i < 60 * 12 && !action; i++) {
+      if (i % 4 === 0) g.gpu(5, g.epoch);
+      action = g.frame(FRAME);
+    }
+    expect(action).toMatchObject({ kind: 'quality', level: 'high' });
+    g.sceneFailed();
+    expect(g.level).toBe('mid');
+    expect(g.scale).toBe(0.85);
+    expect(g.phase).toBe('steady');
+    expect(g.verified).toBe(false);
+  });
+
+  it('a forced level replaces the recommendation but is still verified', () => {
+    const g = new PerfGovernor(opts({ auto: true, gpuTiming: false, forceLevel: 'high' }));
+    const actions = simulate(g, 20, null);
+    expect(actions).toEqual([{ kind: 'quality', level: 'high', reason: expect.stringMatching(/^forced/) }]);
+    expect(g.verified).toBe(true);
   });
 });

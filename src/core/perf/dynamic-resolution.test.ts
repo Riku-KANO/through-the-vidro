@@ -1,20 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { type CostBasis, DynamicResolution } from './dynamic-resolution';
+import { DynamicResolution } from './dynamic-resolution';
 
 const TARGET = 1000 / 60;
 const DT = 1 / 60;
 
-/** Feeds `seconds` of samples; cost may depend on the current scale. Returns the number of scale changes. */
-function run(
-  dr: DynamicResolution,
-  cost: number | ((scale: number) => number),
-  seconds: number,
-  basis: CostBasis = 'gpu',
-): number {
+/** Feeds `seconds` of GPU samples; cost may depend on the current scale. Returns the number of scale changes. */
+function run(dr: DynamicResolution, cost: number | ((scale: number) => number), seconds: number): number {
   let changes = 0;
   for (let t = 0; t < seconds; t += DT) {
     const c = typeof cost === 'number' ? cost : cost(dr.scale);
-    if (dr.update(c, basis, DT) !== null) changes++;
+    if (dr.update(c, DT) !== null) changes++;
   }
   return changes;
 }
@@ -25,7 +20,7 @@ const pixelBound =
   (scale: number) =>
     msAtMax * (scale / max) ** 2;
 
-describe('DynamicResolution (GPU time)', () => {
+describe('DynamicResolution', () => {
   it('starts at the preset maximum', () => {
     expect(new DynamicResolution({ min: 0.5, max: 0.85 }).scale).toBe(0.85);
   });
@@ -62,8 +57,8 @@ describe('DynamicResolution (GPU time)', () => {
   it('ignores one or two spikes', () => {
     const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
     run(dr, TARGET * 0.5, 2);
-    dr.update(200, 'gpu', DT);
-    dr.update(200, 'gpu', DT);
+    dr.update(200, DT);
+    dr.update(200, DT);
     expect(run(dr, TARGET * 0.5, 0.5)).toBe(0);
     expect(dr.scale).toBe(0.85);
   });
@@ -73,47 +68,25 @@ describe('DynamicResolution (GPU time)', () => {
     expect(run(dr, TARGET * 3, 1.9)).toBeLessThanOrEqual(1);
   });
 
-  it('forgets the smoothed cost when the basis changes', () => {
-    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    run(dr, TARGET, 1, 'frame');
-    expect(run(dr, 3, 3, 'gpu')).toBe(0);
-  });
-});
-
-describe('DynamicResolution (frame time only)', () => {
-  it('does not read vsync-capped frame time as overload', () => {
-    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    expect(run(dr, TARGET, 10, 'frame')).toBe(0);
-  });
-
-  it('ignores a single long frame and two missed vsyncs in a row', () => {
-    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    run(dr, TARGET, 2, 'frame');
-    dr.update(48, 'frame', DT);
-    run(dr, TARGET, 1, 'frame');
-    dr.update(33.3, 'frame', DT);
-    dr.update(33.3, 'frame', DT);
-    expect(run(dr, TARGET, 3, 'frame')).toBe(0);
-    expect(dr.scale).toBe(0.85);
-  });
-
-  it('lowers the scale when lowering it actually helps', () => {
-    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    run(dr, pixelBound(TARGET * 1.6), 8, 'frame');
-    expect(dr.scale).toBeLessThan(0.85);
-  });
-
-  it('reverts and holds when a lower scale does not help (a 30 fps cap, not overload)', () => {
-    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    const changes = run(dr, 33.3, 30, 'frame');
-    expect(dr.scale).toBe(0.85);
-    expect(changes).toBeLessThanOrEqual(2);
-  });
-
   it('backs off instead of oscillating at a boundary', () => {
-    // Over budget above 0.8, vsync-capped at or below it: the classic up/down loop.
+    // Over the threshold above 0.8, comfortable at or below it.
     const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
-    const changes = run(dr, (s) => (s > 0.8 ? 21 : TARGET), 60, 'frame');
-    expect(changes).toBeLessThanOrEqual(8);
+    const boundary = (s: number) => (s > 0.8 ? TARGET * 0.85 : TARGET * 0.5);
+    const first = run(dr, boundary, 30);
+    const second = run(dr, boundary, 30);
+    expect(first + second).toBeLessThanOrEqual(10);
+    expect(second).toBeLessThanOrEqual(3);
+  });
+
+  it('forgets the backoff after a long calm period (one heavy room does not slow it forever)', () => {
+    const dr = new DynamicResolution({ min: 0.5, max: 0.85 });
+    run(dr, (s) => (s > 0.8 ? TARGET * 0.85 : TARGET * 0.5), 60);
+    run(dr, TARGET * 0.65, 40); // calm, inside the band
+    expect(run(dr, TARGET * 2, 2.5)).toBeGreaterThan(0);
+    run(dr, TARGET * 0.65, 1.5); // let the smoothed cost settle inside the band
+    // After the calm period a raise happens after the base delay again, not after a multiplied one.
+    const before = dr.scale;
+    run(dr, TARGET * 0.4, 3.5);
+    expect(dr.scale).toBeGreaterThan(before);
   });
 });

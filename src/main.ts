@@ -36,8 +36,12 @@ export interface VidroProbe {
   quality: QualityLevel;
   /** Current render scale (preset × dynamic resolution), relative to the device pixel ratio. */
   renderScale: number;
+  gpuName: string;
+  /** The backend can read GPU timestamps (shown in the overlay and bench). */
   gpuTiming: boolean;
-  /** False once GPU timestamps proved implausible (see PerfGovernor); the governor then uses frame time. */
+  /** Timestamps may drive decisions on this GPU (not on Apple/Metal until calibrated, see renderer.ts). */
+  gpuTimingTrusted: boolean;
+  /** False once GPU timestamps proved implausible or untrusted; the governor then keeps the preset scale. */
   gpuReliable: boolean;
   /** Set once ?quality=auto has measured its window. */
   qualityDecision: QualityDecision | null;
@@ -59,7 +63,9 @@ declare global {
 }
 
 const MAX_ERRORS = 50;
-const GPU_POLL_EVERY_FRAMES = 4;
+const GPU_POLL_EVERY_FRAMES = 8;
+/** A quality switch that has not produced a scene by then is treated as failed. */
+const SWITCH_TIMEOUT_MS = 15_000;
 
 const params = parseParams(window.location.search);
 const probe: VidroProbe = {
@@ -68,7 +74,9 @@ const probe: VidroProbe = {
   backend: null,
   quality: params.quality,
   renderScale: QUALITY_PRESETS[params.quality].renderScale,
+  gpuName: '',
   gpuTiming: false,
+  gpuTimingTrusted: false,
   gpuReliable: false,
   qualityDecision: null,
   qualityVerified: null,
@@ -87,7 +95,9 @@ window.addEventListener('unhandledrejection', (e) => recordError(String(e.reason
 // three.js reports uncaptured WebGPU validation errors through console.error; make them visible to sensors.
 const consoleError = console.error.bind(console);
 console.error = (...args: unknown[]) => {
-  recordError(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '));
+  if (probe.errors.length < MAX_ERRORS) {
+    recordError(args.map((a) => (a instanceof Error ? a.message : String(a))).join(' '));
+  }
   consoleError(...args);
 };
 
@@ -120,68 +130,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { renderer, backend, baseDpr, gpuTiming } = await createRenderer(app, {
+  const { renderer, backend, baseDpr, gpuName, gpuTiming, gpuTimingTrusted } = await createRenderer(app, {
     forceWebGL: params.forceWebGL,
     renderScale: QUALITY_PRESETS[params.quality].renderScale,
   });
   probe.backend = backend;
+  probe.gpuName = gpuName;
   probe.gpuTiming = gpuTiming;
-  // ?debug=1 exposes the renderer to page scripts (Playwright, DevTools) for one-off investigations.
-  if (params.raw.get('debug') === '1') Object.assign(window, { __vidroDebug: { renderer } });
+  probe.gpuTimingTrusted = gpuTimingTrusted;
 
   const mod: SceneModule = await loadScene(params.scene);
   let overlay: HTMLDivElement | null = null;
   let sandbox: SandboxScene | null = null;
-
-  const resize = (): void => {
-    const w = app.clientWidth;
-    const h = app.clientHeight;
-    renderer.setSize(w, h);
-    if (!sandbox) return;
-    sandbox.camera.aspect = w / Math.max(1, h);
-    sandbox.camera.updateProjectionMatrix();
-    sandbox.resize?.(w, h);
-  };
-
-  const applyScale = (scale: number): void => {
-    probe.renderScale = scale;
-    renderer.setPixelRatio(baseDpr * scale);
-    resize();
-  };
-
-  /** Creates (or recreates, for a quality switch) the scene with a whole preset. */
-  const createScene = async (level: QualityLevel): Promise<void> => {
-    if (sandbox) sandbox.dispose();
-    overlay?.remove();
-    sandbox = null;
-    overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5';
-    document.body.appendChild(overlay);
-    sandbox = await mod.default({
-      renderer,
-      backend,
-      canvas: renderer.domElement,
-      overlay,
-      quality: QUALITY_PRESETS[level],
-      qualityLevel: level,
-      params: params.raw,
-    });
-    probe.quality = level;
-    probe.sceneInstances++;
-    applyScale(QUALITY_PRESETS[level].renderScale);
-  };
-
-  await createScene(params.quality);
-  window.addEventListener('resize', resize);
-
-  const governor = new PerfGovernor({
-    level: params.quality,
-    auto: params.autoQuality,
-    autoWindowSec: params.autoWindowSeconds,
-    dynres: params.dynres,
-    gpuTiming,
-    dynresTargetMs: params.dynresTargetMs ?? undefined,
-  });
+  let sceneGeneration = 0;
 
   const stats = new StatsOverlay(document.body, backend);
   stats.visible = params.stats;
@@ -190,7 +151,7 @@ async function main(): Promise<void> {
   });
   const extras: StatsExtras = {
     gpuMs: null,
-    gpuReliable: gpuTiming,
+    gpuReliable: gpuTimingTrusted,
     texturesBytes: 0,
     buffersBytes: 0,
     renderScale: probe.renderScale,
@@ -198,7 +159,86 @@ async function main(): Promise<void> {
   };
   const counters: RenderCounters = { drawCalls: 0, triangles: 0 };
 
-  // GPU timing: resolve every few frames, one request in flight; samples carry the governor epoch.
+  /** Camera and scene targets follow the canvas; renderer.setPixelRatio already resized the canvas. */
+  const updateViewport = (): void => {
+    if (!sandbox) return;
+    const w = app.clientWidth;
+    const h = app.clientHeight;
+    sandbox.camera.aspect = w / Math.max(1, h);
+    sandbox.camera.updateProjectionMatrix();
+    sandbox.resize?.(w, h);
+  };
+  const resize = (): void => {
+    renderer.setSize(app.clientWidth, app.clientHeight);
+    updateViewport();
+  };
+  const applyScale = (scale: number): void => {
+    probe.renderScale = scale;
+    extras.renderScale = scale;
+    renderer.setPixelRatio(baseDpr * scale);
+    updateViewport();
+  };
+
+  /** Creates (or recreates, for a quality switch) the scene with a whole preset. A late result is discarded. */
+  const createScene = async (level: QualityLevel): Promise<void> => {
+    const generation = ++sceneGeneration;
+    if (sandbox) sandbox.dispose();
+    overlay?.remove();
+    sandbox = null;
+    const nextOverlay = document.createElement('div');
+    nextOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5';
+    document.body.appendChild(nextOverlay);
+    overlay = nextOverlay;
+    const next = await mod.default({
+      renderer,
+      backend,
+      canvas: renderer.domElement,
+      overlay: nextOverlay,
+      quality: QUALITY_PRESETS[level],
+      qualityLevel: level,
+      params: params.raw,
+    });
+    if (generation !== sceneGeneration) {
+      next.dispose();
+      nextOverlay.remove();
+      return;
+    }
+    sandbox = next;
+    probe.quality = level;
+    probe.sceneInstances++;
+    extras.quality = probe.qualityDecision ? `auto→${level}` : level;
+    applyScale(QUALITY_PRESETS[level].renderScale);
+  };
+  const createSceneWithTimeout = (level: QualityLevel): Promise<void> => {
+    let timer = 0;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(
+        () => reject(new Error(`scene creation exceeded ${SWITCH_TIMEOUT_MS} ms`)),
+        SWITCH_TIMEOUT_MS,
+      );
+    });
+    return Promise.race([createScene(level), timeout]).finally(() => window.clearTimeout(timer));
+  };
+
+  await createScene(params.quality);
+  window.addEventListener('resize', resize);
+  // ?debug=1 exposes internals to page scripts (Playwright, DevTools): one-off investigations and tests that
+  // must drive the render scale directly, independent of the governor.
+  if (params.raw.get('debug') === '1')
+    Object.assign(window, { __vidroDebug: { renderer, setScale: applyScale } });
+
+  const governor = new PerfGovernor({
+    level: params.quality,
+    auto: params.autoQuality,
+    autoWindowSec: params.autoWindowSeconds,
+    dynres: params.dynres,
+    gpuTiming: gpuTimingTrusted || (params.gpuTrust && gpuTiming),
+    dynresTargetMs: params.dynresTargetMs ?? undefined,
+    forceLevel: params.autoForce ?? undefined,
+  });
+
+  // GPU timing: resolve every few frames, one request in flight, only while something uses the value.
+  // Samples carry the governor epoch so readings from before a change are dropped.
   const benchGpu: number[] = [];
   let benchRecording = false;
   let gpuInFlight = false;
@@ -214,11 +254,31 @@ async function main(): Promise<void> {
     gpuInFlight = false;
   };
 
+  let switching = false;
+  const switchQuality = (level: QualityLevel): void => {
+    switching = true;
+    probe.qualityDecision = governor.decision;
+    createSceneWithTimeout(level)
+      .then(() => governor.sceneReady())
+      .catch(async (err: unknown) => {
+        recordError(`quality switch to ${level} failed: ${String(err)}`);
+        governor.sceneFailed();
+        try {
+          await createSceneWithTimeout(governor.level);
+        } catch (again: unknown) {
+          recordError(`restoring ${governor.level} failed: ${String(again)}`);
+          probe.status = 'error';
+        }
+      })
+      .finally(() => {
+        switching = false;
+      });
+  };
+
   const frameTimes: number[] = [];
   let maxDrawCalls = 0;
   let maxTriangles = 0;
   let frameIndex = 0;
-  let switching = false;
   const start = performance.now();
   let last = start;
   probe.status = params.benchSeconds ? 'benchmarking' : 'running';
@@ -230,13 +290,14 @@ async function main(): Promise<void> {
     const dt = Math.min(dtMs / 1000, 0.1);
     const t = (now - start) / 1000;
     const current = sandbox;
-    if (switching || !current) return;
+    if (switching || !current || probe.status === 'error') return;
 
     current.update(dt, t);
     if (current.render) current.render();
     else renderer.render(current.scene, current.camera);
 
-    if (gpuTiming && !gpuInFlight && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0) {
+    const wantGpu = gpuTiming && (governor.gpuReliable || stats.visible || benchRecording);
+    if (wantGpu && !gpuInFlight && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0) {
       gpuInFlight = true;
       gpuEpoch = governor.epoch;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
@@ -246,26 +307,15 @@ async function main(): Promise<void> {
     counters.triangles = renderer.info.render.triangles;
     extras.texturesBytes = renderer.info.memory.texturesSize;
     extras.buffersBytes = renderer.info.memory.attributesSize + renderer.info.memory.indexAttributesSize;
-    extras.renderScale = probe.renderScale;
-    extras.quality = probe.qualityDecision ? `auto→${probe.quality}` : probe.quality;
+    extras.gpuReliable = governor.gpuReliable;
     stats.tick(dt, counters, extras);
 
     const action = governor.frame(dtMs);
     probe.qualityVerified = governor.verified;
     probe.gpuReliable = governor.gpuReliable;
-    extras.gpuReliable = governor.gpuReliable;
-    if (action?.kind === 'scale') applyScale(action.scale);
-    if (action?.kind === 'quality') {
-      probe.qualityDecision = governor.decision;
-      switching = true;
-      createScene(action.level)
-        .then(() => governor.sceneReady())
-        .catch((err: unknown) => recordError(`quality switch failed: ${String(err)}`))
-        .finally(() => {
-          switching = false;
-        });
-    }
     if (governor.decision && !probe.qualityDecision) probe.qualityDecision = governor.decision;
+    if (action?.kind === 'scale') applyScale(action.scale);
+    if (action?.kind === 'quality') switchQuality(action.level);
 
     if (params.benchSeconds && probe.status === 'benchmarking' && t > params.warmupSeconds) {
       benchRecording = true;

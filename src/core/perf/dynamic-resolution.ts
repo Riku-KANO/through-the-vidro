@@ -1,17 +1,16 @@
 /**
  * Dynamic resolution (技術設計 > 品質プリセット: プレイ中も負荷に応じて描画解像度を動的に調整).
- * Pure controller: feed one cost sample at a time, apply the returned scale when it changes.
+ * Pure controller driven by GPU time: feed one sample at a time, apply the returned scale when it changes.
  *
  * - A median of the last 5 samples, then an EMA: one or two hitches never move the resolution.
- * - Separate down/up thresholds (hysteresis), a cooldown that also serves as start-up warm-up,
- *   because every change reallocates render targets.
- * - GPU time is the preferred basis. Frame time is vsync-capped and cannot tell a frame-rate cap
- *   (30 fps power saving, 50 Hz panels) from overload, so on that basis a step down is checked:
- *   if it did not help, it is reverted and further step-downs are held off.
- * - Raising right before having to lower again doubles the wait before the next raise.
+ * - Down above 80% of the frame (the headroom quality selection uses), up below 60%: the band is wider than
+ *   the cost of one step (≤ ×1.21), so a fitting scale is not left again.
+ * - A cooldown between changes (also the start-up warm-up), because every change reallocates render targets.
+ * - Raising right before having to lower again doubles the wait before the next raise; a calm period resets it.
+ *
+ * Frame time is deliberately not supported: under vsync it cannot tell a frame-rate cap from overload and hides
+ * moderate overload completely (S-05 review). Without trustworthy GPU time the governor keeps the preset scale.
  */
-export type CostBasis = 'gpu' | 'frame';
-
 export interface DynamicResolutionOptions {
   min: number;
   max: number;
@@ -21,21 +20,16 @@ export interface DynamicResolutionOptions {
   emaAlpha?: number;
 }
 
-const THRESHOLDS: Record<CostBasis, { down: number; up: number; upDelaySec: number; spikeClamp: number }> = {
-  // down = the 80% headroom used by quality selection; the 0.6–0.8 band is wider than one step's cost (≤ ×1.21).
-  gpu: { down: 0.8, up: 0.6, upDelaySec: 2, spikeClamp: 4 },
-  frame: { down: 1.15, up: 1.03, upDelaySec: 5, spikeClamp: 2 },
-};
+const DOWN = 0.8;
+const UP = 0.6;
+const UP_DELAY_SEC = 2;
+const SPIKE_CLAMP = 4;
 const MEDIAN_WINDOW = 5;
-/** Time after a frame-basis step down before judging whether it helped. */
-const EVALUATE_SEC = 2;
-/** A step down must improve the smoothed frame time by at least this much to count as effective. */
-const MIN_IMPROVEMENT = 0.05;
-const HOLD_SEC = 30;
-const MAX_HOLD_SEC = 300;
 /** A down this soon after an up means the up was premature. */
 const PREMATURE_UP_SEC = 3;
-const MAX_UP_BACKOFF = 16;
+const MAX_UP_BACKOFF = 32;
+/** This long without a change resets the backoff, so one heavy room does not slow later reactions. */
+const CALM_RESET_SEC = 30;
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -51,15 +45,12 @@ export class DynamicResolution {
   private readonly scratch = new Float64Array(MEDIAN_WINDOW);
   private windowLen = 0;
   private windowIdx = 0;
-  private basis: CostBasis | null = null;
   private ema: number | null = null;
   private time = 0;
   private sinceChange = 0;
   private comfortableFor = 0;
   private upBackoff = 1;
-  private holdDownUntil = 0;
-  private holdSec = HOLD_SEC;
-  private lastChange: { dir: 'up' | 'down'; at: number; emaBefore: number } | null = null;
+  private lastUpAt = Number.NEGATIVE_INFINITY;
 
   constructor(opts: DynamicResolutionOptions) {
     this.min = opts.min;
@@ -71,61 +62,44 @@ export class DynamicResolution {
     this.scale = opts.max;
   }
 
-  /** Smoothed cost in ms, for display. */
+  /** Smoothed GPU time in ms, for display. */
   get smoothedMs(): number {
     return this.ema ?? 0;
   }
 
   /**
-   * @param costMs GPU time (basis 'gpu') or frame time (basis 'frame') of the latest sample.
+   * @param gpuMs GPU time of the latest sample.
    * @param dt seconds since the previous call.
    * @returns the new scale when it changed, otherwise null.
    */
-  update(costMs: number, basis: CostBasis, dt: number): number | null {
-    if (!Number.isFinite(costMs) || costMs <= 0) return null;
-    const t = THRESHOLDS[basis];
+  update(gpuMs: number, dt: number): number | null {
+    if (!Number.isFinite(gpuMs) || gpuMs <= 0) return null;
     this.time += dt;
     this.sinceChange += dt;
-    if (basis !== this.basis) this.resetSmoothing(basis);
+    if (this.sinceChange >= CALM_RESET_SEC) this.upBackoff = 1;
 
-    this.push(Math.min(costMs, this.targetMs * t.spikeClamp));
+    this.push(Math.min(gpuMs, this.targetMs * SPIKE_CLAMP));
     const median = this.median();
     this.ema = this.ema === null ? median : this.ema + this.alpha * (median - this.ema);
 
-    if (
-      basis === 'frame' &&
-      this.lastChange?.dir === 'down' &&
-      this.time - this.lastChange.at >= EVALUATE_SEC
-    ) {
-      const helped = this.ema < this.lastChange.emaBefore * (1 - MIN_IMPROVEMENT);
-      this.lastChange = null;
-      if (!helped) {
-        this.holdDownUntil = this.time + this.holdSec;
-        this.holdSec = Math.min(this.holdSec * 2, MAX_HOLD_SEC);
-        return this.set(Math.min(this.max, round2(this.scale + this.step)), null);
-      }
-    }
-
-    if (this.ema > this.targetMs * t.down) {
+    if (this.ema > this.targetMs * DOWN) {
       this.comfortableFor = 0;
-      // On frame time, wait for the previous step down to be judged before stepping again.
-      if (basis === 'frame' && (this.time < this.holdDownUntil || this.lastChange?.dir === 'down'))
-        return null;
       if (this.sinceChange < this.cooldownSec || this.scale <= this.min) return null;
-      if (this.lastChange?.dir === 'up' && this.time - this.lastChange.at < PREMATURE_UP_SEC) {
+      if (this.time - this.lastUpAt < PREMATURE_UP_SEC) {
         this.upBackoff = Math.min(this.upBackoff * 2, MAX_UP_BACKOFF);
       }
-      return this.set(Math.max(this.min, round2(this.scale - this.step)), 'down');
+      return this.set(Math.max(this.min, round2(this.scale - this.step)));
     }
-    if (this.ema < this.targetMs * t.up) {
+    if (this.ema < this.targetMs * UP) {
       this.comfortableFor += dt;
       if (
-        this.comfortableFor >= t.upDelaySec * this.upBackoff &&
+        this.comfortableFor >= UP_DELAY_SEC * this.upBackoff &&
         this.sinceChange >= this.cooldownSec &&
         this.scale < this.max
       ) {
         this.comfortableFor = 0;
-        return this.set(Math.min(this.max, round2(this.scale + this.step)), 'up');
+        this.lastUpAt = this.time;
+        return this.set(Math.min(this.max, round2(this.scale + this.step)));
       }
       return null;
     }
@@ -133,20 +107,10 @@ export class DynamicResolution {
     return null;
   }
 
-  private set(scale: number, dir: 'up' | 'down' | null): number {
-    this.lastChange = dir ? { dir, at: this.time, emaBefore: this.ema ?? 0 } : null;
+  private set(scale: number): number {
     this.scale = scale;
     this.sinceChange = 0;
     return scale;
-  }
-
-  private resetSmoothing(basis: CostBasis): void {
-    this.basis = basis;
-    this.ema = null;
-    this.windowLen = 0;
-    this.windowIdx = 0;
-    this.comfortableFor = 0;
-    this.lastChange = null;
   }
 
   private push(v: number): void {

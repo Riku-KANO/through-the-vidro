@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fitsHeadroom, recommendQuality } from './quality-select';
+import { fitsFrameBudget, fitsHeadroom, recommendQuality } from './quality-select';
 
 const constant = (ms: number, n = 300) => Array.from({ length: n }, () => ms);
 /** Overload under vsync is jittery; alternate ±3 ms around the mean. */
@@ -74,6 +74,24 @@ describe('fitsHeadroom', () => {
   it('accepts GPU time within 80% of the 60 fps frame and rejects more', () => {
     expect(fitsHeadroom(constant(12))).toBe(true);
     expect(fitsHeadroom(constant(15))).toBe(false);
-    expect(fitsHeadroom([])).toBe(true);
+  });
+
+  it('is unknown, not a pass, without samples', () => {
+    expect(fitsHeadroom([])).toBeNull();
+  });
+});
+
+describe('fitsFrameBudget', () => {
+  it('fails when frames miss vsync with jitter', () => {
+    expect(fitsFrameBudget(Array.from({ length: 120 }, (_, i) => (i % 2 ? 33.3 : 16.7)))).toBe(false);
+  });
+
+  it('passes at 60 Hz and on a steady frame-rate cap', () => {
+    expect(fitsFrameBudget(constant(16.7))).toBe(true);
+    expect(fitsFrameBudget(constant(33.3))).toBe(true);
+  });
+
+  it('is unknown without samples', () => {
+    expect(fitsFrameBudget([])).toBeNull();
   });
 });

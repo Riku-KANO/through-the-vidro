@@ -48,14 +48,18 @@ describe('parseParams (S-05 perf switches)', () => {
     expect(parseParams('?scene=a&dynres=0').dynres).toBe(false);
   });
 
-  it('lets auto quality start from another preset', () => {
+  it('lets auto quality start from another preset, and tests pin the recommendation', () => {
+    expect(parseParams('?quality=auto&autoFrom=low&autoForce=high').autoForce).toBe('high');
+    expect(parseParams('?quality=auto&autoForce=ultra').autoForce).toBeNull();
     expect(parseParams('?quality=auto&autoFrom=low').quality).toBe('low');
     expect(parseParams('?quality=high&autoFrom=low').quality).toBe('high');
   });
 
   it('reads test hooks for the auto window and the dynamic-resolution target', () => {
-    const p = parseParams('?autoWindow=2&dynresTarget=1');
+    const p = parseParams('?autoWindow=2&dynresTarget=1&gpuTrust=1');
     expect(p.autoWindowSeconds).toBe(2);
     expect(p.dynresTargetMs).toBe(1);
+    expect(p.gpuTrust).toBe(true);
+    expect(parseParams('').gpuTrust).toBe(false);
   });
 });

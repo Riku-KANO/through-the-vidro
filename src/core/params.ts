@@ -6,11 +6,14 @@ import { isQualityLevel, type QualityLevel } from './quality';
  *   ?bench=<seconds>    measure frame times after warm-up, then expose results on window.__vidro
  *   ?warmup=<seconds>   warm-up before measuring (default 1)
  *   ?quality=low|mid|high|auto
- *                       auto = start at mid, measure the first autoWindow seconds, then apply the recommendation
+ *                       auto = start at mid, measure the first autoWindow seconds, then apply the recommendation.
+ *                       With bench, the scene may switch preset during the measurement: bench a fixed preset instead.
  *   ?autoWindow=<s>     length of the auto-quality measurement (default 10, 技術設計 > 品質プリセット)
  *   ?autoFrom=low|mid|high  preset auto quality starts measuring at (default mid)
+ *   ?autoForce=low|mid|high test hook: replace the recommendation (the switch and verification still run)
  *   ?dynres=0|1         dynamic resolution (default on, off while benchmarking a fixed preset)
  *   ?dynresTarget=<ms>  override the frame-cost target (test hook)
+ *   ?gpuTrust=1         let GPU timestamps drive decisions even where they are not trusted (tests, calibration)
  *   ?webgl=1            force the WebGL2 backend (to test the fallback path)
  *   ?stats=1            show the perf overlay
  */
@@ -22,8 +25,10 @@ export interface AppParams {
   quality: QualityLevel;
   autoQuality: boolean;
   autoWindowSeconds: number;
+  autoForce: QualityLevel | null;
   dynres: boolean;
   dynresTargetMs: number | null;
+  gpuTrust: boolean;
   forceWebGL: boolean;
   stats: boolean;
   raw: URLSearchParams;
@@ -45,6 +50,7 @@ export function parseParams(search: string): AppParams {
   const benchSeconds = positive(raw, 'bench', 120);
   const dynresFlag = raw.get('dynres');
   const autoFrom = raw.get('autoFrom');
+  const autoForce = raw.get('autoForce');
   return {
     scene: scene && SCENE_NAME.test(scene) ? scene : null,
     benchSeconds,
@@ -56,8 +62,10 @@ export function parseParams(search: string): AppParams {
         : 'mid',
     autoQuality: quality === 'auto',
     autoWindowSeconds: positive(raw, 'autoWindow', 60) ?? 10,
+    autoForce: isQualityLevel(autoForce) ? autoForce : null,
     dynres: dynresFlag === null ? benchSeconds === null : dynresFlag === '1',
     dynresTargetMs: positive(raw, 'dynresTarget', 100),
+    gpuTrust: raw.get('gpuTrust') === '1',
     forceWebGL: raw.get('webgl') === '1',
     stats: raw.get('stats') === '1',
     raw,

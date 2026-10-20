@@ -34,6 +34,14 @@ export async function startPreview(port) {
       if (child.pid) process.kill(-child.pid);
     } catch {}
   };
+  // detached children survive Ctrl-C unless stopped here, and would keep the port for the next run.
+  process.once('exit', stop);
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => {
+      stop();
+      process.exit(130);
+    });
+  }
   const url = `http://localhost:${port}/`;
   for (let i = 0; i < 75; i++) {
     if (exited) throw new Error(`vite preview exited on port ${port}: ${stderr.trim()}`);

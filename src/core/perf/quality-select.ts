@@ -45,10 +45,22 @@ export function stepLevel(level: QualityLevel, delta: -1 | 1): QualityLevel {
 const sorted = (values: readonly number[]) =>
   values.filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
 
-/** True when GPU time sampled after a switch still fits the headroom (used to verify a decision). */
-export function fitsHeadroom(gpuMs: readonly number[]): boolean {
+/** Whether GPU time sampled after a switch fits the headroom; null when there is nothing to judge. */
+export function fitsHeadroom(gpuMs: readonly number[]): boolean | null {
   const s = sorted(gpuMs);
-  return s.length === 0 || percentile(s, 0.9) <= HEADROOM_MS;
+  return s.length === 0 ? null : percentile(s, 0.9) <= HEADROOM_MS;
+}
+
+/**
+ * Frame-time check used when GPU time is unavailable or untrustworthy: frames that miss vsync with jitter fail;
+ * 60 Hz and a steady frame-rate cap pass. null when there is nothing to judge.
+ */
+export function fitsFrameBudget(frameMs: readonly number[]): boolean | null {
+  const s = sorted(frameMs);
+  if (s.length === 0) return null;
+  const p90 = percentile(s, 0.9);
+  if (p90 - percentile(s, 0.1) < 1) return true;
+  return p90 <= TARGET_MS * 1.25;
 }
 
 export function recommendQuality(

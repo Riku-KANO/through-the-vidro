@@ -1,6 +1,7 @@
 import type { QualityLevel } from '../quality';
 import { DynamicResolution } from './dynamic-resolution';
 import {
+  fitsFrameBudget,
   fitsHeadroom,
   presetScale,
   type QualityDecision,
@@ -16,12 +17,14 @@ import {
  *
  * - Auto quality (技術設計 > 品質プリセット): measure the first `autoWindowSec` at the start preset, switch the whole
  *   preset (the app recreates the scene), then re-measure; if the choice does not fit, step down once.
- * - Dynamic resolution runs only in `steady`, so it never disturbs a measurement.
+ * - Verification uses GPU time when it is trustworthy, otherwise frame time (missed vsync with jitter fails).
+ * - Dynamic resolution runs only in `steady` and only on trustworthy GPU time, so it never disturbs a
+ *   measurement and never acts on frame time, which under vsync cannot tell a cap from overload.
  * - Every action bumps `epoch`; GPU samples requested before it are dropped, and a few frames are skipped after it,
  *   so a stale reading from the old resolution never drives the next decision.
  * - GPU time is only trusted while it is physically plausible. Timestamp sums over many render passes overlap on
- *   some GPUs (Apple/Metal measured ~10× too high in S-05); GPU time above the real frame time means the readings
- *   are unusable, so the governor falls back to frame time for the rest of the session.
+ *   some GPUs (Apple/Metal measured ~10× too high in S-05); GPU time above the real (mean) frame time means the
+ *   readings are unusable, so the governor stops using them for the rest of the session.
  */
 export type GovernorAction =
   | { kind: 'scale'; scale: number }
@@ -36,6 +39,8 @@ export interface PerfGovernorOptions {
   dynres: boolean;
   gpuTiming: boolean;
   dynresTargetMs?: number;
+  /** Test hook (?autoForce): replace the recommendation to exercise the switch and verification path. */
+  forceLevel?: QualityLevel;
 }
 
 /** Skip shader compiles and first uploads right after a scene appears. */
@@ -45,7 +50,10 @@ const VERIFY_SEC = 3;
 const GAP_MS = 250;
 const MAX_DT_SEC = 0.1;
 const SETTLE_FRAMES = 4;
-/** GPU readings are implausible when their median exceeds the frame median by this factor (+0.5 ms). */
+/**
+ * GPU readings are implausible when their median exceeds the mean frame time by this factor (+0.5 ms).
+ * The mean, not the median: under vsync a GPU-bound frame alternates 16.7 / 33.3 ms and only the mean tracks it.
+ */
 const IMPLAUSIBLE_FACTOR = 1.1;
 const IMPLAUSIBLE_CHECKS = 3;
 
@@ -61,6 +69,11 @@ class Rolling {
   }
   get full(): boolean {
     return this.len === this.values.length;
+  }
+  mean(): number {
+    let sum = 0;
+    for (let i = 0; i < this.len; i++) sum += this.values[i] ?? 0;
+    return this.len ? sum / this.len : 0;
   }
   push(v: number): void {
     this.values[this.idx] = v;
@@ -109,10 +122,12 @@ export class PerfGovernor {
   private gpuDt = 0;
   private settle = 0;
   private steppedDown = false;
+  private previousLevel: QualityLevel;
   private dynres: DynamicResolution | null;
 
   constructor(private readonly opts: PerfGovernorOptions) {
     this.level = opts.level;
+    this.previousLevel = opts.level;
     this.scale = presetScale(opts.level);
     this.phase = opts.auto ? 'warmup' : 'steady';
     this.gpuReliable = opts.gpuTiming;
@@ -122,8 +137,8 @@ export class PerfGovernor {
   /** A resolved GPU time, tagged with the epoch that was current when it was requested. */
   gpu(ms: number, epoch: number): void {
     if (!this.gpuReliable || !Number.isFinite(ms) || ms <= 0) return;
-    if (!this.checkPlausible(ms)) return;
     if (epoch !== this.epoch || this.settle > 0) return;
+    if (!this.checkPlausible(ms)) return;
     if (this.phase === 'measuring' || (this.phase === 'verifying' && this.phaseTime >= WARMUP_SEC)) {
       this.gpuSamples.push(ms);
     }
@@ -133,10 +148,22 @@ export class PerfGovernor {
   /** The app finished recreating the scene for a 'quality' action. */
   sceneReady(): void {
     if (this.phase !== 'switching') return;
-    this.phase = this.gpuReliable && !this.steppedDown ? 'verifying' : 'steady';
+    this.phase = this.steppedDown ? 'steady' : 'verifying';
     this.phaseTime = 0;
     this.gpuSamples = [];
+    this.frameSamples = [];
     this.settle = SETTLE_FRAMES;
+  }
+
+  /** Recreating the scene for a 'quality' action failed: go back to the previous preset and stop adjusting. */
+  sceneFailed(): void {
+    if (this.phase !== 'switching') return;
+    this.level = this.previousLevel;
+    this.scale = presetScale(this.level);
+    if (this.dynres) this.dynres = this.makeDynres();
+    this.verified = false;
+    this.enter('steady');
+    this.bump();
   }
 
   frame(dtMs: number): GovernorAction | null {
@@ -157,7 +184,10 @@ export class PerfGovernor {
         this.frameSamples.push(dtMs);
         if (this.phaseTime < this.opts.autoWindowSec) return null;
         const gpu = this.gpuReliable ? this.gpuSamples : [];
-        const decision = recommendQuality(this.frameSamples, gpu, this.level);
+        const recommended = recommendQuality(this.frameSamples, gpu, this.level);
+        const decision = this.opts.forceLevel
+          ? { ...recommended, level: this.opts.forceLevel, reason: `forced (${recommended.reason})` }
+          : recommended;
         this.decision = decision;
         this.frameSamples = [];
         this.gpuSamples = [];
@@ -168,14 +198,13 @@ export class PerfGovernor {
       case 'switching':
         return null;
       case 'verifying': {
-        if (!this.gpuReliable) {
-          this.enter('steady');
-          return null;
-        }
+        if (this.phaseTime >= WARMUP_SEC) this.frameSamples.push(dtMs);
         if (this.phaseTime < WARMUP_SEC + VERIFY_SEC) return null;
-        const ok = fitsHeadroom(this.gpuSamples);
+        const byGpu = this.gpuReliable ? fitsHeadroom(this.gpuSamples) : null;
+        const ok = byGpu ?? fitsFrameBudget(this.frameSamples);
         this.verified = ok;
         this.gpuSamples = [];
+        this.frameSamples = [];
         if (!ok && this.level !== 'low') {
           this.steppedDown = true;
           return this.switchTo(stepLevel(this.level, -1), 'chosen preset did not fit the headroom');
@@ -184,22 +213,17 @@ export class PerfGovernor {
         return null;
       }
       case 'steady':
-        return this.steady(dtMs, dt);
+        return this.steady(dt);
     }
   }
 
-  private steady(dtMs: number, dt: number): GovernorAction | null {
-    if (!this.dynres) return null;
-    let next: number | null;
-    if (this.gpuReliable) {
-      this.gpuDt += dt;
-      if (this.pendingGpu === null) return null;
-      next = this.dynres.update(this.pendingGpu, 'gpu', this.gpuDt);
-      this.pendingGpu = null;
-      this.gpuDt = 0;
-    } else {
-      next = this.dynres.update(dtMs, 'frame', dt);
-    }
+  private steady(dt: number): GovernorAction | null {
+    if (!this.dynres || !this.gpuReliable) return null;
+    this.gpuDt += dt;
+    if (this.pendingGpu === null) return null;
+    const next = this.dynres.update(this.pendingGpu, this.gpuDt);
+    this.pendingGpu = null;
+    this.gpuDt = 0;
     if (next === null) return null;
     this.scale = next;
     this.bump();
@@ -210,7 +234,7 @@ export class PerfGovernor {
   private checkPlausible(ms: number): boolean {
     this.recentGpu.push(ms);
     if (!this.recentGpu.full || !this.recentFrames.full) return true;
-    if (this.recentGpu.median() > this.recentFrames.median() * IMPLAUSIBLE_FACTOR + 0.5) {
+    if (this.recentGpu.median() > this.recentFrames.mean() * IMPLAUSIBLE_FACTOR + 0.5) {
       if (++this.implausible >= IMPLAUSIBLE_CHECKS) {
         this.gpuReliable = false;
         this.gpuSamples = [];
@@ -224,6 +248,7 @@ export class PerfGovernor {
   }
 
   private switchTo(level: QualityLevel, reason: string): GovernorAction {
+    this.previousLevel = this.level;
     this.level = level;
     this.scale = presetScale(level);
     if (this.dynres) this.dynres = this.makeDynres();

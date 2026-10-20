@@ -249,10 +249,13 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
   const frontRgb = viewportSharedTexture(refracted).rgb;
   const facing = normalView.z.abs();
   const rim = float(1).sub(facing).pow(3);
-  const handMat = track(new THREE.MeshBasicNodeMaterial());
+  // Transparent + a late render order: the front view is copied after the opaque and transmissive objects are drawn
+  // (1フレームの描画の流れ 5), not right after the clear.
+  const handMat = track(new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false }));
   handMat.colorNode = mix(frontRgb, backRgb, smoothstep(0.25, 0.85, facing)).add(rim.mul(0.6));
   const hand = new THREE.Mesh(track(new THREE.SphereGeometry(0.11, 64, 48)), handMat);
   hand.position.set(0, -0.12, -0.42);
+  hand.renderOrder = 1000;
   hand.layers.set(LAYER_FRONT);
   hand.visible = peekEnabled;
   camera.add(hand);
@@ -281,10 +284,10 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
       const z = 4 - ((t * 1.4) % 50);
       camera.position.set(Math.sin(t * 0.3) * 0.6, 1.6, z);
       camera.lookAt(Math.sin(t * 0.2) * 3, 1.4, z - 8);
-      movers.forEach((m, i) => {
+      for (let i = 0; i < movers.length; i++) {
         const a = t * 0.6 + (i * Math.PI * 2) / 3;
-        m.position.set(Math.cos(a) * 2.2, 1.2 + Math.sin(t + i) * 0.3, z - 6 + Math.sin(a) * 2.2);
-      });
+        movers[i]?.position.set(Math.cos(a) * 2.2, 1.2 + Math.sin(t + i) * 0.3, z - 6 + Math.sin(a) * 2.2);
+      }
       sun.target.position.set(0, 0, z - 6);
       sun.position.set(12, 20, z);
     },
