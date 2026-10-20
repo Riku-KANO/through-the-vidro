@@ -19,7 +19,10 @@ export interface FootingSegment extends Box {
   id: string;
 }
 
-/** Splits a footing box into segments of about `size` metres along its longer horizontal axis. */
+/**
+ * Splits a footing box into segments of about `size` metres along its longer horizontal axis
+ * (a strip: bridges, stairs). A wide floor would need a grid of segments instead.
+ */
 export function splitFooting(id: string, box: Box, size: number): FootingSegment[] {
   const lenX = box.max[0] - box.min[0];
   const lenZ = box.max[2] - box.min[2];
@@ -60,7 +63,11 @@ export function activeSegmentIds(segments: readonly FootingSegment[], spheres: r
 /** How far above a deck the feet may be and still count as standing on it. */
 const STAND_TOLERANCE = 0.25;
 
-/** Segments directly under a foot position (x/z inside the footprint, feet at deck height). */
+/**
+ * Segments directly under a foot position (x/z inside the footprint, feet at deck height).
+ * The footprint is half-open on both horizontal axes, so feet on a shared border belong to exactly
+ * one segment whichever axis the footing was split along.
+ */
 export function segmentsUnder(feet: Vec3, segments: readonly FootingSegment[]): FootingSegment[] {
   const [x, y, z] = feet;
   return segments.filter(
@@ -68,7 +75,7 @@ export function segmentsUnder(feet: Vec3, segments: readonly FootingSegment[]): 
       x >= s.min[0] &&
       x < s.max[0] &&
       z >= s.min[2] &&
-      z <= s.max[2] &&
+      z < s.max[2] &&
       y >= s.max[1] - STAND_TOLERANCE &&
       y <= s.max[1] + STAND_TOLERANCE,
   );

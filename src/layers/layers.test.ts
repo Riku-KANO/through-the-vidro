@@ -22,4 +22,13 @@ describe('surface / back / shared layers (技術設計 > 裏の層の実装 > �
     expect(clipFor('back', 'peek')).toBe('none');
     expect(clipFor('shared', 'peek')).toBe('none');
   });
+
+  it('transmissive glass is kept out of the peek image but still drawn in the normal view', () => {
+    // WebGPU: transmission drawn into the smaller peek target in the same frame invalidates the frame.
+    for (const kind of ['back', 'shared'] as LayerKind[]) {
+      expect(drawnIn(kind, 'main', { transmissive: true })).toBe(true);
+      expect(drawnIn(kind, 'peek', { transmissive: true })).toBe(false);
+    }
+    expect(drawnIn('surface', 'main', { transmissive: true })).toBe(true);
+  });
 });

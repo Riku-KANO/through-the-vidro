@@ -33,6 +33,12 @@ async function bench(page: Page, backend: string, peek: boolean) {
     errors.push(e.message);
   };
   page.on('pageerror', onError);
+  const onConsole = (m: { type(): string; text(): string }): void => {
+    if (m.type() === 'error' || /GPUValidationError|Destroyed texture|used in a submit/i.test(m.text())) {
+      errors.push(m.text());
+    }
+  };
+  page.on('console', onConsole);
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   await page.goto(`/?scene=layers-lab&bench=3&warmup=2${webgl}${peek ? '&peek=hold' : ''}`);
   await page.waitForFunction(
@@ -41,6 +47,7 @@ async function bench(page: Page, backend: string, peek: boolean) {
     { timeout: 60_000 },
   );
   page.off('pageerror', onError);
+  page.off('console', onConsole);
   const probe = await page.evaluate(() => window.__vidro);
   expect(probe.errors).toEqual([]);
   expect(errors).toEqual([]);

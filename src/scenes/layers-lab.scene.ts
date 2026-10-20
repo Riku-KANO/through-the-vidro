@@ -34,6 +34,7 @@ import {
   type OrbSphere,
   orbSpheres,
   placeOn,
+  settle,
   stepOrbs,
   takeBack,
 } from '../game/orb/orbs';
@@ -47,14 +48,8 @@ import {
 } from '../game/orb/peek';
 import { PeekPipeline } from '../game/orb/peek-pipeline';
 import { canPeek, canPickUp, canPlace } from '../game/orb/rules';
-import { LayerField } from '../layers/field';
-import {
-  activeSegmentIds,
-  type FootingSegment,
-  segmentsUnder,
-  splitFooting,
-  type Vec3,
-} from '../layers/footing';
+import { type FieldSphere, LayerField } from '../layers/field';
+import { type FootingSegment, sphereOverlapsBox, splitFooting, type Vec3 } from '../layers/footing';
 import { boundaryGlow } from '../layers/materialize';
 import { glassEase, stepTween, type Tween } from '../layers/tween';
 
@@ -72,10 +67,16 @@ const EDGE_MARGIN = 0.3;
 const REACH = 2.5;
 /** 仮: how long the hand takes to bring the orb back into view after a pickup. */
 const HAND_SECONDS = PEEK_SECONDS;
-/** 仮: 玉が小さく震えて知らせる. */
+/** 仮: 玉が小さく震えて知らせる — 1.2 cm reads as a tremble from a few metres (~7 px at 1080p). */
 const SHAKE_SECONDS = 0.45;
+const SHAKE_AMPLITUDE = 0.012;
+/** 仮: the pedestal must be roughly in view to be used (lab only; S-06 decides how 調べる targets). */
+const FACING_DEG = 75;
 const LOOK_SPEED = 1.4;
 const START_X = -2.0;
+/** The opening view: the broken edge, the pedestal on the left and the far ledge across the gap. */
+const START_YAW = 9;
+const START_PITCH = -10;
 
 // Room layout (metres): the near ledge ends at x = 0, the gap runs to x = 2.8, the far ledge beyond.
 const NEAR_LEDGE: [number, number] = [-6.8, 0];
@@ -84,6 +85,10 @@ const BRIDGE_BOX = { min: [0, -0.14, -0.6] as Vec3, max: [2.8, 0, 0.6] as Vec3 }
 /** The pedestal stands at the edge; the orb sits at this point when placed. */
 const PEDESTAL_ID = 'edge';
 const PEDESTAL_ORB: Vec3 = [-0.5, 1.05, -0.9];
+/** ?orbs=3 (dev switch): two more pedestals with small orbs, to draw all three spheres at once. */
+const SMALL_PEDESTALS: Record<string, Vec3> = { near: [-1.2, 1.05, 2.4], far: [4.4, 1.05, 1.2] };
+/** 仮: back-layer footing segment length (設計書: 細かい区画に分けておき). A wide floor would need a grid. */
+const SEGMENT_LENGTH = 0.4;
 
 interface DemoScript {
   end: number;
@@ -96,16 +101,16 @@ interface DemoScript {
 
 /** ?demo=1: 行き止まりを見る → 覗く → 台座に置く → 渡る → 橋の上で拾えない → 戻って拾う. */
 const DEMO: DemoScript = {
-  end: 12.6,
+  end: 13.2,
   peek: [[0.6, 2.8]],
   walk: [
     [5.4, 7.8, 1],
-    [8.6, 10.4, -1],
+    [9.3, 11.1, -1],
   ],
-  interact: [3.6, 8.1, 10.9],
+  interact: [3.6, 8.75, 11.8],
   look: [
-    [0, 6, -5],
-    [0.6, 6, -7],
+    [0, START_YAW, START_PITCH],
+    [0.6, START_YAW, -9],
     [1.4, 3, -10],
     [2.8, -5, -9],
     [3.1, 24, -16],
@@ -114,11 +119,11 @@ const DEMO: DemoScript = {
     [5.0, 3, -6],
     [5.4, 0, -6],
     [7.8, 2, -8],
-    [8.3, 12, -10],
-    [8.6, 4, -7],
-    [10.4, 4, -7],
-    [10.8, 34, -14],
-    [12.6, 34, -12],
+    [8.6, 150, -16],
+    [9.3, 150, -14],
+    [11.1, 150, -12],
+    [11.6, 40, -14],
+    [13.2, 38, -12],
   ],
   marks: {
     'dead-end': 0.5,
@@ -128,9 +133,9 @@ const DEMO: DemoScript = {
     'grow-mid': 3.82,
     materialized: 5.3,
     'on-bridge': 7.9,
-    refused: 8.3,
-    'shrink-mid': 11.25,
-    restored: 12.4,
+    refused: 8.9,
+    'shrink-mid': 12.15,
+    restored: 13.0,
   },
 };
 
@@ -339,7 +344,8 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
   pedestalGroup.position.set(PEDESTAL_ORB[0], 0, PEDESTAL_ORB[2]);
   add(pedestalGroup, 'shared');
 
-  // The orb on the pedestal (shared: it is real in both layers). Glass with transmission.
+  // The orb on the pedestal (shared: it is real in both layers). Glass with transmission, so it is
+  // drawn in the normal view only.
   const placedOrbMat = mat(
     new THREE.MeshPhysicalNodeMaterial({
       color: 0xffffff,
@@ -356,7 +362,10 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
   placedOrbMat.emissiveNode = vec3(1.0, 0.78, 0.5).mul(orbGlow);
   const placedOrb = new THREE.Mesh(keep(new THREE.SphereGeometry(HAND_ORB_RADIUS, 48, 32)), placedOrbMat);
   placedOrb.position.set(...PEDESTAL_ORB);
-  add(placedOrb, 'shared');
+  // Transmission stays out of the peek image (WebGPU, see LayerField); peeking is impossible while
+  // the main orb is placed anyway.
+  field.assign(placedOrb, 'shared', { inPeek: false });
+  scene.add(placedOrb);
 
   // The town around: bubble buildings of cheap glass with brass bands, on both sides and across.
   const townGlass = mat(cheapGlass(env, new THREE.Color(0.92, 0.97, 1.0)));
@@ -527,22 +536,48 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
     peekScale: quality.peekScale,
     environment: env,
   });
+  // 開発用ツール > 層の表示切り替え (minimal): ?hideBack=1 draws the peek image without the back layer.
+  if (params.get('hideBack') === '1') pipeline.peekMask = 1;
 
   // ---- state ---------------------------------------------------------------------------------
-  const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };
-  const footing: FootingSegment[] = splitFooting('bridge', BRIDGE_BOX, 0.4);
-  let orbs: readonly Orb[] = createOrbs(0);
+  // ?orbs=3: all three spheres at once (main 4 m + small 2 m × 2), placed and grown from the start
+  const allOrbs = params.get('orbs') === '3';
+  const pedestals: Record<string, Vec3> = allOrbs
+    ? { [PEDESTAL_ID]: PEDESTAL_ORB, ...SMALL_PEDESTALS }
+    : { [PEDESTAL_ID]: PEDESTAL_ORB };
+  if (allOrbs) {
+    for (const [id, at] of Object.entries(SMALL_PEDESTALS)) {
+      const ped = pedestalGroup.clone();
+      ped.name = `pedestal-${id}`;
+      ped.position.set(at[0], 0, at[2]);
+      add(ped, 'shared');
+      const small = new THREE.Mesh(placedOrb.geometry, placedOrb.material);
+      small.scale.setScalar(0.7);
+      small.position.set(...at);
+      field.assign(small, 'shared', { inPeek: false });
+      scene.add(small);
+    }
+  }
+  const footing: FootingSegment[] = splitFooting('bridge', BRIDGE_BOX, SEGMENT_LENGTH);
+  let orbs: readonly Orb[] = createOrbs(allOrbs ? 2 : 0);
+  if (allOrbs) {
+    orbs = placeOn(orbs, 'main', PEDESTAL_ID);
+    orbs = placeOn(orbs, 'small-1', 'near');
+    orbs = settle(placeOn(orbs, 'small-2', 'far'));
+  }
   let spheres: OrbSphere[] = [];
   let spheresFor: readonly Orb[] | null = null;
-  let active = new Set<string>();
+  /** segment ids whose collider is enabled; refilled in place, `activeVersion` counts changes */
+  const active = new Set<string>();
+  let activeVersion = 0;
   let peek: PeekState = { progress: 0, peeking: false };
-  let hand: Tween = { progress: 1, target: 1 };
+  let hand: Tween = allOrbs ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
   let shake = 0;
   let lastAction: string | null = null;
   let x = START_X;
   let velocity = 0;
-  let yaw = THREE.MathUtils.degToRad(6);
-  let pitch = THREE.MathUtils.degToRad(-5);
+  let yaw = THREE.MathUtils.degToRad(START_YAW);
+  let pitch = THREE.MathUtils.degToRad(START_PITCH);
   let simTime = 0;
   let frames = 0;
   let peekDeniedLatched = false;
@@ -567,27 +602,37 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
     return feetPos;
   };
   const pedestalDistance = (): number => Math.hypot(x - PEDESTAL_ORB[0], PEDESTAL_ORB[2]);
+  const facingPedestal = (): boolean => {
+    const toYaw = Math.atan2(-PEDESTAL_ORB[2], PEDESTAL_ORB[0] - x);
+    const diff = Math.atan2(Math.sin(toYaw - yaw), Math.cos(toYaw - yaw));
+    return Math.abs(diff) <= THREE.MathUtils.degToRad(FACING_DEG);
+  };
   const mainOrb = (): Orb | undefined => orbs.find((o) => o.kind === 'main');
 
   const refreshSpheres = (): void => {
     if (spheresFor === orbs) return;
     spheresFor = orbs;
     spheres = orbSpheres(orbs, pedestals);
-    active = new Set(activeSegmentIds(footing, spheres));
-    field.setSpheres(
-      spheres.map((s) => ({ center: s.center, radius: s.radius, glow: boundaryGlow(s.materialize) })),
-    );
+    const before = active.size;
+    let changed = false;
+    for (const seg of footing) {
+      const on = spheres.some((sp) => sphereOverlapsBox(sp, seg));
+      if (on !== active.has(seg.id)) changed = true;
+      if (on) active.add(seg.id);
+      else active.delete(seg.id);
+    }
+    if (changed || before !== active.size) activeVersion++;
   };
 
   const interact = (): void => {
     const main = mainOrb();
     if (!main) return;
-    if (pedestalDistance() > REACH) {
-      lastAction = main.pedestal === null ? 'place-denied' : 'pickup-denied';
+    if (pedestalDistance() > REACH || !facingPedestal()) {
+      lastAction = 'out-of-reach';
       return;
     }
     if (main.pedestal === null) {
-      if (!canPlace(orbs, main.id, PEDESTAL_ID, { peeking: peek.peeking })) {
+      if (!canPlace(orbs, main.id, PEDESTAL_ID)) {
         lastAction = 'place-denied';
         return;
       }
@@ -645,7 +690,11 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
   const onPointerDown = (e: PointerEvent): void => {
     if (demo) return;
     if (e.button === 2) input.peek = true;
-    if (e.button === 0) interact();
+    // 覗きながら左クリック = 鳴らす (エリア3から); before that it does nothing. E still interacts.
+    if (e.button === 0) {
+      if (peek.peeking) lastAction = 'ring-unavailable';
+      else interact();
+    }
   };
   const onPointerUp = (e: PointerEvent): void => {
     if (e.button === 2) input.peek = false;
@@ -700,6 +749,8 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
     segmentCount: footing.length,
     player: { x, y: 0, z: 0 },
     onBackFooting: false,
+    shaking: false,
+    facingPedestal: true,
     lastAction: null as string | null,
     backPassFrames: 0,
     backTarget: { width: 0, height: 0 },
@@ -713,7 +764,13 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
   const lookTarget = new THREE.Vector3();
   const orbCenter: [number, number, number] = [0, 0, 0];
   const orbCircle = { x: 0, y: 0, r: 0 };
-  let probeActiveFor: Set<string> | null = null;
+  let probeActiveVersion = -1;
+  const fieldSpheres: FieldSphere[] = Array.from({ length: 3 }, () => ({
+    center: PEDESTAL_ORB,
+    radius: 0,
+    glow: 0,
+  }));
+  const fieldList: FieldSphere[] = [];
   const frame = {
     center: [0, 0, 0] as Vec3,
     radius: HAND_ORB_RADIUS,
@@ -734,6 +791,8 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
         step(h);
         remaining -= h;
       }
+      // land exactly on the hold time (float steps can stop a hair short and never advance again)
+      if (demoHold !== null && demoHold - demoTime < 1e-6) demoTime = Math.max(demoTime, demoHold);
 
       const amount = peekAmount(peek);
       const presence = glassEase(hand.progress);
@@ -749,18 +808,42 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
       camera.updateMatrixWorld();
 
       const main = mainOrb();
-      const mainSphere = spheres.find((s) => s.kind === 'main');
-      const glow = mainSphere ? boundaryGlow(mainSphere.materialize) : 0;
-      placedOrb.visible = main?.pedestal != null || frames < 2;
-      const jitter = shake > 0 ? Math.sin(simTime * 90) * 0.004 * (shake / SHAKE_SECONDS) : 0;
-      placedOrb.position.set(PEDESTAL_ORB[0] + jitter, PEDESTAL_ORB[1], PEDESTAL_ORB[2] - jitter * 0.6);
-      orbGlow.value = glow * 1.4;
-      orbLight.intensity = glow * 4.5;
+      // 玉が小さく震えて知らせる: a short decaying tremble plus a flash of the orb and its boundary
+      const refusal = shake / SHAKE_SECONDS;
+      const flash = refusal * refusal * 1.6;
+      let mainGlow = 0;
+      fieldList.length = 0;
+      for (let i = 0; i < spheres.length; i++) {
+        const sp = spheres[i];
+        const f = fieldSpheres[i];
+        if (!sp || !f) continue;
+        f.center = sp.center;
+        f.radius = sp.radius;
+        f.glow = boundaryGlow(sp.materialize) + (sp.kind === 'main' ? flash : 0);
+        if (sp.kind === 'main') mainGlow = f.glow;
+        fieldList.push(f);
+      }
       if (frames < 2) {
         // prewarm: compile the membrane and the placed-orb pipelines before the first placement
-        field.setSpheres([{ center: PEDESTAL_ORB, radius: 0.01, glow: 0 }]);
-        spheresFor = null;
+        const f = fieldSpheres[0];
+        if (f) {
+          f.center = PEDESTAL_ORB;
+          f.radius = 0.01;
+          f.glow = 0;
+          fieldList.length = 0;
+          fieldList.push(f);
+        }
       }
+      field.setSpheres(fieldList);
+      placedOrb.visible = main?.pedestal != null || frames < 2;
+      const jitter = shake > 0 ? Math.sin(simTime * 70) * SHAKE_AMPLITUDE * refusal : 0;
+      placedOrb.position.set(
+        PEDESTAL_ORB[0] + jitter,
+        PEDESTAL_ORB[1] + jitter * 0.3,
+        PEDESTAL_ORB[2] - jitter * 0.6,
+      );
+      orbGlow.value = mainGlow * 1.4;
+      orbLight.intensity = mainGlow * 4.5;
 
       const c = handOrbCenter(amount, presence, simTime, orbCenter);
       frame.center = c;
@@ -773,24 +856,30 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
       probe.fov = camera.fov;
       probe.moveSpeed = peekMoveSpeedMultiplier(amount);
       probe.spheres.length = 0;
-      spheres.forEach((s, i) => {
+      for (let i = 0; i < spheres.length; i++) {
+        const sp = spheres[i];
         const p = sphereProbe[i];
-        if (!p) return;
-        p.orbId = s.orbId;
-        p.kind = s.kind;
-        p.center[0] = s.center[0];
-        p.center[1] = s.center[1];
-        p.center[2] = s.center[2];
-        p.radius = s.radius;
+        if (!sp || !p) continue;
+        p.orbId = sp.orbId;
+        p.kind = sp.kind;
+        p.center[0] = sp.center[0];
+        p.center[1] = sp.center[1];
+        p.center[2] = sp.center[2];
+        p.radius = sp.radius;
         probe.spheres.push(p);
-      });
+      }
       probe.orb = main?.pedestal != null ? 'pedestal' : 'hand';
-      if (probeActiveFor !== active) {
-        probeActiveFor = active;
+      if (probeActiveVersion !== activeVersion) {
+        probeActiveVersion = activeVersion;
         probe.activeSegments = [...active];
       }
       probe.player.x = x;
-      probe.onBackFooting = segmentsUnder(feet(), footing).some((s) => active.has(s.id));
+      probe.onBackFooting = false;
+      for (const seg of footing) {
+        if (active.has(seg.id) && x >= seg.min[0] && x < seg.max[0]) probe.onBackFooting = true;
+      }
+      probe.shaking = shake > 0;
+      probe.facingPedestal = facingPedestal();
       probe.lastAction = lastAction;
       const circle = orbScreenCircle(c, HAND_ORB_RADIUS, camera.fov, camera.aspect, orbCircle);
       probe.orbScreen.x = circle.x;
@@ -799,7 +888,7 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
       probe.orbScreen.visible = frame.visible;
       if (probe.demo) {
         probe.demo.time = demoTime;
-        probe.demo.holding = demoHold !== null && demoTime >= demoHold - 1e-9;
+        probe.demo.holding = demoHold !== null && demoTime >= demoHold;
       }
     },
     render() {
@@ -807,8 +896,8 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
       frames++;
       probe.backPassFrames = pipeline.backPassFrames;
       const size = pipeline.renderSize;
-      probe.renderSize.width = size.width;
-      probe.renderSize.height = size.height;
+      probe.renderSize.width = size.x;
+      probe.renderSize.height = size.y;
       probe.backTarget.width = pipeline.backTarget.width;
       probe.backTarget.height = pipeline.backTarget.height;
       if (frames >= 3) probe.ready = true;

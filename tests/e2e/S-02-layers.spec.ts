@@ -23,6 +23,8 @@ interface LabProbe {
   segmentCount: number;
   player: { x: number; y: number; z: number };
   onBackFooting: boolean;
+  shaking: boolean;
+  facingPedestal: boolean;
   lastAction: string | null;
   backPassFrames: number;
   backTarget: { width: number; height: number };
@@ -37,6 +39,9 @@ const backends = (process.env.BACKENDS ?? 'webgpu,webgl2').split(',');
 mkdirSync(join(root, 'artifacts/screens'), { recursive: true });
 mkdirSync(join(root, 'artifacts/bench'), { recursive: true });
 
+const GPU_VALIDATION =
+  /GPUValidationError|Destroyed texture|used in a submit|Invalid (Texture|BindGroup|CommandBuffer)/i;
+
 const lab = (page: Page): Promise<LabProbe> =>
   page.evaluate(() => window.__vidro.sceneProbe as unknown as LabProbe);
 
@@ -44,7 +49,11 @@ async function open(page: Page, backend: string, extra = ''): Promise<string[]> 
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => {
-    if (m.type() === 'error' && !/GPU stall|powerPreference/i.test(m.text())) errors.push(m.text());
+    const text = m.text();
+    if (m.type() === 'error' && !/GPU stall|powerPreference/i.test(text)) errors.push(text);
+    // WebGPU validation failures (e.g. "Destroyed texture … used in a submit") can arrive as warnings
+    // and silently drop the frame, so they fail the sensor at any level.
+    else if (GPU_VALIDATION.test(text)) errors.push(text);
   });
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   await page.goto(`/?scene=layers-lab${webgl}${extra}`);
@@ -102,6 +111,43 @@ function transitionSeconds(samples: [number, number][], from: number, to: number
   return ((samples[endIdx]?.[0] ?? 0) - t0) / 1000;
 }
 
+/** Holds ← until the pedestal is within the lab's facing angle. */
+async function turnUntilFacing(page: Page): Promise<void> {
+  if ((await lab(page)).facingPedestal) return;
+  await page.keyboard.down('ArrowLeft');
+  await page.waitForFunction(
+    () => (window.__vidro.sceneProbe as { facingPedestal?: boolean }).facingPedestal === true,
+    undefined,
+    { timeout: 6_000 },
+  );
+  await page.keyboard.up('ArrowLeft');
+}
+
+/** Mean absolute RGB difference (0–255) of two PNG screenshots, decoded by the page. */
+async function meanDiff(page: Page, a: Buffer, b: Buffer): Promise<number> {
+  return page.evaluate(
+    async ([a64, b64]) => {
+      const load = async (b64: string): Promise<Uint8ClampedArray> => {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+        const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = canvas.getContext('2d') as OffscreenCanvasRenderingContext2D;
+        g.drawImage(bmp, 0, 0);
+        return g.getImageData(0, 0, bmp.width, bmp.height).data;
+      };
+      const [da, db] = await Promise.all([load(a64), load(b64)]);
+      let sum = 0;
+      for (let i = 0; i < da.length; i += 4) {
+        sum += Math.abs((da[i] ?? 0) - (db[i] ?? 0));
+        sum += Math.abs((da[i + 1] ?? 0) - (db[i + 1] ?? 0));
+        sum += Math.abs((da[i + 2] ?? 0) - (db[i + 2] ?? 0));
+      }
+      return sum / (da.length / 4) / 3;
+    },
+    [a.toString('base64'), b.toString('base64')] as const,
+  );
+}
+
 async function holdKey(page: Page, key: string, ms: number): Promise<void> {
   await page.keyboard.down(key);
   await page.waitForTimeout(ms);
@@ -126,8 +172,9 @@ for (const backend of backends) {
       await page.mouse.move(640, 360);
       const rise = await sample(page, 'peekAmount', 600, () => page.mouse.down({ button: 'right' }));
       const up = transitionSeconds(rise, 0, 1);
-      expect(up).toBeGreaterThan(0.18);
-      expect(up).toBeLessThan(0.4);
+      console.log(`[S-02 timing] ${backend} peek start ${up.toFixed(3)} s`);
+      expect(up).toBeGreaterThan(0.2);
+      expect(up).toBeLessThan(0.3);
 
       const full = await lab(page);
       expect(full.peeking).toBe(true);
@@ -142,8 +189,9 @@ for (const backend of backends) {
 
       const fall = await sample(page, 'peekAmount', 600, () => page.mouse.up({ button: 'right' }));
       const down = transitionSeconds(fall, 1, 0);
-      expect(down).toBeGreaterThan(0.18);
-      expect(down).toBeLessThan(0.4);
+      console.log(`[S-02 timing] ${backend} peek end ${down.toFixed(3)} s`);
+      expect(down).toBeGreaterThan(0.2);
+      expect(down).toBeLessThan(0.3);
       const after = await lab(page);
       expect(after.peeking).toBe(false);
       expect(after.fov).toBeCloseTo(after.baseFov, 5);
@@ -162,8 +210,9 @@ for (const backend of backends) {
 
       const grow = await sample(page, 'radius', 1300, () => page.keyboard.press('KeyE'));
       const seconds = transitionSeconds(grow, 0, 4);
-      expect(seconds).toBeGreaterThan(0.65);
-      expect(seconds).toBeLessThan(1.0);
+      console.log(`[S-02 timing] ${backend} materialize ${seconds.toFixed(3)} s`);
+      expect(seconds).toBeGreaterThan(0.7);
+      expect(seconds).toBeLessThan(0.9);
 
       const placed = await lab(page);
       expect(placed.orb).toBe('pedestal');
@@ -192,9 +241,13 @@ for (const backend of backends) {
       expect(stuck.player.x, 'stops at the edge of the ledge').toBeLessThan(0);
       expect(stuck.player.x).toBeGreaterThan(-0.8);
 
+      // at the edge the pedestal is off to the left: face it, then place
+      await turnUntilFacing(page);
       await page.keyboard.press('KeyE');
       await page.waitForFunction(
         () => (window.__vidro.sceneProbe as { spheres: { radius: number }[] }).spheres[0]?.radius === 4,
+        undefined,
+        { timeout: 5_000 },
       );
       await holdKey(page, 'KeyW', 1100);
       const onBridge = await lab(page);
@@ -202,10 +255,13 @@ for (const backend of backends) {
       expect(onBridge.player.x).toBeLessThan(2.6);
       expect(onBridge.onBackFooting).toBe(true);
 
+      // turn round until the pedestal is in view, then try to pick up while standing on the bridge
+      await turnUntilFacing(page);
       await page.keyboard.press('KeyE');
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(120);
       const refused = await lab(page);
       expect(refused.lastAction).toBe('pickup-denied');
+      expect(refused.shaking, 'the placed orb trembles to say no').toBe(true);
       expect(refused.orb).toBe('pedestal');
       expect(refused.spheres[0]?.radius).toBe(4);
 
@@ -219,11 +275,13 @@ for (const backend of backends) {
       const back = await lab(page);
       expect(back.player.x).toBeLessThan(-0.4);
       expect(back.onBackFooting).toBe(false);
+      await turnUntilFacing(page);
 
       const shrink = await sample(page, 'radius', 1300, () => page.keyboard.press('KeyE'));
       const seconds = transitionSeconds(shrink, 4, 0);
-      expect(seconds).toBeGreaterThan(0.65);
-      expect(seconds).toBeLessThan(1.0);
+      console.log(`[S-02 timing] ${backend} pickup ${seconds.toFixed(3)} s`);
+      expect(seconds).toBeGreaterThan(0.7);
+      expect(seconds).toBeLessThan(0.9);
       for (let i = 1; i < shrink.length; i++) {
         expect(shrink[i]?.[1] ?? 0).toBeLessThanOrEqual(shrink[i - 1]?.[1] ?? 0);
       }
@@ -232,6 +290,45 @@ for (const backend of backends) {
       expect(done.orb).toBe('hand');
       expect(done.spheres).toEqual([]);
       expect(done.activeSegments).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+
+    test('peek: the back layer really shows through the orb, and only there', async ({ page }) => {
+      // Guards the first S-02 bug (the peek image came out without the back objects): compare the
+      // frame while peeking with a frame whose peek image leaves the back layer out (?hideBack=1).
+      const grab = async (extra: string) => {
+        await open(page, backend, `&peek=hold${extra}`);
+        await page.waitForFunction(
+          () => (window.__vidro.sceneProbe as { peekAmount?: number }).peekAmount === 1,
+        );
+        await page.waitForTimeout(200);
+        const o = (await lab(page)).orbScreen;
+        const vw = 1280;
+        const vh = 720;
+        const half = o.r * vh * 0.6;
+        const inside = await page.screenshot({
+          clip: { x: o.x * vw - half, y: o.y * vh - half, width: half * 2, height: half * 2 },
+        });
+        const outside = await page.screenshot({ clip: { x: 16, y: 16, width: 240, height: 140 } });
+        return { inside, outside };
+      };
+      const withBack = await grab('');
+      const withoutBack = await grab('&hideBack=1');
+      const inside = await meanDiff(page, withBack.inside, withoutBack.inside);
+      const outside = await meanDiff(page, withBack.outside, withoutBack.outside);
+      console.log(
+        `[S-02 pixels] ${backend} back layer through the orb: inside ${inside.toFixed(2)}, outside ${outside.toFixed(2)}`,
+      );
+      expect(inside, 'the back layer changes what the orb shows').toBeGreaterThan(4);
+      expect(outside, 'outside the orb the back layer stays hidden').toBeLessThan(1);
+    });
+
+    test('three spheres at once: main 4 m and two small 2 m orbs (?orbs=3)', async ({ page }) => {
+      const errors = await open(page, backend, '&orbs=3');
+      const p = await lab(page);
+      expect(p.spheres.map((s) => s.radius).sort()).toEqual([2, 2, 4]);
+      expect(p.spheres.map((s) => s.kind).sort()).toEqual(['main', 'small', 'small']);
+      await page.screenshot({ path: join(root, `artifacts/screens/layers-lab-orbs3${suffix}.png`) });
       expect(errors).toEqual([]);
     });
 
@@ -245,7 +342,7 @@ for (const backend of backends) {
         await page.waitForFunction(
           (at) => {
             const d = (window.__vidro.sceneProbe as { demo?: { time: number; holding: boolean } }).demo;
-            return !!d && d.holding && d.time >= at;
+            return !!d && d.holding && d.time >= at - 1e-6;
           },
           at,
           { timeout: 30_000 },
@@ -263,6 +360,11 @@ for (const backend of backends) {
           expect(probe.spheres[0]?.radius ?? 4).toBeLessThan(4);
         }
         if (mark.startsWith('materialized')) expect(probe.spheres[0]?.radius).toBe(4);
+        if (mark === 'refused') {
+          expect(probe.lastAction).toBe('pickup-denied');
+          expect(probe.shaking).toBe(true);
+          expect(probe.facingPedestal).toBe(true);
+        }
         expect(errors).toEqual([]);
       }
     });

@@ -56,7 +56,10 @@ export function pedestalOccupied(orbs: readonly Orb[], pedestal: string): boolea
 export function placeOn(orbs: readonly Orb[], id: string, pedestal: string): Orb[] {
   const orb = orbById(orbs, id);
   if (!orb || orb.pedestal !== null || pedestalOccupied(orbs, pedestal)) return [...orbs];
-  // An orb picked up from elsewhere must finish shrinking there first: restart from 0 here.
+  // Its sphere is still shrinking at another pedestal: it must finish there first (rules.canPlace).
+  if (orb.lastPedestal !== null && orb.lastPedestal !== pedestal && orb.materialize.progress > 0)
+    return [...orbs];
+  // Back on the same pedestal mid-shrink: grow again from where it is.
   const progress = orb.lastPedestal === pedestal ? orb.materialize.progress : 0;
   return orbs.map((o) =>
     o.id === id

@@ -38,7 +38,7 @@ const IOR = 1.5;
 /**
  * How much of the physical refraction is applied. A real 15 cm ball this close to the eye shows the
  * world upside down; at this strength the back layer stays upright and lines up with the world
- * (a 1.3× magnifier with a strongly bent rim). See process/slices/S-02.md 判断待ち.
+ * (about 1.2× in the centre, strongly bent at the rim). See process/slices/S-02.md 判断待ち.
  */
 const REFRACT_REST = 0.1;
 const REFRACT_PEEK = 0.14;
@@ -212,7 +212,7 @@ export class OrbComposite {
           .mul(edge)
           .mul(float(1).sub(fresnel))
           .add(envCol.mul(fresnel))
-          .add(vec3(1, 0.96, 0.9).mul(bubbles.mul(0.35)))
+          .add(vec3(1, 0.96, 0.9).mul(bubbles.mul(float(0.16).mul(float(1).sub(uPeek.mul(0.75))))))
           .add(vec3(1, 0.97, 0.92).mul(spec));
         color.assign(mix(color, glass, cover));
       });

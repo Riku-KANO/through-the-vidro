@@ -30,6 +30,9 @@ export class PeekPipeline {
   private readonly pipeline: THREE.RenderPipeline;
   private readonly scenePass: ReturnType<typeof pass>;
   private readonly composite: OrbComposite;
+  /** Layers the peek image draws; a dev switch can narrow it (e.g. hide the back layer). */
+  peekMask = viewMask('peek');
+
   private readonly backCamera = new THREE.PerspectiveCamera();
   private readonly size = new THREE.Vector2();
   private readonly orbFrame: OrbFrame;
@@ -38,6 +41,9 @@ export class PeekPipeline {
   constructor(private readonly opts: PeekPipelineOptions) {
     this.backTarget = new THREE.RenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: true });
     this.backTarget.texture.name = 'peek-back-layer';
+    // matrices are copied from the main camera each frame; never recomputed from position/rotation
+    this.backCamera.matrixAutoUpdate = false;
+    this.backCamera.matrixWorldAutoUpdate = false;
     opts.camera.layers.mask = viewMask('main');
     this.scenePass = pass(opts.scene, opts.camera);
     this.composite = new OrbComposite({
@@ -59,9 +65,30 @@ export class PeekPipeline {
     this.resize();
   }
 
-  /** Render size in pixels (drawing buffer) and the back image size. */
-  get renderSize(): { width: number; height: number } {
-    return { width: this.size.x, height: this.size.y };
+  /** Render size in pixels (drawing buffer). */
+  get renderSize(): Readonly<THREE.Vector2> {
+    return this.size;
+  }
+
+  /**
+   * Same view as the main camera, drawn with the peek layers. Only the matrices and lens values are
+   * copied (Object3D.copy would also clone children and userData every frame).
+   */
+  private syncBackCamera(): void {
+    const { camera } = this.opts;
+    const bc = this.backCamera;
+    bc.fov = camera.fov;
+    bc.aspect = camera.aspect;
+    bc.near = camera.near;
+    bc.far = camera.far;
+    bc.zoom = camera.zoom;
+    bc.position.copy(camera.position);
+    bc.quaternion.copy(camera.quaternion);
+    bc.matrixWorld.copy(camera.matrixWorld);
+    bc.matrixWorldInverse.copy(camera.matrixWorldInverse);
+    bc.projectionMatrix.copy(camera.projectionMatrix);
+    bc.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    bc.layers.mask = this.peekMask;
   }
 
   resize(): void {
@@ -72,13 +99,11 @@ export class PeekPipeline {
   }
 
   render(frame: PeekFrame): void {
-    const { renderer, scene, camera, field } = this.opts;
+    const { renderer, scene, field } = this.opts;
     this.resize();
     // The first frame also draws the back image once so its pipelines compile before the first peek.
     if (frame.peek > 0 || this.warm) {
-      this.backCamera.copy(camera);
-      this.backCamera.layers.mask = viewMask('peek');
-      this.backCamera.updateMatrixWorld();
+      this.syncBackCamera();
       field.setPeekPass(true);
       const previous = renderer.getRenderTarget();
       renderer.setRenderTarget(this.backTarget);

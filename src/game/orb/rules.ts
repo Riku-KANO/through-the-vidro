@@ -13,17 +13,15 @@ export function canPeek(orbs: readonly Orb[]): boolean {
 }
 
 /**
- * 台座にしか置けない: an orb in hand goes onto a free pedestal.
- * Not while peeking: the click while peeking is 鳴らす (操作とカメラ > 入力の割り当て).
+ * 台座にしか置けない: an orb in hand goes onto a free pedestal. An orb whose sphere is still shrinking
+ * at another pedestal (just picked up) has to finish first, so that sphere plays back to 0.
+ * Peeking does not block placing: only the click while peeking means 鳴らす, and that is the input
+ * layer's routing (操作とカメラ > 入力の割り当て), not a rule of the orb.
  */
-export function canPlace(
-  orbs: readonly Orb[],
-  id: string,
-  pedestal: string,
-  s: { peeking: boolean },
-): boolean {
+export function canPlace(orbs: readonly Orb[], id: string, pedestal: string): boolean {
   const orb = orbById(orbs, id);
-  return !!orb && orb.pedestal === null && !pedestalOccupied(orbs, pedestal) && !s.peeking;
+  if (!orb || orb.pedestal !== null || pedestalOccupied(orbs, pedestal)) return false;
+  return orb.lastPedestal === pedestal || orb.lastPedestal === null || orb.materialize.progress === 0;
 }
 
 export interface PickUpContext {
@@ -44,8 +42,10 @@ export function canPickUp(orbs: readonly Orb[], id: string, ctx: PickUpContext):
   const under = segmentsUnder(ctx.feet, ctx.footing);
   if (under.length === 0) return true;
   const now = new Set(activeSegmentIds(under, orbSpheres(orbs, ctx.pedestals)));
+  // Only orbs that stay on their pedestals keep footing alive; a sphere already shrinking after its
+  // own pickup will be gone in < 0.8 s.
   const without = orbSpheres(
-    orbs.filter((o) => o.id !== id),
+    orbs.filter((o) => o.id !== id && o.pedestal !== null),
     ctx.pedestals,
   );
   const after = new Set(activeSegmentIds(under, without));
