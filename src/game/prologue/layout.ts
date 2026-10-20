@@ -1,4 +1,4 @@
-import type { Box, Vec3 } from '../../layers/footing';
+import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
 
 /**
  * 序章「工房」 (進行構造とエリア設計): the workshop at the edge of the town, before dawn.
@@ -53,6 +53,43 @@ export const FAR = { minX: -1.4, maxX: 1.4, minZ: -21.2, maxZ: -16.8 };
 export const BRIDGE: Box = { min: [-0.6, -0.14, FAR.maxZ], max: [0.6, 0, EDGE_Z] };
 /** 仮 (S-02): length of a back-layer footing segment (技術設計 > 裏の層の実装: 細かい区画). */
 export const FOOTING_SEGMENT = 0.4;
+/**
+ * The bridge deck is a gentle arch (no corners: a cosine bump, level where it meets the shores), so that
+ * from the dead end, peeking and looking across, its floor rises into the hand orb (体験の核 2: 行き止まりに
+ * 見えた場所に、玉越しにだけ橋が架かっている). The steepest part is atan(π·rise/length) (≈24° for 0.4 m over
+ * 2.8 m), well inside what the body climbs (S-03: 40°). 仮.
+ */
+export const BRIDGE_RISE = 0.4;
+
+/** Height of the deck's top at z (0 on the shores). */
+export function deckHeight(z: number): number {
+  const lo = BRIDGE.min[2];
+  const hi = BRIDGE.max[2];
+  if (z <= lo || z >= hi) return 0;
+  const s = (2 * (z - lo)) / (hi - lo) - 1; // -1..1 along the bridge
+  return (BRIDGE_RISE / 2) * (1 + Math.cos(Math.PI * s));
+}
+
+/**
+ * S-02's footing segments of the bridge, each box tall enough for the arch over its length (so 拾う前の
+ * 安全確認 and the sphere overlap see the deck where it is).
+ */
+export function bridgeFooting(): FootingSegment[] {
+  return splitFooting('bridge', BRIDGE, FOOTING_SEGMENT).map((seg) => {
+    let top = Number.NEGATIVE_INFINITY;
+    let bottom = Number.POSITIVE_INFINITY;
+    for (let i = 0; i <= 8; i++) {
+      const h = deckHeight(seg.min[2] + ((seg.max[2] - seg.min[2]) * i) / 8);
+      top = Math.max(top, h);
+      bottom = Math.min(bottom, h);
+    }
+    return {
+      ...seg,
+      min: [seg.min[0], bottom + BRIDGE.min[1], seg.min[2]],
+      max: [seg.max[0], top, seg.max[2]],
+    };
+  });
+}
 
 /** 台座 at the dead end, left of where the bridge will be (行き止まりには必ず理由を置く: 台座). */
 export const PEDESTAL_ID = 'dead-end';

@@ -17,8 +17,10 @@ import {
   positionWorldDirection,
   pow,
   rangeFogFactor,
+  sin,
   smoothstep,
   uniform,
+  uv,
   vec2,
   vec3,
   vec4,
@@ -37,11 +39,13 @@ import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import type { LayerKind } from '../../layers/layers';
 import { HAND_ORB_RADIUS } from '../orb/hand-pose';
+import type { MeshData } from '../player/walk-lab-field';
 import {
   BENCH,
   BENCH_ORB,
   BRIDGE,
   DROP,
+  deckHeight,
   EDGE_Z,
   FAR,
   FOOTING_SEGMENT,
@@ -57,7 +61,7 @@ import {
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import { domePoint, domeWall } from './shapes';
+import { deckMesh, domePoint, domeWall } from './shapes';
 
 /**
  * The look of 序章「工房」 (アートディレクション): 夜明け前の青, almost colourless glass with the green of
@@ -144,6 +148,55 @@ function stoneMaterial(tile: number): THREE.MeshStandardNodeMaterial {
   const side = vec3(0.11, 0.13, 0.18).mul(layer.mul(0.18).add(streak.mul(0.1)).add(0.82));
   m.colorNode = vec4(mix(side, top, smoothstep(0.45, 0.75, normalWorld.y)), 1);
   return m;
+}
+
+function meshDataGeometry(data: MeshData): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
+  g.setIndex(new THREE.BufferAttribute(data.indices, 1));
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
+ * A strip along z between two edges given as (x or first coordinate, y) per z: vertical panels pass
+ * x-fixed edges with different heights, a horizontal veil passes two x positions at one height.
+ */
+function ribbon(
+  z0: number,
+  z1: number,
+  steps: number,
+  a: (z: number) => [number, number],
+  b: (z: number) => [number, number],
+  normal: [number, number, number],
+  flat = false,
+): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const z = z0 + ((z1 - z0) * i) / steps;
+    const [ax, ay] = a(z);
+    const [bx, by] = b(z);
+    // vertical panels: (x, y) pairs at the same x; flat veils: (x, y) pairs across
+    positions.push(ax, ay, z, bx, by, z);
+    normals.push(...normal, ...normal);
+    uvs.push(0, i / steps, 1, i / steps);
+    if (i < steps) {
+      const k = i * 2;
+      indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+    }
+  }
+  void flat;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  g.setIndex(indices);
+  g.computeBoundingSphere();
+  return g;
 }
 
 /** The back-layer bridge deck: frosted, a faint thin-film sheen, joints glowing every footing segment. */
@@ -608,42 +661,107 @@ export function buildRoomArt(
     put(mesh(merged(rubble), rock), 'surface');
   }
 
-  // ---- the back layer: the bridge, its rails, glass panels and lanterns, the light drop ----------
+  // ---- the back layer: the arched bridge, its rails, glass panels and lanterns, the light drop -------
   {
     const len = BRIDGE.max[2] - BRIDGE.min[2];
-    const midZ = (BRIDGE.max[2] + BRIDGE.min[2]) / 2;
-    const deck = mesh(
-      new RoundedBoxGeometry(BRIDGE.max[0] - BRIDGE.min[0], 0.14, len + 0.3, 3, 0.04),
-      keep(deckMaterial()),
-    );
-    // 3 mm under the shores' tops where it overlaps them (no z-fighting); the colliders stay at 0
-    deck.position.set(0, -0.073, midZ);
+    const fromZ = BRIDGE.max[2] + 0.15;
+    const toZ = BRIDGE.min[2] - 0.15;
+    // the same sweep its colliders use (shapes.deckMesh), 3 mm under the shores where it overlaps them
+    const deck = mesh(meshDataGeometry(deckMesh(fromZ, toZ, 48, 0.14, -0.003)), keep(deckMaterial()));
     deck.receiveShadow = true;
     put(deck, 'back');
+    const along = (x: number, lift: number, n = 24): THREE.Vector3[] =>
+      Array.from({ length: n + 1 }, (_, i) => {
+        const z = fromZ + ((toZ - fromZ) * i) / n;
+        return new THREE.Vector3(x, deckHeight(z) + lift, z);
+      });
     const rails: THREE.BufferGeometry[] = [];
     for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02]) {
-      rails.push(
-        new THREE.CylinderGeometry(0.018, 0.018, len + 0.3, 8).rotateX(Math.PI / 2).translate(x, 0.88, midZ),
-      );
-      for (let i = 0; i <= 4; i++)
-        rails.push(
-          new THREE.CylinderGeometry(0.016, 0.02, 0.88, 8).translate(x, 0.44, BRIDGE.max[2] - (len * i) / 4),
-        );
+      rails.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(along(x, 0.88)), 48, 0.018, 8, false));
+      for (let i = 0; i <= 4; i++) {
+        const z = BRIDGE.max[2] - (len * i) / 4;
+        rails.push(new THREE.CylinderGeometry(0.016, 0.02, 0.88, 8).translate(x, deckHeight(z) + 0.44, z));
+      }
     }
     for (const z of [BRIDGE.max[2] - len * 0.25, BRIDGE.max[2] - len * 0.75]) {
-      rails.push(new THREE.TorusGeometry(BRIDGE.max[0] + 0.02, 0.02, 8, 48, Math.PI).translate(0, 0.88, z));
+      rails.push(
+        new THREE.TorusGeometry(BRIDGE.max[0] + 0.02, 0.02, 8, 48, Math.PI).translate(
+          0,
+          deckHeight(z) + 0.88,
+          z,
+        ),
+      );
     }
     put(mesh(merged(rails), brass), 'back');
     // 橋は透明ガラス (アートディレクション > ガラスの種類), but only as the balustrade: the deck you walk on is frosted
+    panelGlass.side = THREE.DoubleSide;
     const panels: THREE.BufferGeometry[] = [];
     for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02])
-      panels.push(new RoundedBoxGeometry(0.02, 0.62, len - 0.1, 2, 0.008).translate(x, 0.5, midZ));
+      panels.push(
+        ribbon(
+          BRIDGE.max[2] - 0.05,
+          BRIDGE.min[2] + 0.05,
+          32,
+          (z) => [x, deckHeight(z) + 0.19],
+          (z) => [x, deckHeight(z) + 0.81],
+          [Math.sign(x), 0, 0],
+        ),
+      );
     put(mesh(merged(panels), panelGlass), 'back');
     const lanterns: THREE.BufferGeometry[] = [];
     for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02])
       for (const z of [BRIDGE.max[2], BRIDGE.min[2]])
-        lanterns.push(new THREE.SphereGeometry(0.07, 20, 10).translate(x, 0.98, z));
+        lanterns.push(new THREE.SphereGeometry(0.055, 20, 10).translate(x, 0.95, z));
+    // the lanterns fade when they pass right by the eye (no big white ball on the screen)
+    lanternMilk.transparent = true;
+    (lanternMilk as THREE.MeshPhysicalNodeMaterial).opacityNode = smoothstep(
+      0.35,
+      1.2,
+      positionView.length(),
+    );
     put(mesh(merged(lanterns), lanternMilk), 'back');
+  }
+  // 行き止まりの理由: 裏の層の気配 (空間の可読性と導線 9). A faint veil of light that ripples where the bridge
+  // will be, seen straight ahead from the dead end. It is surface layer: the real bridge replaces it inside
+  // the sphere, and the peek image (the back layer) does not show it.
+  const veilTime = uniform(0);
+  {
+    const veilMat = keep(
+      new THREE.MeshBasicNodeMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      }),
+    );
+    veilMat.fog = false;
+    const across = sin(uv().x.mul(Math.PI)).pow(1.5);
+    const waves = sin(uv().y.mul(24).sub(veilTime.mul(1.6)))
+      .mul(0.5)
+      .add(0.5);
+    const drift = sin(uv().y.mul(8).add(uv().x.mul(5)).add(veilTime.mul(0.7)))
+      .mul(0.5)
+      .add(0.5);
+    const fadeEnds = smoothstep(0, 0.12, uv().y).mul(smoothstep(1, 0.88, uv().y));
+    const glow = across
+      .mul(waves.mul(0.6).add(drift.mul(0.4)))
+      .mul(fadeEnds)
+      .mul(0.24);
+    veilMat.colorNode = vec4(vec3(1.0, 0.78, 0.5).mul(glow), 1);
+    const veil = mesh(
+      ribbon(
+        EDGE_Z + 0.05,
+        FAR.maxZ - 0.05,
+        40,
+        (z) => [-0.58, deckHeight(z) + 0.03],
+        (z) => [0.58, deckHeight(z) + 0.03],
+        [0, 1, 0],
+        true,
+      ),
+      veilMat,
+    );
+    veil.renderOrder = 4;
+    put(veil, 'surface');
   }
   // 光の雫 (虹色ガラス＋発光): a bright core inside an iridescent shell
   const drop = new THREE.Group();
@@ -695,7 +813,7 @@ export function buildRoomArt(
     // transmission stays out of the smaller peek image (AGENTS.md); in hand it is the composite's orb instead
     put(orb, 'shared', { inPeek: false });
   }
-  const orbLight = new THREE.PointLight(0xffcf8a, 0, 9, 2);
+  const orbLight = new THREE.PointLight(0xffcf8a, 0, 5, 2);
   orbLight.position.set(PEDESTAL_ORB[0], PEDESTAL_ORB[1] + 0.1, PEDESTAL_ORB[2]);
   put(orbLight, 'shared');
 
@@ -792,15 +910,16 @@ export function buildRoomArt(
   moteMat.colorNode = vec4(1.3, 1.0, 0.62, 1);
   moteMat.opacityNode = smoothstep(0.8, 2.6, positionView.length());
   moteMat.fog = false;
-  const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.008, 0)), moteMat, MOTES);
+  const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.011, 0)), moteMat, MOTES);
   motes.frustumCulled = false;
   instanced.push(motes);
-  put(motes, 'shared');
+  // surface layer like the veil: a hint of the bridge that the bridge itself replaces
+  put(motes, 'surface');
   const moteSeeds = Array.from({ length: MOTES }, (_, i) => {
     const r = rng(500 + i);
     return {
-      x: (r() - 0.5) * 2.6,
-      y: 0.2 + r() * 1.9,
+      x: (r() - 0.5) * 0.9,
+      y: 0.12 + r() * 1.0,
       phase: r(),
       speed: 0.04 + r() * 0.05,
       wobble: r() * 6,
@@ -822,6 +941,7 @@ export function buildRoomArt(
     drop,
     fogRange: { near: fogNear, far: fogFar },
     animate(t) {
+      veilTime.value = t;
       for (let i = 0; i < MOTES; i++) {
         const s = moteSeeds[i];
         if (!s) continue;
@@ -832,6 +952,7 @@ export function buildRoomArt(
           s.y + 0.12 * Math.sin(t * 0.9 + s.wobble * 2),
           EDGE_Z + 0.2 - u * span,
         );
+        motePos.y += deckHeight(motePos.z);
         moteScale.setScalar(0.4 + 0.9 * fade);
         motes.setMatrixAt(i, moteMatrix.compose(motePos, moteRot, moteScale));
       }

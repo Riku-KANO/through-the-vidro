@@ -1,22 +1,27 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { activeSegmentIds, type Sphere, splitFooting, type Vec3 } from '../../layers/footing';
+import { activeSegmentIds, type Sphere, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import {
   BENCH,
   BRIDGE,
+  bridgeFooting,
+  DROP,
+  deckHeight,
   EDGE_Z,
   FAR,
   FOOTING_SEGMENT,
   GATE,
+  PEDESTAL_ID,
   PEDESTAL_ORB,
   SPAWNS,
   type SpawnName,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import { addRoomColliders, BackFooting, insideAnySphere } from './physics';
+import { addRoomColliders, BackFooting, deckSegmentShape, FallGuard, insideAnySphere } from './physics';
+import { PrologueSession } from './session';
 
 /**
  * The prologue room in a real Rapier world (Node): the same colliders the scene builds, the S-03 body,
@@ -34,7 +39,7 @@ const fullSphere: Sphere = { center: PEDESTAL_ORB, radius: MAIN_ORB_RADIUS };
 function room() {
   const world = createWorld();
   addRoomColliders(R, world);
-  const footing = new BackFooting(R, world, splitFooting('bridge', BRIDGE, FOOTING_SEGMENT));
+  const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
   return { world, footing };
 }
 
@@ -123,7 +128,9 @@ describe('the one way (序章: 失敗のしようがない一本道)', () => {
     r.footing.sync([fullSphere]);
     const p = body(r, { feet: [0, 0, EDGE_Z + 1.2], yaw: 0 });
     const s = walk(r, p, forward, 7);
-    expect(s.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
+    // over the gap the feet follow the arch, on the shores they stay at 0
+    expect(s.every((q) => q.grounded && Math.abs(q.y - deckHeight(q.z)) < 0.05)).toBe(true);
+    expect(Math.max(...s.map((q) => q.y))).toBeGreaterThan(0.3);
     // over the gap the walking speed holds (no seams caught between segments)
     const onBridge = s.filter((q) => q.z < BRIDGE.max[2] - 0.2 && q.z > BRIDGE.min[2] + 0.2);
     expect(onBridge.length).toBeGreaterThan(20);
@@ -141,12 +148,77 @@ describe('the one way (序章: 失敗のしようがない一本道)', () => {
     expect(r.footing.activeCount).toBeGreaterThan(0);
     const p = body(r, { feet: [0.28, 0, EDGE_Z + 0.8], yaw: 0 });
     const s = walk(r, p, forward, 6);
-    expect(s.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - deckHeight(q.z)) < 0.05)).toBe(true);
     expect(p.feet.z).toBeLessThan(EDGE_Z - 0.2);
     for (const q of s) {
       if (q.z < EDGE_Z) expect(insideAnySphere(q.x, q.y, q.z, [partial])).toBe(true);
     }
     // Soft, like any edge.
     expect(s.some((q) => q.speed > 0.2 && q.speed < 1.1)).toBe(true);
+  });
+});
+
+describe('picking the vidro up never drops you into the valley (罰がない、落下死はない)', () => {
+  it('right after a pickup from the shore, pushing toward the vanishing bridge keeps the body on the shore', () => {
+    // Found in the parent review (S-06 P1): the shrinking sphere still counted as ground for the fence, so the
+    // body could step onto the bridge while it vanished and fall forever.
+    for (const start of [
+      [0.2, 0, -13.67],
+      [-0.1, 0, -13.7],
+    ] as const) {
+      for (const delay of [0, 3, 6]) {
+        const r = room();
+        const session = new PrologueSession({
+          orbStart: 'hand',
+          pedestals: { [PEDESTAL_ID]: PEDESTAL_ORB },
+          footing: r.footing.segments,
+          drop: DROP,
+        });
+        // what the room does every frame: colliders for every sphere, the fence only for orbs on a pedestal
+        const tick = () => {
+          session.step(DT, { wantPeek: false });
+          const spheres = session.spheres();
+          r.footing.sync(
+            spheres,
+            spheres.filter((sp) => sp.materialize.target === 1),
+          );
+        };
+        const feet: Vec3 = [start[0], start[1], start[2]];
+        expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, feet)).toBe('place');
+        for (let i = 0; i < 60; i++) tick();
+        const yaw = Math.atan2(-(PEDESTAL_ORB[0] - feet[0]), -(PEDESTAL_ORB[2] - feet[2]));
+        const p = body(r, { feet, yaw });
+        const strafe: PlayerIntent = { move: { x: 1, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
+        const samples: { y: number; z: number; grounded: boolean }[] = [];
+        const step = (intent: PlayerIntent) => {
+          tick();
+          r.world.step();
+          p.update(DT, intent);
+          const f = p.feet;
+          samples.push({ y: f.y, z: f.z, grounded: p.grounded });
+        };
+        for (let i = 0; i < 10; i++) step({ ...strafe, move: { x: 0, y: 0 } });
+        const f0 = p.feet;
+        expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, [f0.x, f0.y, f0.z])).toBe('pickup');
+        for (let i = 0; i < delay; i++) step({ ...strafe, move: { x: 0, y: 0 } });
+        for (let t = 0; t < 3; t += DT) step(strafe);
+        for (const q of samples) {
+          expect(q.grounded).toBe(true);
+          expect(q.y).toBeGreaterThan(-0.05);
+          expect(q.z).toBeGreaterThan(EDGE_Z - 0.05);
+        }
+      }
+    }
+  });
+
+  it('the fall guard puts a body that fell below the walkways back where it last stood on solid ground', () => {
+    const guard = new FallGuard();
+    expect(guard.rescue([0, -2, -14])).toBeNull(); // nowhere known yet
+    guard.observe([0, 0, -12], true, false);
+    guard.observe([0, 0, -13.5], true, false);
+    guard.observe([0, 0.1, -14.5], true, true); // standing on the bridge (back footing): not a safe place
+    guard.observe([0, -0.5, -14.6], false, false); // in the air: not a safe place
+    expect(guard.rescue([0, -0.5, -14.6])).toBeNull(); // still above the floor of the guard
+    expect(guard.rescue([0, -1.2, -14.8])).toEqual([0, 0, -13.5]);
   });
 });

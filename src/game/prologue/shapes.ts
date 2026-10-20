@@ -1,5 +1,5 @@
 import type { MeshData } from '../player/walk-lab-field';
-import { WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
+import { BRIDGE, deckHeight, WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
 
 /**
  * Shapes of the prologue room as plain vertex data, so the drawn mesh and the Rapier triangle mesh are
@@ -84,4 +84,110 @@ export function domePoint(theta: number, phi: number, inset = 0): [number, numbe
     WORKSHOP.sphereCenterY + r * Math.cos(theta),
     r * Math.sin(theta) * Math.sin(phi),
   ];
+}
+
+/** Slope of the deck's top at z (central difference). */
+function deckSlope(z: number): number {
+  const e = 1e-3;
+  return (deckHeight(z + e) - deckHeight(z - e)) / (2 * e);
+}
+
+/**
+ * The arched deck from z0 to z1 (z0 > z1 or z0 < z1, either way): a box section of the bridge's width and
+ * `thickness` swept along deckHeight(z), closed at both ends. The same triangles are drawn and collided with
+ * (each footing segment is one such piece). `lift` moves it up or down (the drawn deck sits 3 mm under the
+ * shores where it overlaps them).
+ */
+export function deckMesh(z0: number, z1: number, steps: number, thickness = 0.14, lift = 0): MeshData {
+  const x0 = BRIDGE.min[0];
+  const x1 = BRIDGE.max[0];
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  const zs = Array.from({ length: steps + 1 }, (_, i) => z0 + ((z1 - z0) * i) / steps);
+  const vertex = (x: number, y: number, z: number, n: [number, number, number]): number => {
+    positions.push(x, y, z);
+    normals.push(...n);
+    return positions.length / 3 - 1;
+  };
+  const top = (z: number) => deckHeight(z) + lift;
+  // a strip along z between two edges; `flip` reverses the winding so the front faces along `normal`
+  const strip = (
+    a: (z: number) => [number, number, number],
+    b: (z: number) => [number, number, number],
+    normal: (z: number) => [number, number, number],
+  ) => {
+    const ia: number[] = [];
+    const ib: number[] = [];
+    for (const z of zs) {
+      const n = normal(z);
+      ia.push(vertex(...a(z), n));
+      ib.push(vertex(...b(z), n));
+    }
+    for (let i = 0; i < steps; i++) {
+      const [a0, a1, b0, b1] = [ia[i] ?? 0, ia[i + 1] ?? 0, ib[i] ?? 0, ib[i + 1] ?? 0];
+      // decide the winding from the geometry, so the face points along its normal whichever way z runs
+      const p = (k: number) => [positions[k * 3] ?? 0, positions[k * 3 + 1] ?? 0, positions[k * 3 + 2] ?? 0];
+      const [pa, pb, pc] = [p(a0), p(b0), p(a1)];
+      const u = [(pb[0] ?? 0) - (pa[0] ?? 0), (pb[1] ?? 0) - (pa[1] ?? 0), (pb[2] ?? 0) - (pa[2] ?? 0)];
+      const v = [(pc[0] ?? 0) - (pa[0] ?? 0), (pc[1] ?? 0) - (pa[1] ?? 0), (pc[2] ?? 0) - (pa[2] ?? 0)];
+      const cross = [
+        (u[1] ?? 0) * (v[2] ?? 0) - (u[2] ?? 0) * (v[1] ?? 0),
+        (u[2] ?? 0) * (v[0] ?? 0) - (u[0] ?? 0) * (v[2] ?? 0),
+        (u[0] ?? 0) * (v[1] ?? 0) - (u[1] ?? 0) * (v[0] ?? 0),
+      ];
+      const n = normals.slice(a0 * 3, a0 * 3 + 3);
+      const front =
+        (cross[0] ?? 0) * (n[0] ?? 0) + (cross[1] ?? 0) * (n[1] ?? 0) + (cross[2] ?? 0) * (n[2] ?? 0) > 0;
+      if (front) indices.push(a0, b0, a1, b0, b1, a1);
+      else indices.push(a0, a1, b0, b0, a1, b1);
+    }
+  };
+  const up = (z: number): [number, number, number] => {
+    const k = deckSlope(z);
+    const l = Math.hypot(1, k);
+    return [0, 1 / l, -k / l];
+  };
+  const down = (z: number): [number, number, number] => {
+    const [x, y, w] = up(z);
+    return [-x, -y, -w];
+  };
+  strip(
+    (z) => [x0, top(z), z],
+    (z) => [x1, top(z), z],
+    up,
+  );
+  strip(
+    (z) => [x1, top(z) - thickness, z],
+    (z) => [x0, top(z) - thickness, z],
+    down,
+  );
+  strip(
+    (z) => [x0, top(z) - thickness, z],
+    (z) => [x0, top(z), z],
+    () => [-1, 0, 0],
+  );
+  strip(
+    (z) => [x1, top(z), z],
+    (z) => [x1, top(z) - thickness, z],
+    () => [1, 0, 0],
+  );
+  // end caps (normals along z, facing away from the piece)
+  for (const [z, sign] of [
+    [z0, Math.sign(z0 - z1)],
+    [z1, Math.sign(z1 - z0)],
+  ] as const) {
+    const n: [number, number, number] = [0, 0, sign];
+    const a = vertex(x0, top(z), z, n);
+    const b = vertex(x1, top(z), z, n);
+    const c = vertex(x1, top(z) - thickness, z, n);
+    const d = vertex(x0, top(z) - thickness, z, n);
+    if (sign > 0) indices.push(a, d, b, b, d, c);
+    else indices.push(a, b, d, b, c, d);
+  }
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    indices: new Uint32Array(indices),
+  };
 }

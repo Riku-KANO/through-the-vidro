@@ -361,6 +361,21 @@ for (const backend of backends) {
     await waitRoom(page, "r.target === 'pedestal'", 5_000);
     await page.keyboard.press('KeyE');
     await waitRoom(page, "r.orb === 'hand'", 3_000);
+    // stepping toward the vanishing bridge right away never leaves the shore (落下死はない; parent review P1)
+    await page.keyboard.down('KeyD');
+    const pushed: RoomProbe[] = [];
+    const until = Date.now() + 1500;
+    while (Date.now() < until) {
+      pushed.push(await room(page));
+      await page.waitForTimeout(50);
+    }
+    await page.keyboard.up('KeyD');
+    expect(pushed.length).toBeGreaterThan(10);
+    for (const q of pushed) {
+      expect(q.grounded).toBe(true);
+      expect(Math.abs(q.position.y)).toBeLessThan(0.05);
+      expect(q.position.z).toBeGreaterThan(edgeZ - 0.05);
+    }
     const restored = await waitRoom(page, 'r.bridgeColliders === 0 && r.sphereRadius === 0', 3_000);
     expect(restored.events).toContain('pickup:pedestal');
     expect(restored.dropTaken).toBe(true);

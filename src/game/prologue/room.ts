@@ -2,16 +2,16 @@ import * as THREE from 'three/webgpu';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
-import { segmentsUnder, splitFooting, type Vec3 } from '../../layers/footing';
+import { segmentsUnder, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
 import { glassEase } from '../../layers/tween';
-import type { DiveWorld } from '../../ui/home/dive-host';
 import { pickLang } from '../../ui/lang';
+import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
+import { peekMoveSpeedMultiplier } from '../orb/peek';
 import { PeekPipeline } from '../orb/peek-pipeline';
 import { EYE_HEIGHT, FOV_DEFAULT } from '../player/constants';
-import { combineModifiers } from '../player/motion';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import type { Autopilot } from './autopilot';
@@ -20,12 +20,12 @@ import { EventBus, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
   BRIDGE,
+  bridgeFooting,
   DROP,
   DROP_REACH,
   EDGE_Z,
   FACING_DEG,
   FAR,
-  FOOTING_SEGMENT,
   lookDirection,
   PEDESTAL_ID,
   PEDESTAL_ORB,
@@ -33,7 +33,7 @@ import {
   SPAWNS,
   type SpawnName,
 } from './layout';
-import { addRoomColliders, BackFooting, insideAnySphere } from './physics';
+import { addRoomColliders, BackFooting, deckSegmentShape, FallGuard, insideAnySphere } from './physics';
 import { buildRoomArt } from './room-art';
 import { type InteractTarget, PrologueSession, peekModifier, SHAKE_AMPLITUDE } from './session';
 import { pickTarget, type TargetCandidate } from './targets';
@@ -195,7 +195,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     handPresence: 0,
     sphereRadius: 0,
     bridgeColliders: 0,
-    bridgeSegments: splitFooting('bridge', BRIDGE, FOOTING_SEGMENT).length,
+    bridgeSegments: bridgeFooting().length,
     onBackFooting: false,
     shaking: false,
     target: null,
@@ -269,7 +269,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const R = await initPhysics();
   const world = createWorld();
   addRoomColliders(R, world);
-  const footing = new BackFooting(R, world, splitFooting('bridge', BRIDGE, FOOTING_SEGMENT));
+  const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
   world.step();
 
   const shadowsBefore = renderer.shadowMap.enabled;
@@ -335,6 +335,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   let target: TargetKind | null = null;
   let promptText = '';
   let mainRadius = 0;
+  let heldFor: readonly unknown[] | null = null;
+  let held: readonly { center: Vec3; radius: number }[] = [];
+  let onBackFooting = false;
+  const guard = new FallGuard();
   const idle: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
   const live: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
   const peekInput = { wantPeek: false };
@@ -444,9 +448,19 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     }
     field.setSpheres(fieldList);
     // colliders follow the session's spheres (the same array until the orbs change); the dev hold its own
-    footing.sync(
-      opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius })),
-    );
+    // Colliders follow every sphere; the fence only the spheres of orbs on a pedestal (a sphere shrinking
+    // after a pickup is no ground to step onto). Both arrays change only when the orbs do; the dev hold
+    // uses what it draws.
+    if (opts.growHold !== null) {
+      const drawn = fieldList.map((s) => ({ center: s.center, radius: s.radius }));
+      footing.sync(drawn, drawn);
+    } else {
+      if (spheres !== heldFor) {
+        heldFor = spheres;
+        held = spheres.filter((sp) => sp.materialize.target === 1);
+      }
+      footing.sync(spheres, held);
+    }
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;
@@ -454,7 +468,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     art.orb.visible = place !== 'hand' || prewarm;
     art.orb.position.set(at[0] + jitter, at[1] + jitter * 0.3, at[2] - jitter * 0.6);
     art.orbGlow.value = (place === 'pedestal' ? mainGlow * 1.2 : 0) + flash * (place === 'pedestal' ? 0 : 1);
-    art.orbLight.intensity = place === 'pedestal' ? mainGlow * 4.5 : 0;
+    art.orbLight.intensity = place === 'pedestal' ? mainGlow * 2.2 : 0;
 
     // the light drop hovers; once touched it rises and flies into the vidro, then is gone
     const d = session.dropState;
@@ -491,19 +505,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     probe.locked = input.locked;
     probe.peeking = session.peeking;
     probe.peekAmount = frame.peek;
-    probe.moveSpeed = combineModifiers(player.modifiers.values()).speedMultiplier;
+    probe.moveSpeed = peekMoveSpeedMultiplier(frame.peek);
     probe.orb = session.orbPlace;
     probe.pedestal = session.pedestal;
     probe.handPresence = session.handPresence;
     probe.sphereRadius = mainRadius;
     probe.bridgeColliders = footing.activeCount;
-    // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now
-    feetAt[0] = f.x;
-    feetAt[1] = f.y;
-    feetAt[2] = f.z;
-    probe.onBackFooting = segmentsUnder(feetAt, footing.segments).some((seg) =>
-      footing.activeIds.includes(seg.id),
-    );
+    probe.onBackFooting = onBackFooting;
     probe.shaking = session.shake > 0;
     probe.target = target;
     probe.drop = session.dropState;
@@ -588,6 +596,20 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       world.step();
       if (playing) {
         player.update(dt, intent);
+        const f = player.feet;
+        feetAt[0] = f.x;
+        feetAt[1] = f.y;
+        feetAt[2] = f.z;
+        // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now;
+        // only looked up near the bridge, so most frames allocate nothing
+        onBackFooting =
+          f.z < BRIDGE.max[2] + 0.5 &&
+          f.z > BRIDGE.min[2] - 0.5 &&
+          segmentsUnder(feetAt, footing.segments).some((seg) => footing.activeIds.includes(seg.id));
+        // 落下死はない: the last line of defence if the body ever drops below the walkways
+        guard.observe(feetAt, player.grounded, onBackFooting);
+        const back = guard.rescue(feetAt);
+        if (back) player.teleport({ x: back[0], y: back[1], z: back[2] });
         player.applyToCamera(camera);
         camera.updateMatrixWorld();
       }

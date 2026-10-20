@@ -3,6 +3,7 @@ import { dot, exp, mix, screenSize, screenUV, smoothstep, uniform, vec2, vec3 } 
 import * as THREE from 'three/webgpu';
 import type { SandboxScene, SceneContext } from '../../core/scene';
 import { segment } from '../../core/transition';
+import type { DiveWorld } from '../../game/dive-world';
 import { AudioGate } from '../audio-gate';
 import { AUTOPLAY, parsePauseSpec } from '../autoplay';
 import { ScreenFlow, TRANSITIONS } from '../flow';
@@ -23,34 +24,10 @@ import { createHomeOrb } from './orb';
  * its own camera (トランジション設計 > 遷移の一覧: 玉の中身は序章のシーンそのもの), the dive flies that
  * camera along the world's path, and once landed the world plays and draws itself.
  *
- * This is the S-04 home-dive scene with its placeholder world made pluggable (S-06). The behaviour is
- * the same; src/scenes/home-dive.scene.ts still carries its own copy (see process/slices/S-06.md).
+ * The world is a DiveWorld (src/game/dive-world.ts): the prologue room (S-06) or S-04's placeholder city
+ * (src/scenes/home-dive.scene.ts). Made pluggable from the S-04 home-dive scene in S-06.
  */
-export interface DiveWorld {
-  /** The game scene, drawn inside the home orb and on the whole screen during the dive. */
-  scene: THREE.Scene;
-  /** The game camera; the host flies it during the dive, the world drives it in play. */
-  camera: THREE.PerspectiveCamera;
-  /** The point the miniature view turns around when the home orb tilts. */
-  pivot: THREE.Vector3;
-  /** Field of view while the orb shows the miniature, and when standing (the end of the dive). */
-  miniatureFov: number;
-  standingFov: number;
-  /** Game camera pose along the dive: u = 0 the miniature view, u = 1 the pose play starts from. */
-  pose(u: number, outPos: THREE.Vector3, outTarget: THREE.Vector3): void;
-  /** Once, first thing while loading: build the world (physics, art, environment maps…). */
-  prepare(): Promise<void> | void;
-  /** One real draw of the playable view to the canvas, so its pipelines compile while loading. */
-  warm(): void;
-  /** Every frame. While playing it moves the player and the camera; otherwise only ambient motion. */
-  update(dt: number, t: number): void;
-  /** Draws a playing frame to the canvas. */
-  render(): void;
-  /** Landed (true) or left (false). Input is held back while false (演出中は入力を預かる). */
-  setPlaying(on: boolean): void;
-  resize(width: number, height: number): void;
-  dispose(): void;
-}
+export type { DiveWorld };
 
 export interface HomeDiveOptions {
   /** Sandbox only: Esc in the game plays the dive back to home (the real game opens the pause screen). */

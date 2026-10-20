@@ -14,7 +14,7 @@ import {
   PEDESTAL_RADIUS,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import { domeWall } from './shapes';
+import { deckMesh, domeWall } from './shapes';
 
 /**
  * Rapier side of the prologue room (S-03's world, S-02's back-layer footing).
@@ -118,18 +118,26 @@ export class BackFooting {
   private readonly handles = new Set<number>();
   private active: string[] = [];
   private spheres: readonly Sphere[] = [];
+  private held: readonly Sphere[] = [];
 
+  /**
+   * @param shape the collision shape of one segment: by default its box; the prologue's arched deck passes
+   *   the drawn deck's own piece (当たり判定は見た目に正直に)
+   */
   constructor(
     R: typeof RAPIER,
     private readonly world: RAPIER.World,
     readonly segments: readonly FootingSegment[],
+    shape?: (segment: FootingSegment) => MeshData,
   ) {
     for (const s of segments) {
-      const desc = R.ColliderDesc.cuboid(
-        (s.max[0] - s.min[0]) / 2,
-        (s.max[1] - s.min[1]) / 2,
-        (s.max[2] - s.min[2]) / 2,
-      ).setTranslation((s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, (s.min[2] + s.max[2]) / 2);
+      const desc = shape
+        ? trimesh(R, shape(s), [0, 0, 0])
+        : R.ColliderDesc.cuboid(
+            (s.max[0] - s.min[0]) / 2,
+            (s.max[1] - s.min[1]) / 2,
+            (s.max[2] - s.min[2]) / 2,
+          ).setTranslation((s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, (s.min[2] + s.max[2]) / 2);
       const c = world.createCollider(desc);
       c.setEnabled(false);
       this.colliders.set(s.id, c);
@@ -146,8 +154,14 @@ export class BackFooting {
     return this.active;
   }
 
-  /** Switches the colliders for the current spheres. Returns whether anything changed. */
-  sync(spheres: readonly Sphere[]): boolean {
+  /**
+   * Switches the colliders for the current spheres (`activeSegmentIds`). The fence counts only `held`: the
+   * spheres of orbs standing on a pedestal. A sphere shrinking after a pickup keeps its colliders until it is
+   * gone (nobody stands on them: canPickUp refuses that), but is no longer ground to step onto.
+   * Returns whether the colliders changed.
+   */
+  sync(spheres: readonly Sphere[], held: readonly Sphere[] = spheres): boolean {
+    this.held = held;
     if (spheres === this.spheres) return false;
     this.spheres = spheres;
     const next = activeSegmentIds(this.segments, spheres);
@@ -162,13 +176,42 @@ export class BackFooting {
     return this.handles.has(collider.handle);
   }
 
-  /** PlayerController.allowGround: back footing is ground only inside a sphere. */
+  /** PlayerController.allowGround: back footing is ground only inside the sphere of a placed orb. */
   readonly allowGround = (x: number, y: number, z: number, collider: RAPIER.Collider): boolean =>
-    !this.handles.has(collider.handle) || insideAnySphere(x, y, z, this.spheres);
+    !this.handles.has(collider.handle) || insideAnySphere(x, y, z, this.held);
 
   dispose(): void {
     for (const c of this.colliders.values()) this.world.removeCollider(c, false);
     this.colliders.clear();
     this.handles.clear();
   }
+}
+
+/**
+ * Last line of 落下死はない: if a body ever drops below the walkways (y < floorY), put it back where it last
+ * stood on solid, shared ground (never on back footing, which can vanish).
+ */
+export class FallGuard {
+  private safe: [number, number, number] | null = null;
+
+  constructor(readonly floorY = -1) {}
+
+  observe(feet: Vec3, grounded: boolean, onBackFooting: boolean): void {
+    if (!grounded || onBackFooting) return;
+    if (this.safe) {
+      this.safe[0] = feet[0];
+      this.safe[1] = feet[1];
+      this.safe[2] = feet[2];
+    } else this.safe = [feet[0], feet[1], feet[2]];
+  }
+
+  /** Where to put the body back, or null while it is above the floor of the guard (or nothing is known). */
+  rescue(feet: Vec3): Vec3 | null {
+    return feet[1] < this.floorY && this.safe ? [this.safe[0], this.safe[1], this.safe[2]] : null;
+  }
+}
+
+/** One footing segment of the arched deck, exactly as drawn (4 steps per 0.4 m). */
+export function deckSegmentShape(segment: FootingSegment): MeshData {
+  return deckMesh(segment.max[2], segment.min[2], 4);
 }

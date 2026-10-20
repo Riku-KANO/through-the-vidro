@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
-import { BODY_RADIUS, EYE_HEIGHT } from '../player/constants';
+import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
+import { PEEK_FOV_DELTA_DEG } from '../orb/peek';
+import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/constants';
 import { LEDGE_DEFAULTS } from '../player/ledge';
 import {
   BENCH_ORB,
   BRIDGE,
+  BRIDGE_RISE,
+  bridgeFooting,
   DROP,
   DROP_REACH,
+  deckHeight,
   EDGE_Z,
   FACING_DEG,
   FAR,
@@ -79,5 +84,53 @@ describe('the prologue layout', () => {
     expect(
       angleDeg(eyeAt(0, deadEnd), lookDirection(0, 0), [LIGHTHOUSE[0], EYE_HEIGHT, LIGHTHOUSE[2]]),
     ).toBeLessThan(15);
+  });
+});
+
+describe('the bridge seen through the orb (体験の核 2: 行き止まりに見えた場所に、玉越しにだけ橋が架かっている)', () => {
+  /** Where a world point lands relative to the fully raised hand orb (1 = on its rim), from the dead end. */
+  function inOrb(point: Vec3, pitch: number): number {
+    const fov = FOV_DEFAULT + PEEK_FOV_DELTA_DEG;
+    const aspect = 16 / 9;
+    const tanY = Math.tan((fov * Math.PI) / 360);
+    const dy = point[1] - EYE_HEIGHT;
+    const dz = point[2] - deadEnd;
+    const depth = Math.sin(pitch) * dy - Math.cos(pitch) * dz;
+    const up = Math.cos(pitch) * dy + Math.sin(pitch) * dz;
+    const sx = 0.5 + (0.5 * (point[0] / depth)) / (tanY * aspect);
+    const sy = 0.5 - (0.5 * (up / depth)) / tanY;
+    const c = orbScreenCircle(handOrbCenter(1, 1, 0), HAND_ORB_RADIUS, fov, aspect);
+    return Math.hypot((sx - c.x) * aspect, sy - c.y) / c.r;
+  }
+  const mid = (BRIDGE.min[2] + BRIDGE.max[2]) / 2;
+
+  it('peeking across the gap from where the edge stops you, the middle of the deck is inside the orb', () => {
+    // looking across and down at the gap (−0.4 rad ≈ −23°). The parent review asked for −0.15; see S-06.md.
+    expect(inOrb([0, deckHeight(mid), mid], -0.4)).toBeLessThan(0.85);
+  });
+
+  it('the arch is gentle: its steepest part stays well inside the walkable slope', () => {
+    let steepest = 0;
+    for (let i = 0; i < 200; i++) {
+      const z0 = BRIDGE.min[2] + ((BRIDGE.max[2] - BRIDGE.min[2]) * i) / 200;
+      const z1 = z0 + (BRIDGE.max[2] - BRIDGE.min[2]) / 200;
+      steepest = Math.max(steepest, Math.abs(deckHeight(z1) - deckHeight(z0)) / (z1 - z0));
+    }
+    expect((Math.atan(steepest) * 180) / Math.PI).toBeLessThan(MAX_SLOPE_DEG - 10);
+    expect(BRIDGE_RISE).toBeGreaterThan(0);
+    // level where it meets the shores (no step), highest in the middle
+    expect(deckHeight(BRIDGE.max[2] - 0.01)).toBeLessThan(0.01);
+    expect(deckHeight(BRIDGE.min[2] + 0.01)).toBeLessThan(0.01);
+    expect(deckHeight(mid)).toBeCloseTo(BRIDGE_RISE, 6);
+  });
+
+  it('every footing segment covers the deck over its length (for 拾う前の安全確認)', () => {
+    for (const seg of bridgeFooting()) {
+      for (let i = 0; i <= 4; i++) {
+        const z = seg.min[2] + ((seg.max[2] - seg.min[2]) * i) / 4;
+        expect(deckHeight(z)).toBeLessThanOrEqual(seg.max[1] + 1e-9);
+        expect(seg.max[1] - deckHeight(z)).toBeLessThan(0.25);
+      }
+    }
   });
 });
