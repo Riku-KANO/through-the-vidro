@@ -14,6 +14,7 @@ import { schedulePops } from '../core/audio/pop';
 import { RoomReverb } from '../core/audio/reverb';
 import { mulberry32 } from '../core/audio/rng';
 import { midiToHz } from '../core/audio/scale';
+import { followBackdropResize } from '../core/glass';
 import type { SceneFactory } from '../core/scene';
 
 export const title = 'S-09 audio lab: glass by size, po-pen, HRTF orbit, workshop / dome reverb';
@@ -329,16 +330,20 @@ const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
     scene.add(leg);
   }
 
-  const glassMat = new THREE.MeshPhysicalNodeMaterial({
-    color: 0xffffff,
-    metalness: 0,
-    roughness: 0,
-    transmission: 1,
-    ior: 1.5,
-    thickness: 0.3,
-    attenuationColor: new THREE.Color(0xe8fff4),
-    attenuationDistance: 2.5,
-  });
+  // Hand-made transmissive glass has no node, so three would skip refreshing it and keep a destroyed backdrop
+  // after a render scale change (S-12). followBackdropResize gives it one without changing the look (S-14).
+  const glassMat = followBackdropResize(
+    new THREE.MeshPhysicalNodeMaterial({
+      color: 0xffffff,
+      metalness: 0,
+      roughness: 0,
+      transmission: 1,
+      ior: 1.5,
+      thickness: 0.3,
+      attenuationColor: new THREE.Color(0xe8fff4),
+      attenuationDistance: 2.5,
+    }),
+  );
   const sphereGeo = new THREE.SphereGeometry(0.5, 64, 48);
   const cradleGeo = new THREE.TorusGeometry(1, 0.06, 8, 48);
   const ringGeo = new THREE.TorusGeometry(1, 0.012, 6, 96);

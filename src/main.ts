@@ -1,3 +1,4 @@
+import type * as THREE from 'three/webgpu';
 import {
   checkBudget,
   type FrameStats,
@@ -13,6 +14,7 @@ import type { QualityDecision } from './core/perf/quality-select';
 import { QUALITY_PRESETS, type QualityLevel } from './core/quality';
 import { type Backend, createRenderer } from './core/renderer';
 import type { SandboxScene, SceneModule } from './core/scene';
+import type { BackdropReport } from './dev/backdrop-risks';
 import { type StatsExtras, StatsOverlay } from './dev/stats';
 import { loadScene, sceneNames } from './scenes/registry';
 
@@ -82,9 +84,23 @@ export interface VidroProbe {
   sceneProbe: Record<string, unknown>;
 }
 
+/** ?debug=1 only: internals for page scripts (Playwright, DevTools). */
+export interface VidroDebug {
+  renderer: THREE.WebGPURenderer;
+  /** Sets the render scale directly, past the governor. */
+  setScale(scale: number): void;
+  /**
+   * Materials of the current scene that need followBackdropResize() (S-14, src/dev/backdrop-risks.ts): those of
+   * sandbox.scene (the first of the roots listed) and of every root the scene has drawn or compiled since it was
+   * created.
+   */
+  backdropRisks(): BackdropReport;
+}
+
 declare global {
   interface Window {
     __vidro: VidroProbe;
+    __vidroDebug?: VidroDebug;
   }
 }
 
@@ -185,6 +201,8 @@ async function main(): Promise<void> {
   let overlay: HTMLDivElement | null = null;
   let sandbox: SandboxScene | null = null;
   let sceneGeneration = 0;
+  /** ?debug=1: every root drawn or compiled since the current scene instance was created (backdropRisks). */
+  const drawnRoots = new Set<THREE.Object3D>();
 
   const stats = new StatsOverlay(document.body, backend);
   stats.visible = params.stats;
@@ -227,6 +245,7 @@ async function main(): Promise<void> {
     if (sandbox) sandbox.dispose();
     overlay?.remove();
     sandbox = null;
+    drawnRoots.clear();
     const nextOverlay = document.createElement('div');
     nextOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5';
     document.body.appendChild(nextOverlay);
@@ -262,12 +281,35 @@ async function main(): Promise<void> {
     return Promise.race([createScene(level), timeout]).finally(() => window.clearTimeout(timer));
   };
 
+  // ?debug=1 exposes internals to page scripts (Playwright, DevTools): one-off investigations and tests that
+  // must drive the render scale directly, independent of the governor. Set up before the first scene is created,
+  // so that what it compiles while it loads is recorded too.
+  if (params.raw.get('debug') === '1') {
+    // A scene may draw more than sandbox.scene (the dive world into the home orb's image, a world built later):
+    // note every root handed to render() and compileAsync(). Passes, shadow maps, renderAsync() and compile() go
+    // through these two as well. Every argument is passed on as it came.
+    const render = renderer.render.bind(renderer);
+    renderer.render = (...args: Parameters<typeof render>) => {
+      drawnRoots.add(args[0]);
+      return render(...args);
+    };
+    const compileAsync = renderer.compileAsync.bind(renderer);
+    renderer.compileAsync = (...args: Parameters<typeof compileAsync>) => {
+      drawnRoots.add(args[0]);
+      if (args[2]) drawnRoots.add(args[2]);
+      return compileAsync(...args);
+    };
+    // Loaded only here: the sandbox without ?debug=1 does not evaluate it.
+    const { backdropRisks } = await import('./dev/backdrop-risks');
+    window.__vidroDebug = {
+      renderer,
+      setScale: applyScale,
+      backdropRisks: () => backdropRisks(sandbox ? [sandbox.scene, ...drawnRoots] : drawnRoots),
+    };
+  }
+
   await createScene(params.quality);
   window.addEventListener('resize', resize);
-  // ?debug=1 exposes internals to page scripts (Playwright, DevTools): one-off investigations and tests that
-  // must drive the render scale directly, independent of the governor.
-  if (params.raw.get('debug') === '1')
-    Object.assign(window, { __vidroDebug: { renderer, setScale: applyScale } });
 
   const governor = new PerfGovernor({
     level: params.quality,
