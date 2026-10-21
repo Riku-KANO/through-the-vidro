@@ -4,7 +4,7 @@ import { glassPitch, VIDRO_SCALE } from '../../audio/tuning';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
-import { EventBus, type PrologueEvent } from './events';
+import { EventBus, eventName, type PrologueEvent } from './events';
 import { BENCH_ORB, DROP, PEDESTAL_ORB } from './layout';
 import {
   answer,
@@ -13,7 +13,6 @@ import {
   createPrologueSound,
   cueFor,
   cueName,
-  eventName,
   type SoundCue,
   type SoundRoom,
   sourcePoint,
@@ -101,8 +100,8 @@ describe('where the sounds come from (HRTF)', () => {
   });
 });
 
-describe('the event names on the probe', () => {
-  it('match the room probe’s event log (pickup:<from>, shake:<reason>, else the type)', () => {
+describe('the event names on the probes (events.ts: one naming for the room’s log and the sound’s)', () => {
+  it('name an event by its type, with where a pickup came from and why a shake refused (pickup:<from>, shake:<reason>)', () => {
     expect(ALL_EVENTS.map(eventName)).toEqual([
       'peekStart',
       'peekEnd',

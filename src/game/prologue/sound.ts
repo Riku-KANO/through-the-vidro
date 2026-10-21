@@ -1,13 +1,13 @@
 import * as THREE from 'three/webgpu';
+import { createVidroEngine } from '../../audio/engine';
 import { strikeGlass } from '../../audio/glass-tuning';
-import { VIDRO_REVERB_SEND, VIDRO_VOLUMES } from '../../audio/levels';
 import { type PopenKind, playPopen } from '../../audio/popen';
 import { VIDRO_ROOMS } from '../../audio/rooms';
-import { AudioEngine, type Emitter } from '../../core/audio/engine';
+import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import type { GlassStrength } from '../../core/audio/glass';
 import type { Vec3 } from '../../layers/footing';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
-import type { EventBus, PrologueEvent } from './events';
+import { type EventBus, eventName, type PrologueEvent } from './events';
 import { BENCH_ORB, DROP, PEDESTAL_ORB } from './layout';
 import type { RoomProbe } from './room';
 
@@ -70,13 +70,6 @@ export function cueFor(event: PrologueEvent): SoundCue | null {
 /** 'popen:<kind>' or 'glass:<strength>' (the probe's log). */
 export function cueName(cue: SoundCue): string {
   return cue.kind === 'popen' ? `popen:${cue.popen}` : `glass:${cue.strength}`;
-}
-
-/** The same names as the room probe's event log (room.ts). */
-export function eventName(event: PrologueEvent): string {
-  if (event.type === 'pickup') return `pickup:${event.from}`;
-  if (event.type === 'shake') return `shake:${event.reason}`;
-  return event.type;
 }
 
 /** The world point a cue sounds from. `hand` is the hand orb's world position. */
@@ -207,17 +200,12 @@ export interface SoundOptions {
   target?: EventTarget;
   /** Makes the AudioContext inside the first gesture. Default: `new AudioContext()` (unit tests pass a stand-in). */
   makeContext?: () => AudioContext;
-  /** Builds the engine on that context. Default: AudioEngine.create with the workshop and the game's mixer. */
+  /** Builds the engine on that context. Default: the game's engine (src/audio/engine.ts) in the workshop. */
   makeEngine?: (context: AudioContext) => Promise<AudioEngine>;
 }
 
 const vidroEngine = (context: AudioContext): Promise<AudioEngine> =>
-  AudioEngine.create({
-    room: VIDRO_ROOMS.workshop,
-    volumes: VIDRO_VOLUMES,
-    reverbSend: VIDRO_REVERB_SEND,
-    context,
-  });
+  createVidroEngine(context, VIDRO_ROOMS.workshop);
 
 /**
  * The prologue's sound. Nothing sounds until the audio has started: on its own engine, made inside the first gesture
