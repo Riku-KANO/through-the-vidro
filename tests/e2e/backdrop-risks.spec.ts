@@ -17,13 +17,14 @@ import type { BackdropReport } from '../../src/dev/backdrop-risks';
  *
  * It asks about 1 s after the scene starts running and again at about 5 s, because some scenes build or first draw
  * their world later (prologue-proto and home-dive behind their loading screen). For the scenes whose world is drawn
- * outside sandbox.scene it also checks, with their default switches, that a root besides sandbox.scene holds materials
+ * outside sandbox.scene it also checks, with their default switches, that a scene besides sandbox.scene holds materials
  * that read the backdrop: the world's glass (S-15). A last case checks that a risky material put into such a world is
  * reported (positive control).
- * Limits (process/slices/S-14.md): it sees the scene graph at those two moments only, with each scene's default
- * switches and preset (mid); not a material swapped in only during a pass, created later in play, made transmissive
- * later, or given its node after it was first drawn (that one counts as safe); not a root drawn by other means than
- * renderer.render() or compileAsync().
+ * Limits (process/slices/S-14.md, S-15.md): it sees the scene graph at those two moments only, with each scene's
+ * default switches and preset (mid); not a material swapped in only during a pass, created later in play, made
+ * transmissive later, or given its node after it was first drawn (that one counts as safe); not a root drawn by other
+ * means than renderer.render() or compileAsync(). The world check takes any other scene with transmissive glass for
+ * the world, and fails falsely once the world has no transmissive glass.
  *
  * WebGPU only by default: the check reads materials, the same on both paths. BACKENDS=webgpu,webgl2 adds WebGL2.
  * SCENES=a,b limits the run.
@@ -42,9 +43,10 @@ const CHECK_AT = [1, 5];
 /**
  * Scenes whose world is drawn outside sandbox.scene (the home screen's orb shows it, S-04/S-06). Counting roots does
  * not show that the world was seen: PMREM's helper scenes and the groups passed to compileAsync are roots too (review
- * round 2 of S-14). So these scenes must have, besides sandbox.scene (the first root), a root with at least one
- * material that reads the backdrop (core's readsBackdrop, safe ones included): their world has transmissive glass,
- * and the home screen around it has none (S-15).
+ * round 2 of S-14). So these scenes must have, besides sandbox.scene (the first root), a scene root with at least one
+ * material that reads the backdrop (core's readsBackdrop, safe ones included): their world is a scene of its own with
+ * transmissive glass, while PMREM's scenes have none (S-15). Groups are left out, so a home-side group compiled on its
+ * own (compileWith(null, late, …) in dive-host.ts) cannot stand in for the world should it ever get such glass.
  */
 const WORLD_OUTSIDE_SCENE = ['home-dive', 'prologue-proto'];
 
@@ -81,10 +83,10 @@ for (const scene of scenes) {
         found[`${at} s`] = last?.risks ?? [];
       }
       if (WORLD_OUTSIDE_SCENE.includes(scene)) {
-        const outside = last?.roots.slice(1) ?? [];
+        const otherScenes = last?.roots.slice(1).filter((r) => r.label.startsWith('Scene#')) ?? [];
         expect(
-          Math.max(0, ...outside.map((r) => r.backdropReaders)),
-          `backdrop readers in a root besides sandbox.scene (roots: ${describeRoots(last)})`,
+          Math.max(0, ...otherScenes.map((r) => r.backdropReaders)),
+          `backdrop readers in a scene besides sandbox.scene (roots: ${describeRoots(last)})`,
         ).toBeGreaterThanOrEqual(1);
       }
       expect(await page.evaluate(() => window.__vidro.errors), 'probe errors').toEqual([]);
