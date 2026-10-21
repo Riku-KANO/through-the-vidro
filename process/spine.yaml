@@ -365,7 +365,9 @@ slices:
   # S-07（体感の判断）の前に試作部屋を仕上げるスライス（2026-10-21 追加）。S-15 と並べて進める
   - id: S-16
     title: 試作部屋に音をつなぐ — 玉の出来事でぽぺん、雫でガラスの音、工房の残響
-    status: todo
+    status: integrated
+    branch: slice/S-16-prologue-sound
+    accepted: レビュー2巡目で P1・P2 なし。任意の P3（prepare 失敗時の probe）は統合時に親が直した（2026-10-21）
     depends: [S-06, S-09]
     parallel: true
     requirements:
@@ -376,13 +378,13 @@ slices:
     paths:
       - src/game/prologue/sound.ts（新規。出来事から音への対応と、AudioEngine への配線）
       - src/game/prologue/sound.test.ts
-      - src/scenes/prologue-proto.scene.ts（配線の数行だけ）
+      - src/scenes/prologue-proto.scene.ts（配線と probe の観測口だけ）
       - src/audio/**（ゲーム側の音の調整が要るときだけ。src/core/audio は変えない）
       - tests/e2e/S-16-*.spec.ts
       - process/slices/S-16.md
     acceptance:
       - room.events の出来事を音に対応させる純粋関数が単体テストされている（peekStart→覗く、place→置く、pickup→拾う、shake→震える のぽぺん。雫に触れる・取るはガラスの音。peekEnd に音をつけるかは設計書に照らして決め、理由を記録する）
-      - AudioEngine は最初の操作で開始し、それまでの出来事は鳴らさない（溜めて後から鳴らさない）。部屋の残響は src/audio/rooms.ts の工房を使う。玉の音は手の位置から HRTF で鳴る
+      - AudioEngine は最初の操作で開始し、それまでの出来事は鳴らさない（溜めて後から鳴らさない）。部屋の残響は src/audio/rooms.ts の工房を使う。手に持った玉の音は手の位置から、置いた玉の音（震える）は玉のある所から HRTF で鳴る
       - e2e が S-06 の通しの入力を送り、鳴った音の種類の列（?debug=1 などの観測口で取る）が出来事の列と一致すること、両経路でエラーなし、中品質の重さが S-06 の基準を超えないことを確かめる
       - センサーで確かめられない「気持ちよさ」は、発案者の耳での確認項目として記録に書き出す（S-07 で一緒に見る）
 
@@ -406,3 +408,23 @@ slices:
       - PeekPipeline の合成の後ろに、負荷シーンと同じ順の仕上げ（抑えたブルーム → AgX → プリセットの FXAA/SMAA）をつなぐ。強い光源と光の雫だけが滲み、覗いている間も玉の中の像がブルームで潰れない
       - 両経路で試作部屋と layers-lab がエラーなく動き、スクリーンショットのセンサー（仕上げの前後、覗く前後）で見た目を確かめる
       - 中品質の試作部屋のベンチが負荷シーン以下の重さを保つ（S-06 の基準）。超えるならブルームの解像度や強さで収め、差を記録する
+
+  - id: S-18
+    title: AudioContext をひとつに — 読み込み画面の「はじめる」で始めた音のエンジンを UI とゲームで共有する
+    status: todo
+    depends: [S-16]
+    requirements:
+      - UI/UX設計 > 画面ごとの設計（読み込み：操作があるまで音を鳴らせない）
+      - サウンドデザイン > 制作方法（音量の4系統）
+    paths:
+      - src/ui/audio-gate.ts
+      - src/ui/**（AudioGate を使う所だけ）
+      - src/game/prologue/sound.ts（外から渡されたエンジンを使えるようにする）
+      - src/scenes/prologue-proto.scene.ts（配線だけ）
+      - tests/e2e/S-18-*.spec.ts
+      - process/slices/S-18.md
+    acceptance:
+      - ホーム経由で試作部屋に入ったとき、AudioContext が1つだけ作られる（今は S-04 の AudioGate と S-16 の音で2つ）。作るのは最初の操作の中（AGENTS.md の決まり）
+      - ホームの雫の仮の音と試作部屋の音が、同じエンジンの4系統の音量に従う。直接モード（?direct=1）では S-16 のとおり自分で作る
+      - e2e で、ホーム経由と直接の両方について、コンテキストの数・状態と、S-16 の音の列が変わらないことを確かめる。両経路でエラーなし
+

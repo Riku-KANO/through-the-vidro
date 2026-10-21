@@ -116,8 +116,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **透過の背景画像の解像度は品質で変えられない（three r186、S-10）。** 背景は描画先と同じ大きさで写されるので、
   品質プリセットの `transmissionScale` は効かない。効くのは描画解像度（renderScale）と動的解像度だけ。
 - **Web Audio の音の経路は、鳴り終わるまで JS から参照する（S-09）。** 参照の切れた ConvolverNode とその下流の GainNode は、
-  鳴っている途中でも GC で切り離され、残響の尾が切れる。AudioContext は作った直後に止め、最初のユーザー操作で再開する
-  （ヘッドレスの Chromium は操作なしで running から始まる）。
+  鳴っている途中でも GC で切り離され、残響の尾が切れる。
+- **ゲームの AudioContext は最初のユーザー操作の中で作る（S-16）。** 操作の前に作ると、実機の Chrome は自動再生の警告を出しうる。ヘッドレスの
+  Chromium は `--autoplay-policy` を渡しても操作の前から running で始まり警告も出ないので、センサーでは見えない。作りで防ぎ、e2e は操作の前に
+  コンテキストがないことで確かめる。操作の前に作る試験用のシーン（audio-lab）は、作った直後に止めて最初の操作で再開する。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

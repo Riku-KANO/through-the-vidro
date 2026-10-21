@@ -68,6 +68,7 @@ const create: SceneFactory = async (ctx) => {
     // a factory that rejects is never disposed (main.ts): let go of the gesture listeners and the room here
     sound.dispose();
     room.dispose();
+    window.__vidro.sceneProbe = {};
     throw e;
   }
   room.setPlaying(true);
