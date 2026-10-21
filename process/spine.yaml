@@ -493,3 +493,71 @@ slices:
       - 出来事の名前（pickup:<from>、shake:<reason> など）を events.ts の1つの関数にまとめ、room.ts の probe と sound.ts が使う（S-16 の提案4）
       - 振る舞いは変えない。S-09・S-16・S-18 の e2e と単体テストが緑のまま
 
+  # ---- M1 垂直スライス（2026-10-21 開始）----------------------------------------------------------------
+  # 発案者の優先: 物寂しさを埋める「環境音と足音」と「工房の内装」から。音の素材は合成で仮置きし、後で録音に差し替える。
+  # Blender（5.2、/Applications/Blender.app）は Claude がスクリプトで動かし、見た目の判断は発案者が行う。依存の追加（@gltf-transform/cli、
+  # KTX-Software の toktx）は発案者が承認済み（toktx は発案者が入れる）。
+
+  - id: S-22
+    title: 工房の環境音と足音 — 風・遠くの風鈴・水滴と、床の材質ごとの足音（合成で仮置き、録音に差し替えられる形）
+    status: todo
+    depends: [S-16, S-18, S-21]
+    parallel: true
+    requirements:
+      - サウンドデザイン > 環境音（風がガラスの隙間を抜ける音、遠くの風鈴、水滴。足音は床の材質ごとに各8種をランダム。HRTF）
+      - サウンドデザイン > 音階の統一（D メジャー・ペンタトニック）
+      - サウンドデザイン > 制作方法（音量の4系統）
+      - アセットリスト > 音（環境音のループ、足音 3材質×8種）
+      - 物語と世界（寂しさではなく見つける喜び、まだそこで暮らしている気配）
+    paths:
+      - src/audio/**（環境音と足音の合成のレシピと調整値）
+      - src/core/audio/**（汎用の仕組みが要るときだけ。src/core/CHANGELOG.md に記録）
+      - src/game/player/**（歩いた距離から足を踏み出した瞬間を出すだけ）
+      - src/game/prologue/sound.ts、src/game/prologue/layout.ts（床の材質の割り当て）、src/game/prologue/room.ts（配線だけ）
+      - tests/e2e/S-22-*.spec.ts
+      - process/slices/S-22.md
+    acceptance:
+      - 足音：歩くと歩幅に合わせて足元から鳴り、床の材質（石畳・曇りガラス・真鍮の格子）ごとに8種から同じ音が続かないように選ぶ。覗いている間（移動50%）はゆっくりになる。試作部屋の床に材質を割り当てる。足を踏み出す瞬間の判定は純粋関数で単体テストする
+      - 環境音：工房に、ガラスの隙間を抜ける風（持続）、遠くの風鈴（音階に揃えた間欠の音）、水滴（数か所から間欠に）を立体的に置き、環境音の系統の音量と工房の残響に従う。最初の操作までは鳴らさない（AGENTS.md の音の決まり）
+      - 音源の口を「合成」と「録音のファイル」で同じにし、後で録音に差し替えられる（差し替えの手順を記録する）
+      - センサー：OfflineAudioContext で各合成音が無音でなく、風鈴の基音が音階から±3%以内。e2e で歩いた経路の床の材質と足音の列が合い、環境音の音源が鳴っている。両経路でエラーなし、描画の重さは変わらない
+      - 耳での確認項目（音量の釣り合い、足音の間、風鈴の頻度）を記録に書き出す
+
+  - id: S-23
+    title: Blender パイプラインの土台 — 命名検査・ポリゴン数・2つ目のUV・書き出し・圧縮と、ゲームでの読み込み
+    status: todo
+    depends: [S-01, S-02]
+    parallel: true
+    requirements:
+      - Blenderアセットパイプライン（流れ、命名規則とゲーム情報、書き出しと圧縮、ポリゴンとテクスチャの予算、自動化）
+      - 技術設計（アセット圧縮：glTF ＋ meshopt ＋ KTX2）
+      - ディレクトリ構成（public/assets、blender/scenes、blender/scripts、common は案2と共通）
+    paths:
+      - blender/**（scripts/common は案2と共通。VERSION と CHANGELOG を持つ）
+      - scripts/assets/**（Blender を画面なしで動かす入口と、gltf-transform の呼び出し）
+      - package.json、pnpm-lock.yaml（@gltf-transform/cli を開発用に足すことと、スクリプトの登録だけ）
+      - public/assets/**
+      - src/core/assets/**（glb の読み込み。src/core/CHANGELOG.md に記録）
+      - src/game/assets/**（命名規則とカスタムプロパティから層・当たり判定・台座を組み立てる）
+      - src/scenes/asset-lab.scene.ts（新規。書き出した見本を表示する）
+      - tests/e2e/S-23-*.spec.ts
+      - process/slices/S-23.md
+    acceptance:
+      - コマンド1つ（例 pnpm assets）で、Blender を画面なしで起動し、.blend から命名規則の検査（設計書の表）、ポリゴン数の報告（予算の表と照合）、2つ目のUVの生成、glb の書き出し（透過・屈折率・吸収・スペキュラーの拡張）までを行う。Blender の場所は環境変数で変えられ、既定は /Applications/Blender.app
+      - 書き出した glb を gltf-transform で meshopt 圧縮し、テクスチャを KTX2 に変換する（toktx がなければ止めずに警告して残す）。エリアごとに1ファイル＋共通1ファイルに分けられる作り
+      - ゲーム側で glb を読み込める（GLTFLoader ＋ meshopt ＋ KTX2、両経路）。名前の _front/_back/_col と extras（台座の実体化半径など）から、層・当たり判定・台座を組み立てる。名前の解釈は純粋関数で単体テストする
+      - スクリプトで作った小さな見本（床・真鍮の枠・台座・ガラス）を通しで書き出して asset-lab シーンで表示し、ブラウザセンサーで両経路エラーなし・予算内。check.sh は Blender のない環境でも緑のまま（パイプラインの検査は別のコマンド）
+      - 焼き込み（ライトマップ、コースティクス、環境画像）は入れない（次のスライス）。入れない理由と次の手順を記録する
+
+  - id: S-24
+    title: 工房の内装 — Blender で造形した吹きガラス工房を試作部屋に置く
+    status: todo
+    depends: [S-23]
+    human: 見た目の最終判断は発案者
+    requirements:
+      - 進行構造とエリア設計（序章「工房」：街外れの吹きガラス工房、夜明け前の青）
+      - アートディレクション
+      - 空間の可読性と導線
+      - アセットリスト > 3Dモデル（建築：工房（序章）、内装込み）
+    note: 受け入れ条件は S-23 の結果を見てから書く（内装の中身は発案者と相談する）
+
