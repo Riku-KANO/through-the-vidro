@@ -394,7 +394,7 @@ slices:
     title: 試作部屋の画面の仕上げ — 覗く合成の後ろに抑えたブルームとプリセットのアンチエイリアス
     status: integrated
     branch: slice/S-17-prologue-finishing
-    accepted: 発案者が上限（実装3回・見た目3巡・レビュー2巡）で受け入れ。2巡目の P2 は3回目の実装で直したが再レビューなし。重さの条件は親の QUIET=1 の計測で確定する（2026-10-21）
+    accepted: 発案者が上限（実装3回・見た目3巡・レビュー2巡）で受け入れ。2巡目の P2 は3回目の実装で直したが再レビューなし。重さの条件は親の QUIET=1 の計測で「揺れの範囲で負荷シーン以下」と確定（中品質 WebGPU 1.08〜1.26 対 1.09〜1.28 ms、WebGL2 は試作部屋が軽い。M5 Pro。2026-10-21）
     depends: [S-06]
     parallel: true
     requirements:
