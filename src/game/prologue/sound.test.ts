@@ -1,15 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import * as THREE from 'three/webgpu';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { glassPitch, VIDRO_SCALE } from '../../audio/tuning';
+import type { AudioEngine, Emitter } from '../../core/audio/engine';
+import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
-import type { PrologueEvent } from './events';
+import { EventBus, type PrologueEvent } from './events';
 import { BENCH_ORB, DROP, PEDESTAL_ORB } from './layout';
 import {
   answer,
   CueLog,
   type CuePlayer,
+  createPrologueSound,
   cueFor,
   cueName,
   eventName,
   type SoundCue,
+  type SoundRoom,
   sourcePoint,
 } from './sound';
 
@@ -60,13 +66,14 @@ describe('what the prologue’s events sound like', () => {
     expect(cueFor({ type: 'peekEnd' })).toBeNull();
   });
 
-  it('gives the drop and the vidro a size, so their glass rings at different notes', () => {
+  it('rings the drop and the vidro at different notes of the scale', () => {
     const touched = cueFor({ type: 'dropTouched' });
     const taken = cueFor({ type: 'dropTaken' });
     if (touched?.kind !== 'glass' || taken?.kind !== 'glass') throw new Error('expected glass cues');
-    expect(touched.size).toBeGreaterThan(0.05);
-    expect(taken.size).toBeGreaterThan(0.05);
-    expect(touched.size).not.toBe(taken.size);
+    const a = glassPitch(touched.size);
+    const b = glassPitch(taken.size);
+    expect(isInScale(a.midi, VIDRO_SCALE) && isInScale(b.midi, VIDRO_SCALE)).toBe(true);
+    expect(a.midi).not.toBe(b.midi);
   });
 });
 
@@ -154,5 +161,177 @@ describe('answering events (UI/UX設計 > 読み込み: no sound before the firs
     for (let i = 0; i < 10; i++) answer({ type: 'peekStart' }, player, log);
     expect(log.played).toHaveLength(4);
     expect(log.playedCount).toBe(10);
+  });
+});
+
+/** Stand-ins for the browser's AudioContext and S-09's AudioEngine: they count what is made, started and closed. */
+class FakeContext {
+  state = 'running';
+  closes = 0;
+  readonly sampleRate = 48000;
+  close(): Promise<void> {
+    this.closes++;
+    this.state = 'closed';
+    return Promise.resolve();
+  }
+}
+
+class FakeEngine {
+  readonly ctx = { sampleRate: 48000 };
+  readonly started: number[] = [];
+  readonly emitters: { disposed: boolean }[] = [];
+  listener: { x: number; y: number; z: number } | null = null;
+  disposed = 0;
+  createEmitter(): Emitter {
+    const rec = { disposed: false };
+    this.emitters.push(rec);
+    return {
+      input: { panningModel: 'HRTF' } as unknown as AudioNode,
+      setPosition: () => {},
+      dispose: () => {
+        rec.disposed = true;
+      },
+    };
+  }
+  setListener(p: { x: number; y: number; z: number }): void {
+    this.listener = { x: p.x, y: p.y, z: p.z };
+  }
+  bindUnlockGestures(): void {}
+  unlock(): Promise<void> {
+    return Promise.resolve();
+  }
+  startVoice(): object {
+    this.started.push(this.started.length);
+    return { end: 1, fadeOut: () => {} };
+  }
+  snapshot(): object {
+    return { room: 'workshop', voicesStarted: this.started.length, voicesDropped: 0 };
+  }
+  dispose(): Promise<void> {
+    this.disposed++;
+    return Promise.resolve();
+  }
+}
+
+/** A room with an event bus and a camera at the player's eye (1.6 m) looking down -z, the vidro in hand. */
+function fakeRoom(): SoundRoom & { events: EventBus<PrologueEvent> } {
+  const camera = new THREE.PerspectiveCamera();
+  camera.position.set(0, 1.6, 0);
+  camera.updateMatrixWorld();
+  return {
+    events: new EventBus<PrologueEvent>(),
+    camera,
+    probe: { orb: 'hand', peekAmount: 0, handPresence: 1, time: 0 },
+  };
+}
+
+/** The wiring with stand-ins; `activation.isActive` plays the browser's user activation. */
+function rig() {
+  const contexts: FakeContext[] = [];
+  const engines: FakeEngine[] = [];
+  const activation = { isActive: true };
+  vi.stubGlobal('navigator', { userActivation: activation });
+  const target = new EventTarget();
+  const room = fakeRoom();
+  const sound = createPrologueSound(room, {
+    target,
+    makeContext: () => {
+      const c = new FakeContext();
+      contexts.push(c);
+      return c as unknown as AudioContext;
+    },
+    makeEngine: async () => {
+      const e = new FakeEngine();
+      engines.push(e);
+      return e as unknown as AudioEngine;
+    },
+  });
+  const gesture = (type = 'pointerdown'): void => {
+    target.dispatchEvent(new Event(type));
+  };
+  /** Lets the engine promise settle. */
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  return { contexts, engines, activation, room, sound, gesture, settle };
+}
+
+describe('the prologue sound’s life (createPrologueSound, with stand-ins for Web Audio)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('makes no AudioContext before a gesture, nor on input that is not an activation (Esc)', async () => {
+    const r = rig();
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.contexts).toHaveLength(0);
+    expect(r.sound.probe.state).toBe('locked');
+    r.activation.isActive = false;
+    r.gesture('keydown');
+    expect(r.contexts).toHaveLength(0);
+    r.activation.isActive = true;
+    r.gesture('pointerdown');
+    r.gesture('click');
+    await r.settle();
+    expect(r.contexts).toHaveLength(1);
+    expect(r.engines).toHaveLength(1);
+    expect(r.sound.probe.unlocked).toBe(true);
+    expect(r.sound.probe.state).toBe('running');
+    r.sound.dispose();
+  });
+
+  it('plays only what happens once the engine is ready; what came before stays refused', async () => {
+    const r = rig();
+    r.room.events.emit({ type: 'pickup', from: 'bench' });
+    r.gesture();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    expect(engine.started).toHaveLength(0);
+    r.room.events.emit({ type: 'peekStart' });
+    r.room.events.emit({ type: 'peekEnd' });
+    expect(engine.started).toHaveLength(1);
+    expect(r.sound.probe.refused.map((x) => x.cue)).toEqual(['popen:pickup']);
+    expect(r.sound.probe.played.map((x) => [x.event, x.source])).toEqual([['peekStart', 'hand']]);
+    // the hand is about half a metre from the eye; the listener is the camera
+    expect(r.sound.probe.played[0]?.distance).toBeGreaterThan(0.3);
+    expect(r.sound.probe.played[0]?.distance).toBeLessThan(0.8);
+    expect(engine.listener).toEqual({ x: 0, y: 1.6, z: 0 });
+    r.sound.dispose();
+  });
+
+  it('left before any gesture: stops listening, so a later gesture makes nothing', () => {
+    const r = rig();
+    r.sound.dispose();
+    r.gesture();
+    expect(r.contexts).toHaveLength(0);
+    expect(r.sound.probe.state).toBe('closed');
+    expect(r.sound.probe.subscribed).toBe(false);
+  });
+
+  it('left while the engine is being made: the engine is disposed and the context closed once', async () => {
+    const r = rig();
+    r.gesture();
+    r.sound.dispose();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    expect(engine.disposed).toBe(1);
+    expect(engine.emitters).toHaveLength(0);
+    expect(r.contexts[0]?.closes).toBe(1);
+    expect(r.sound.probe.state).toBe('closed');
+  });
+
+  it('left while playing: unsubscribes, lets go of the emitters and the engine, closes the context', async () => {
+    const r = rig();
+    r.gesture();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    expect(r.sound.probe.emitters).toBe(3);
+    r.sound.dispose();
+    await r.settle();
+    r.room.events.emit({ type: 'peekStart' });
+    expect(engine.started).toHaveLength(0);
+    expect(engine.emitters.every((e) => e.disposed)).toBe(true);
+    expect(engine.disposed).toBe(1);
+    expect(r.contexts[0]?.closes).toBe(1);
+    expect(r.sound.probe.emitters).toBe(0);
+    expect(r.sound.probe.subscribed).toBe(false);
   });
 });

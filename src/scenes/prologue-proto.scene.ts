@@ -62,7 +62,14 @@ const create: SceneFactory = async (ctx) => {
   }
 
   window.__vidro.sceneProbe = { screen: 'game', room: room.probe, sound: sound.probe };
-  await room.prepare();
+  try {
+    await room.prepare();
+  } catch (e) {
+    // a factory that rejects is never disposed (main.ts): let go of the gesture listeners and the room here
+    sound.dispose();
+    room.dispose();
+    throw e;
+  }
   room.setPlaying(true);
   let first = true;
   const sandbox: SandboxScene = {
@@ -90,8 +97,13 @@ const create: SceneFactory = async (ctx) => {
 
 /** The home → dive host with the room's sound: the listener follows the camera after the host moved it. */
 function withSound(host: SandboxScene, sound: PrologueSound): SandboxScene {
-  return {
-    ...host,
+  const wrapped: SandboxScene = {
+    get scene() {
+      return host.scene;
+    },
+    get camera() {
+      return host.camera;
+    },
     update(dt, t) {
       host.update(dt, t);
       sound.update();
@@ -101,6 +113,9 @@ function withSound(host: SandboxScene, sound: PrologueSound): SandboxScene {
       host.dispose();
     },
   };
+  if (host.render) wrapped.render = () => host.render?.();
+  if (host.resize) wrapped.resize = (w, h) => host.resize?.(w, h);
+  return wrapped;
 }
 
 export default create;

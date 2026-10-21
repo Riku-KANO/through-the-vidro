@@ -30,8 +30,10 @@ export type SoundCue =
   | { kind: 'glass'; strength: GlassStrength; size: number; source: CueSource };
 
 /**
- * Sizes for the glass pitch rule (src/audio/tuning.ts, 大きい物ほど低く): the vidro is the hand orb (15 cm, D5); the
- * light drop's iridescent shell is 0.14 m across (room-art.ts), a step higher (E5).
+ * Sizes for the glass pitch rule (src/audio/tuning.ts, 大きい物ほど低く). The vidro is the hand orb's diameter
+ * (15 cm, D5). 仮 (to be confirmed by ear, S-16 判断待ち3): the light drop rings as a 0.14 m glass, a step above the
+ * vidro (E5). It is a tuning value, not the drawn drop's size (room-art.ts: about 0.11 m wide and 0.24 m tall; by
+ * the longest dimension it would ring F#4, below the vidro).
  */
 export const VIDRO_SIZE = HAND_ORB_RADIUS * 2;
 export const DROP_SIZE = 0.14;
@@ -173,11 +175,31 @@ export interface PrologueSound {
 /** Activation-triggering input (as in src/core/audio/engine.ts). */
 const GESTURES = ['pointerdown', 'pointerup', 'click', 'keydown', 'touchend'] as const;
 
+export interface SoundOptions {
+  /** Where the first gesture is listened for. Default: window. */
+  target?: EventTarget;
+  /** Makes the AudioContext inside the first gesture. Default: `new AudioContext()` (unit tests pass a stand-in). */
+  makeContext?: () => AudioContext;
+  /** Builds the engine on that context. Default: AudioEngine.create with the workshop and the game's mixer. */
+  makeEngine?: (context: AudioContext) => Promise<AudioEngine>;
+}
+
+const vidroEngine = (context: AudioContext): Promise<AudioEngine> =>
+  AudioEngine.create({
+    room: VIDRO_ROOMS.workshop,
+    volumes: VIDRO_VOLUMES,
+    reverbSend: VIDRO_REVERB_SEND,
+    context,
+  });
+
 /**
  * The prologue's sound. Nothing is made until the first gesture on `target`; from then on the room's events play
  * through an AudioEngine in the workshop's reverb, each from its place in the room (HRTF), the camera listening.
  */
-export function createPrologueSound(room: SoundRoom, target: EventTarget = window): PrologueSound {
+export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): PrologueSound {
+  const target = opts.target ?? window;
+  const makeContext = opts.makeContext ?? (() => new AudioContext({ latencyHint: 'interactive' }));
+  const makeEngine = opts.makeEngine ?? vidroEngine;
   const log = new CueLog();
   const { camera, probe: roomProbe } = room;
   const roomId = VIDRO_ROOMS.workshop.id;
@@ -248,18 +270,13 @@ export function createPrologueSound(room: SoundRoom, target: EventTarget = windo
     if (navigator.userActivation && !navigator.userActivation.isActive) return;
     stopListening();
     try {
-      context = new AudioContext({ latencyHint: 'interactive' });
+      context = makeContext();
     } catch {
       failed = true;
       return;
     }
     const ctx = context;
-    void AudioEngine.create({
-      room: VIDRO_ROOMS.workshop,
-      volumes: VIDRO_VOLUMES,
-      reverbSend: VIDRO_REVERB_SEND,
-      context: ctx,
-    }).then(
+    void makeEngine(ctx).then(
       (e) => {
         // left before the engine was ready: dispose() has already closed the context
         if (disposed) {
