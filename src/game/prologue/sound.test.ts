@@ -177,11 +177,20 @@ class FakeContext {
 }
 
 class FakeEngine {
-  readonly ctx = { sampleRate: 48000 };
+  readonly ctx = { sampleRate: 48000, state: 'running' };
   readonly started: number[] = [];
   readonly emitters: { disposed: boolean }[] = [];
   listener: { x: number; y: number; z: number } | null = null;
   disposed = 0;
+  unlocks = 0;
+  bound = 0;
+  roomId = 'workshop';
+  get room(): { id: string } {
+    return { id: this.roomId };
+  }
+  setRoom(preset: { id: string }): void {
+    this.roomId = preset.id;
+  }
   createEmitter(): Emitter {
     const rec = { disposed: false };
     this.emitters.push(rec);
@@ -196,8 +205,11 @@ class FakeEngine {
   setListener(p: { x: number; y: number; z: number }): void {
     this.listener = { x: p.x, y: p.y, z: p.z };
   }
-  bindUnlockGestures(): void {}
+  bindUnlockGestures(): void {
+    this.bound++;
+  }
   unlock(): Promise<void> {
+    this.unlocks++;
     return Promise.resolve();
   }
   startVoice(): object {
@@ -205,7 +217,7 @@ class FakeEngine {
     return { end: 1, fadeOut: () => {} };
   }
   snapshot(): object {
-    return { room: 'workshop', voicesStarted: this.started.length, voicesDropped: 0 };
+    return { room: this.roomId, voicesStarted: this.started.length, voicesDropped: 0 };
   }
   dispose(): Promise<void> {
     this.disposed++;
@@ -333,5 +345,138 @@ describe('the prologue sound’s life (createPrologueSound, with stand-ins for W
     expect(r.contexts[0]?.closes).toBe(1);
     expect(r.sound.probe.emitters).toBe(0);
     expect(r.sound.probe.subscribed).toBe(false);
+  });
+
+  it('on its own engine (direct mode), it starts it and resumes it on later gestures itself', async () => {
+    const r = rig();
+    expect(r.sound.probe.shared).toBe(false);
+    r.gesture();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    expect(engine.unlocks).toBe(1);
+    expect(engine.bound).toBe(1);
+    r.sound.dispose();
+  });
+});
+
+/**
+ * The room's sound on an engine someone else owns (S-18): in the home path the loading screen's 「はじめる」 starts
+ * one AudioEngine (src/ui/audio-gate.ts) and the room plays through it. `start()` plays the owner handing it over.
+ */
+function sharedRig() {
+  const contexts: FakeContext[] = [];
+  const made: FakeEngine[] = [];
+  vi.stubGlobal('navigator', { userActivation: { isActive: true } });
+  const target = new EventTarget();
+  const room = fakeRoom();
+  const engine = new FakeEngine();
+  const waiting = new Set<(e: AudioEngine) => void>();
+  const shared = {
+    whenReady(ready: (e: AudioEngine) => void): () => void {
+      waiting.add(ready);
+      return () => waiting.delete(ready);
+    },
+  };
+  const sound = createPrologueSound(room, {
+    target,
+    shared,
+    makeContext: () => {
+      const c = new FakeContext();
+      contexts.push(c);
+      return c as unknown as AudioContext;
+    },
+    makeEngine: async () => {
+      const e = new FakeEngine();
+      made.push(e);
+      return e as unknown as AudioEngine;
+    },
+  });
+  const start = (): void => {
+    for (const ready of [...waiting]) ready(engine as unknown as AudioEngine);
+    waiting.clear();
+  };
+  const gesture = (type = 'pointerdown'): void => {
+    target.dispatchEvent(new Event(type));
+  };
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  return { contexts, made, engine, waiting, room, sound, start, gesture, settle };
+}
+
+describe('the prologue sound on a shared engine (ホーム経由, S-18: one AudioContext)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('makes no AudioContext or engine of its own, even on a gesture; plays through the shared one once it starts', async () => {
+    const r = sharedRig();
+    expect(r.sound.probe.shared).toBe(true);
+    r.gesture('pointerdown');
+    r.gesture('click');
+    await r.settle();
+    expect(r.contexts).toHaveLength(0);
+    expect(r.made).toHaveLength(0);
+    expect(r.sound.probe.state).toBe('locked');
+    expect(r.sound.probe.unlocked).toBe(false);
+    // before the owner started it: refused, never played later (溜めて後から鳴らさない)
+    r.room.events.emit({ type: 'pickup', from: 'bench' });
+    r.start();
+    expect(r.sound.probe.unlocked).toBe(true);
+    expect(r.sound.probe.state).toBe('running');
+    expect(r.sound.probe.emitters).toBe(3);
+    expect(r.engine.started).toHaveLength(0);
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.engine.started).toHaveLength(1);
+    expect(r.sound.probe.refused.map((x) => x.cue)).toEqual(['popen:pickup']);
+    expect(r.sound.probe.played.map((x) => [x.event, x.source])).toEqual([['peekStart', 'hand']]);
+    expect(r.engine.listener).toEqual({ x: 0, y: 1.6, z: 0 });
+    // starting and resuming it is its owner's (the press of 「はじめる」)
+    expect(r.engine.unlocks).toBe(0);
+    expect(r.engine.bound).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('counts its own voices: the UI rings on the same engine', () => {
+    const r = sharedRig();
+    r.start();
+    r.engine.startVoice();
+    r.engine.startVoice();
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.engine.started).toHaveLength(3);
+    expect(r.sound.probe.voicesStarted).toBe(1);
+    expect(r.sound.probe.playedCount).toBe(1);
+    r.sound.dispose();
+  });
+
+  it('keeps the workshop’s reverb (src/audio/rooms.ts) on a shared engine set to another room', () => {
+    const r = sharedRig();
+    r.engine.roomId = 'dome';
+    r.start();
+    expect(r.engine.roomId).toBe('workshop');
+    expect(r.sound.probe.room).toBe('workshop');
+    r.sound.dispose();
+  });
+
+  it('left: lets go of its emitters and stops waiting, but leaves the shared engine and its context to their owner', async () => {
+    const r = sharedRig();
+    r.start();
+    expect(r.engine.emitters).toHaveLength(3);
+    r.sound.dispose();
+    await r.settle();
+    expect(r.engine.emitters.every((e) => e.disposed)).toBe(true);
+    expect(r.engine.disposed).toBe(0);
+    expect(r.sound.probe.emitters).toBe(0);
+    expect(r.sound.probe.subscribed).toBe(false);
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.engine.started).toHaveLength(0);
+
+    // left before the owner started it: no longer waiting, and a late hand-over makes nothing
+    const early = sharedRig();
+    expect(early.waiting.size).toBe(1);
+    const late = [...early.waiting][0];
+    early.sound.dispose();
+    expect(early.waiting.size).toBe(0);
+    late?.(early.engine as unknown as AudioEngine);
+    expect(early.engine.emitters).toHaveLength(0);
+    expect(early.sound.probe.state).toBe('closed');
   });
 });
