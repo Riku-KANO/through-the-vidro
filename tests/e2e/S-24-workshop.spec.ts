@@ -346,67 +346,74 @@ for (const backend of backends) {
       const v = await page.evaluate(() => window.__vidro?.renderScale ?? null).catch(() => null);
       if (typeof v === 'number') scales.push([(Date.now() - started) / 1000, v]);
     };
-    await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
-    const waitHome = async (fn: string, timeout: number) => {
-      const end = Date.now() + timeout;
-      for (;;) {
+    const trace: Record<string, unknown> = { backend, scales, console: consoleAll, stage: 'start' };
+    // written in any case (also when a wait times out), so a stall or a black picture leaves its evidence
+    const writeTrace = () =>
+      writeFileSync(join(outDir, `landing-${backend}.json`), JSON.stringify(trace, null, 2));
+    try {
+      await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
+      const waitHome = async (fn: string, timeout: number) => {
+        const end = Date.now() + timeout;
+        for (;;) {
+          await sampleScale();
+          const ok = await page
+            .evaluate(
+              `(() => { try { const p = window.__vidro?.sceneProbe; return !!p && !!(${fn}); } catch { return false; } })()`,
+            )
+            .catch(() => false);
+          if (ok) return;
+          if (Date.now() > end) throw new Error(`timed out waiting for ${fn}`);
+          await page.waitForTimeout(100);
+        }
+      };
+      await waitHome('p.load && p.load.ready === true', 90_000);
+      trace.stage = 'loaded';
+      await page.locator('[data-ui="loading-start"]').click();
+      await waitHome("p.screen === 'home' && p.transition === null", 30_000);
+      trace.stage = 'home';
+      await page.locator('[data-item="start"]').click();
+      await waitHome(
+        "p.screen === 'game' && p.transition === null && p.room && p.room.ready && p.room.playing",
+        60_000,
+      );
+      for (let i = 0; i < 8; i++) {
         await sampleScale();
-        const ok = await page
-          .evaluate(
-            `(() => { try { const p = window.__vidro?.sceneProbe; return !!p && !!(${fn}); } catch { return false; } })()`,
-          )
-          .catch(() => false);
-        if (ok) return;
-        if (Date.now() > end) throw new Error(`timed out waiting for ${fn}`);
         await page.waitForTimeout(100);
       }
-    };
-    await waitHome('p.load && p.load.ready === true', 90_000);
-    await page.locator('[data-ui="loading-start"]').click();
-    await waitHome("p.screen === 'home' && p.transition === null", 30_000);
-    await page.locator('[data-item="start"]').click();
-    await waitHome(
-      "p.screen === 'game' && p.transition === null && p.room && p.room.ready && p.room.playing",
-      60_000,
-    );
-    for (let i = 0; i < 8; i++) {
-      await sampleScale();
-      await page.waitForTimeout(100);
+      const png = await page.screenshot({ path: join(shotDir, 'landed-through-home.png') });
+      const dark = await page.evaluate(async (b64) => {
+        const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+        const bmp = await createImageBitmap(blob);
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = c.getContext('2d');
+        if (!g) throw new Error('no 2d context');
+        g.drawImage(bmp, 0, 0);
+        const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+        let n = 0;
+        let k = 0;
+        for (let i = 0; i < d.length; i += 20) {
+          const l = (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+          if (l < 0.06) k++;
+          n++;
+        }
+        return k / n;
+      }, png.toString('base64'));
+      const backdrop = await page.evaluate(() => {
+        const r = window.__vidroDebug?.backdropRisks();
+        return r ? { risks: r.risks, roots: r.roots.map((x) => `${x.label}: ${x.backdropReaders}`) } : null;
+      });
+      const vidro = await page.evaluate(() => {
+        const { sceneProbe: _s, ...rest } = window.__vidro;
+        return rest;
+      });
+      Object.assign(trace, { stage: 'landed', dark, backdrop, vidro });
+      writeTrace();
+      expect(dark, 'near-black share after landing').toBeLessThan(0.02);
+      expect(backdrop?.risks).toEqual([]);
+      expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+      expect(errors).toEqual([]);
+    } finally {
+      writeTrace();
     }
-    const png = await page.screenshot({ path: join(shotDir, 'landed-through-home.png') });
-    const dark = await page.evaluate(async (b64) => {
-      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
-      const bmp = await createImageBitmap(blob);
-      const c = new OffscreenCanvas(bmp.width, bmp.height);
-      const g = c.getContext('2d');
-      if (!g) throw new Error('no 2d context');
-      g.drawImage(bmp, 0, 0);
-      const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
-      let n = 0;
-      let k = 0;
-      for (let i = 0; i < d.length; i += 20) {
-        const l = (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
-        if (l < 0.06) k++;
-        n++;
-      }
-      return k / n;
-    }, png.toString('base64'));
-    const backdrop = await page.evaluate(() => {
-      const r = window.__vidroDebug?.backdropRisks();
-      return r ? { risks: r.risks, roots: r.roots.map((x) => `${x.label}: ${x.backdropReaders}`) } : null;
-    });
-    const vidro = await page.evaluate(() => {
-      const { sceneProbe: _s, ...rest } = window.__vidro;
-      return rest;
-    });
-    // written before any assertion, so a failure leaves its evidence in artifacts/S-24/
-    writeFileSync(
-      join(outDir, `landing-${backend}.json`),
-      JSON.stringify({ backend, dark, scales, backdrop, vidro, console: consoleAll }, null, 2),
-    );
-    expect(dark, 'near-black share after landing').toBeLessThan(0.02);
-    expect(backdrop?.risks).toEqual([]);
-    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
-    expect(errors).toEqual([]);
   });
 }

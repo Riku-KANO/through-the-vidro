@@ -125,13 +125,7 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
  * vidro; the furnace is the only warm light (the lamp over the bench is gone), flickering a little like a fire.
  */
 const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
-const SKYLIGHT_INTENSITY = 130;
-/**
- * Where the skylight's light ends (three's cutoff distance): just past the bench top, so the cone does not go on through
- * the opaque top onto the lower shelf and the floor. The intensity makes up for the falloff at the vidro (about the same
- * light there as 26 without a cutoff). A stand-in until the bake (光と時間帯: 静止した光と影は焼き込み; S-26).
- */
-const SKYLIGHT_DISTANCE = 4.5;
+const SKYLIGHT_INTENSITY = 26;
 const SKYLIGHT_ANGLE = 0.13;
 const FIRE_COLOR = 0xff8a3c;
 const FIRE_INTENSITY = 9;
@@ -458,16 +452,20 @@ export function buildRoomArt(
     //  - 光と時間帯 夜明け前の青: the cool light of the sky through the skylight, falling on the vidro on the bench (the
     //    first picture: 目覚めて最初に見る絵)
     //  - the furnace, the only warm light of the workshop: at its mouth, toward the room and the grate
-    const sky = new THREE.SpotLight(
-      SKYLIGHT_COLOR,
-      SKYLIGHT_INTENSITY,
-      SKYLIGHT_DISTANCE,
-      SKYLIGHT_ANGLE,
-      0.75,
-      1.4,
-    );
+    const sky = new THREE.SpotLight(SKYLIGHT_COLOR, SKYLIGHT_INTENSITY, 0, SKYLIGHT_ANGLE, 0.75, 1.4);
     sky.position.set(0, WORKSHOP_TOP - 0.2, 0);
     sky.target.position.set(...BENCH_ORB);
+    // A shadow drawn once like the sun's, so the bench top keeps the light off its lower shelf (the vidro casts none: it
+    // is taken away). A stand-in until the bake (光と時間帯: 静止した光と影は焼き込み; S-26). A cutoff distance was tried
+    // instead and dropped: its falloff turned the round pool into a lopsided one (review round 2 of S-24).
+    sky.castShadow = true;
+    sky.shadow.autoUpdate = false;
+    sky.shadow.needsUpdate = true;
+    sky.shadow.mapSize.set(512, 512);
+    sky.shadow.camera.near = 0.5;
+    sky.shadow.camera.far = 6;
+    sky.shadow.bias = -0.0005;
+    sky.shadow.normalBias = 0.02;
     scene.add(sky.target);
     put(keep(sky), 'shared');
     fire.position.set(

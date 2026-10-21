@@ -91,8 +91,17 @@ export const BLOWPIPE_RACK = { center: [3.45, 0, 0.55] as Vec3, fromDeg: -3, toD
 export const MARVER = { center: [2.3, 0, 1.6] as Vec3, size: [0.9, 0.85, 0.5] as Vec3 };
 /** 水桶: a frosted-glass tub with brass hoops, left of the marver (S-25: a drop falls into it). Water surface at `water`. */
 export const WATER_TUB = { center: [1.45, 0, 1.85] as Vec3, radius: 0.33, height: 0.46, water: 0.36 };
-/** 徐冷炉: a frosted-glass bubble at the back, open toward the centre, warm inside (finished pieces cooling). */
-export const ANNEALER = { center: [0.3, 0, 3.4] as Vec3, radius: 0.66, height: 1.0 };
+/**
+ * 徐冷炉: a frosted-glass bubble at the back, warm inside (finished pieces cooling), with an arched mouth toward the centre
+ * `mouthHalfDeg` either side and `mouthHeight` high.
+ */
+export const ANNEALER = {
+  center: [0.3, 0, 3.4] as Vec3,
+  radius: 0.66,
+  height: 1.0,
+  mouthHalfDeg: 36,
+  mouthHeight: 0.6,
+};
 /**
  * 作品の棚: three tiers in an arc along the wall, from the left side round to the back (azimuth from +X toward +Z, the
  * dome's own). Each tier follows the leaning wall: its back stays `wallGap` off the glass at its height.

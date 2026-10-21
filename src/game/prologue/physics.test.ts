@@ -10,6 +10,7 @@ import { BODY_RADIUS } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import {
+  ANNEALER,
   BENCH,
   BRIDGE,
   bridgeFooting,
@@ -59,6 +60,11 @@ beforeAll(async () => {
 });
 
 const DT = 1 / 60;
+/** Unit (x, z) from a point toward the centre of the dome (where the workshop's pieces open). */
+const toCentre = (c: Vec3): [number, number] => {
+  const l = Math.hypot(c[0], c[2]);
+  return [-c[0] / l, -c[2] / l];
+};
 const forward: PlayerIntent = { move: { x: 0, y: 1 }, sprint: false, lookYaw: 0, lookPitch: 0 };
 const fullSphere: Sphere = { center: PEDESTAL_ORB, radius: MAIN_ORB_RADIUS };
 
@@ -393,16 +399,26 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
    * 空間の可読性と導線 4 (当たり判定は見た目に正直に), both ways, with horizontal rays at body heights from all around each
    * piece (off its symmetry lines: a ray exactly along a mesh edge can slip between its two triangles):
    *  - you cannot walk into what you see: where a ray meets the piece, it meets its collider no more than 5 cm later
-   *  - no invisible wall: where it meets the collider, it meets the piece no more than 10 cm later. Not checked where the
-   *    collider closes a hollow the body cannot enter anyway (named below)
+   *  - no invisible wall: where it meets the collider, it meets the piece no more than 10 cm later. Not checked for the
+   *    rays that go into a hollow the body cannot enter anyway (HOLLOWS, each with its reason: only those rays)
    */
-  const BODY_CANNOT_ENTER: Record<string, string> = {
-    A0_bnch_work01: 'under the bench top (0.83 m) and inside its brass end frames',
-    A0_mrv_marver01: 'between its legs under the brass slab (0.79 m)',
-    A0_chr_stool01: 'between its legs under the seat (0.42 m)',
-    A0_anl_annealer01: 'its arched mouth (0.6 m high, the body is 1.75 m)',
-    A0_shlf_works01: 'under and between its tiers (0.42 m apart), against the wall',
-    A0_pipe_rack01: 'between the leaning pipes and the wall',
+  const facingAway = (dir: THREE.Vector3, facing: readonly [number, number], halfDeg: number): boolean =>
+    -(dir.x * facing[0] + dir.z * facing[1]) > Math.cos((halfDeg * Math.PI) / 180);
+  const HOLLOWS: Record<string, { why: string; skip(q: { h: number; dir: THREE.Vector3 }): boolean }> = {
+    [WORKSHOP_OBJECTS.bench.name]: {
+      why: 'under the bench top (the body is 1.75 m tall) and through its brass end frames',
+      skip: (q) => q.h < BENCH.size[1] - 0.07,
+    },
+    [WORKSHOP_OBJECTS.annealer.name]: {
+      why: 'into its arched mouth, which faces the centre of the room',
+      skip: (q) =>
+        q.h < ANNEALER.mouthHeight + 0.05 &&
+        facingAway(q.dir, toCentre(ANNEALER.center), ANNEALER.mouthHalfDeg),
+    },
+    [WORKSHOP_OBJECTS.furnace.name]: {
+      why: "straight into the furnace's mouth: a brass tube 0.34 m across, the fire at its back",
+      skip: (q) => Math.abs(q.h - FURNACE_MOUTH[1]) < 0.25 && facingAway(q.dir, FURNACE_FACING, 20),
+    },
   };
   function raysAround(piece: { name: string; at: readonly [number, number] }) {
     const r = room();
@@ -434,6 +450,7 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
         out.push({ h, i, dir, seen, felt });
       }
     }
+    r.world.free();
     return out;
   }
   const pieces = Object.values(WORKSHOP_OBJECTS).filter((o) => o.col);
@@ -449,18 +466,19 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
 
   it('no invisible wall: where a piece’s collider stops you, the piece is drawn within 10 cm (hollows the body cannot enter aside)', () => {
     const walls: string[] = [];
-    /** Straight into the furnace's mouth: a brass tube 0.34 m across, the fire at its back (the body cannot enter). */
-    const intoTheMouth = (q: { h: number; dir: THREE.Vector3 }): boolean =>
-      Math.abs(q.h - FURNACE_MOUTH[1]) < 0.25 &&
-      -(q.dir.x * FURNACE_FACING[0] + q.dir.z * FURNACE_FACING[1]) > Math.cos((20 * Math.PI) / 180);
-    for (const piece of pieces.filter((p) => !(p.name in BODY_CANNOT_ENTER)))
-      for (const q of raysAround(piece))
-        if (piece.name === WORKSHOP_OBJECTS.furnace.name && intoTheMouth(q)) continue;
-        else if (q.felt !== undefined && (q.seen === undefined || q.seen > q.felt + 0.1))
+    let skipped = 0;
+    for (const piece of pieces)
+      for (const q of raysAround(piece)) {
+        if (HOLLOWS[piece.name]?.skip(q)) {
+          skipped++;
+          continue;
+        }
+        if (q.felt !== undefined && (q.seen === undefined || q.seen > q.felt + 0.1))
           walls.push(`${piece.name} h${q.h} a${q.i}: felt ${q.felt.toFixed(2)} seen ${q.seen?.toFixed(2)}`);
+      }
     expect(walls).toEqual([]);
-    // the exceptions are named for a reason, and are real pieces
-    for (const name of Object.keys(BODY_CANNOT_ENTER)) expect(pieces.map((p) => p.name)).toContain(name);
+    // the hollows are few rays of a few pieces, not whole pieces (of 8 pieces × 96 rays)
+    expect(skipped).toBeLessThan(80);
   });
 
   it('walking at the fire, the body slides by the pipe left in the mouth and round the furnace, never through either', () => {

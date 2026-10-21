@@ -80,7 +80,7 @@ MOUTH_PIPE_REACH = 1.75
 RACK = {'center': (3.45, 0.55), 'from_deg': -3.0, 'to_deg': 19.0}
 MARVER = {'center': (2.3, 1.6), 'size': (0.9, 0.85, 0.5)}
 TUB = {'center': (1.45, 1.85), 'radius': 0.33, 'height': 0.46, 'water': 0.36}
-ANNEALER = {'center': (0.3, 3.4), 'radius': 0.66, 'height': 1.0}
+ANNEALER = {'center': (0.3, 3.4), 'radius': 0.66, 'height': 1.0, 'mouth_half_deg': 36.0, 'mouth_height': 0.6}
 SHELF = {'from_deg': 115.0, 'to_deg': 165.0, 'tiers': (0.42, 0.88, 1.34), 'depth': 0.3, 'wall_gap': 0.06}
 CHAIR = {'center': (-3.0, -1.4), 'radius': 0.24, 'seat': 0.46}
 TEA_CUP = (-2.38, 0.9, -2.2)
@@ -575,20 +575,16 @@ def angular_slices(points, center=(0.0, 0.0), step_deg: float = COL_ARC_DEG, ove
             for k in range(n)]
 
 
-def collider(part: Part, arcs: bool = False, split=None) -> bmesh.types.BMesh:
+def collider(part: Part, arcs: bool = False) -> bmesh.types.BMesh:
     """部品（つながった形）ごとの凸包。頭より上（COL_MAX_Y）の点は除く。arcs: 部屋の中心の周りに長い部品は
-    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）。split(points) が点の組の一覧を返す部品は、その組ごとに包む
-    （炉の泡: 一つの凸包では泡と泡のくびれが埋まり、見えない壁になる）"""
+    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）。凹んだ形（炉の泡）は呼ぶ側が分けて hull_into で包む"""
     out = bmesh.new()
     for group in islands(part.bm):
         low = [p for p in group if p.y <= COL_MAX_Y]
         if len(low) < 4:
             continue
-        groups = split(low) if split is not None else None
-        if groups is None:
-            angles = [math.degrees(math.atan2(p.z, p.x)) for p in low]
-            groups = angular_slices(low) if arcs and max(angles) - min(angles) > COL_ARC_DEG * 1.5 else [low]
-        for g in groups:
+        angles = [math.degrees(math.atan2(p.z, p.x)) for p in low]
+        for g in angular_slices(low) if arcs and max(angles) - min(angles) > COL_ARC_DEG * 1.5 else [low]:
             hull_into(out, g)
     return out
 
@@ -629,8 +625,10 @@ def finish_collider(bm: bmesh.types.BMesh, name: str, origin) -> bpy.types.Objec
 
 
 def build(part: Part, name: str, origin, col: bool = False, arcs: bool = False, sharp_deg: float = 60.0,
-          split=None) -> None:
-    hull = collider(part, arcs=arcs, split=split) if col else None
+          hull: bmesh.types.BMesh | None = None) -> None:
+    """hull: 当たり判定を呼ぶ側が作ったとき（炉）。なければ col のとき collider(part) で作る"""
+    if hull is None and col:
+        hull = collider(part, arcs=arcs)
     finish(part, name, origin, sharp_deg=sharp_deg)
     if hull is not None:
         finish_collider(hull, name, origin)
@@ -773,6 +771,12 @@ def furnace(m) -> None:
     cx, cz = FURNACE['center']
     f = Frame(cx, cz, FACING)
     p = Part()
+    rest = Part()  # 泡の形と裾の輪のほかの部品（当たり判定は部品ごとに包む）
+
+    def add(bm, mat, matrix=None):
+        p.merge(bm, mat, matrix)
+        rest.merge(bm, mat, matrix)
+
     balls = [
         (f(0.0, 0.36, 0.0), 0.72, False),  # 大きな泡（口がある）
         (f(-0.12, 1.1, 0.02), 0.38, False),  # 上の泡（煙道の根）
@@ -791,8 +795,8 @@ def furnace(m) -> None:
     # 口（グローリーホール）: 窪みから突き出す真鍮の短い筒、奥に火（FURNACE_MOUTH が中心）
     axis = Vector((FACING[0], 0.0, FACING[1]))
     collar = shell_profile([(0.2, 0.0), (0.2, 0.26), (0.215, 0.3)], 0.032)
-    p.merge(lathe_bm(collar, 24), m['brass'], place(f(MOUTH_REACH - 0.08, MOUTH_Y), axis=tuple(axis)))
-    p.merge(sphere_bm(0.165, 14, 8, scale=(1.0, 0.3, 1.0)), m['fire'], place(f(MOUTH_REACH, MOUTH_Y), axis=tuple(axis)))
+    add(lathe_bm(collar, 24), m['brass'], place(f(MOUTH_REACH - 0.08, MOUTH_Y), axis=tuple(axis)))
+    add(sphere_bm(0.165, 14, 8, scale=(1.0, 0.3, 1.0)), m['fire'], place(f(MOUTH_REACH, MOUTH_Y), axis=tuple(axis)))
     # 足元の真鍮の輪: 泡の裾に沿う
     foot = []
     for k in range(32):
@@ -801,7 +805,8 @@ def furnace(m) -> None:
         hit = raycast(bvh, Vector((cx, 0.05, cz)) + d * 2.0, -d)
         r = (Vector(hit) - Vector((cx, 0.05, cz))).length if hit else FURNACE['radius']
         foot.append((cx + d.x * (r + 0.012), 0.035, cz + d.z * (r + 0.012)))
-    p.merge(tube_bm(foot, 0.02, 5, closed=True), m['brass'])
+    foot_bm = tube_bm(foot, 0.02, 5, closed=True)
+    p.merge(foot_bm, m['brass'])
     # 煙道: 上の泡の頂から、曲がって壁へ
     top = raycast(bvh, f(-0.18, 3.0, 0.06), (0.0, -1.0, 0.0)) or Vector(f(-0.18, 1.6, 0.06))
     out = Vector((-FACING[0], 0.0, -FACING[1]))
@@ -809,34 +814,31 @@ def furnace(m) -> None:
     y_wall = 2.8
     wall = out * (wall_r(y_wall) + 0.25) + Vector((0.0, y_wall, 0.0))
     flue = fillet([tuple(base), tuple(base + Vector((0.0, 0.55, 0.0))), tuple(wall)], 0.35, 6)
-    p.merge(tube_bm(flue, 0.075, 10), m['brass'])
+    add(tube_bm(flue, 0.075, 10), m['brass'])
     # 口に差したままの吹き竿と、その受け（格子の上）
     pipe_y = lambda a: MOUTH_Y + 0.02 + (a - 0.55) / (MOUTH_PIPE_REACH - 0.55) * 0.18  # noqa: E731
-    p.merge(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])
-    p.merge(tube_bm(circle(f(MOUTH_PIPE_REACH - 0.02, pipe_y(MOUTH_PIPE_REACH)), 0.02, 12, axis=tuple(axis)), 0.006, 4,
+    add(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])
+    add(tube_bm(circle(f(MOUTH_PIPE_REACH - 0.02, pipe_y(MOUTH_PIPE_REACH)), 0.02, 12, axis=tuple(axis)), 0.006, 4,
                     closed=True), m['brass'])
     yoke_a = 1.5
     yy = pipe_y(yoke_a) - 0.02
-    p.merge(tube_bm([f(yoke_a, FLOOR_TOP + 0.02), f(yoke_a, yy - 0.035)], 0.014, 8), m['brass'])
-    p.merge(lathe_bm([(0.0, 0.0), (0.09, 0.0), (0.1, 0.012), (0.0, 0.02)], 16), m['brass'],
+    add(tube_bm([f(yoke_a, FLOOR_TOP + 0.02), f(yoke_a, yy - 0.035)], 0.014, 8), m['brass'])
+    add(lathe_bm([(0.0, 0.0), (0.09, 0.0), (0.1, 0.012), (0.0, 0.02)], 16), m['brass'],
             place(f(yoke_a, FLOOR_TOP)))
     u_pts = [f(yoke_a, yy + 0.035 - 0.035 * math.sin(math.pi * k / 8), 0.035 * math.cos(math.pi * k / 8))
              for k in range(9)]
-    p.merge(tube_bm(u_pts, 0.008, 6), m['brass'])
-    # 当たり判定: 泡の形は泡ごとに包む（各頂点をいちばん近い泡へ。境は少し重ねる）。裾の輪は炉の周りに分けて包む
+    add(tube_bm(u_pts, 0.008, 6), m['brass'])
+    # 当たり判定: 泡の形は泡ごとに包む（一つの凸包では泡と泡のくびれが埋まり、歩ける床から見えない壁になる）。各頂点を
+    # いちばん近い泡へ（見える半径で割った距離）、境は 14% 重ねて隙間を残さない。裾の輪は炉の周りに 12 度ずつ、ほかは部品ごと
+    hull = collider(rest)
     bubbles = [(Vector(c), r) for c, r, negative in balls if not negative]
-    blob_size = len(blob.verts)
-
-    def split(points):
-        if len(points) >= blob_size * 0.9:
-            dists = [[(p - c).length / r for c, r in bubbles] for p in points]
-            return [[p for p, d in zip(points, dists) if d[i] <= min(d) * 1.14] for i in range(len(bubbles))]
-        mean = sum((p for p in points), Vector()) / len(points)
-        if math.hypot(mean.x - cx, mean.z - cz) < 0.3 and max((p - mean).length for p in points) > 0.6:
-            return angular_slices(points, (cx, cz), 12.0, 1.0)  # 裾の輪
-        return None
-
-    build(p, 'A0_frn_furnace01', (cx, 0.0, cz), col=True, sharp_deg=80.0, split=split)
+    shape = [v.co.copy() for v in blob.verts if v.co.y <= COL_MAX_Y]
+    dists = [[(q - c).length / r for c, r in bubbles] for q in shape]
+    for i in range(len(bubbles)):
+        hull_into(hull, [q for q, d in zip(shape, dists) if d[i] <= min(d) * 1.14])
+    for g in angular_slices([v.co.copy() for v in foot_bm.verts], (cx, cz), 12.0, 1.0):
+        hull_into(hull, g)
+    build(p, 'A0_frn_furnace01', (cx, 0.0, cz), sharp_deg=80.0, hull=hull)
 
 
 def grate(m) -> None:
@@ -957,7 +959,7 @@ def annealer(m) -> None:
     shell = lathe_bm([(0.0, 0.0)] + profile[:], 36)
     # 口: 中心へ向くアーチ（幅 ±36 度、高さ 0.6m）
     face_deg = math.degrees(math.atan2(f.f[1], f.f[0]))
-    open_deg, open_h = 36.0, 0.6
+    open_deg, open_h = ANNEALER['mouth_half_deg'], ANNEALER['mouth_height']
     gone = []
     for face in shell.faces:
         c = face.calc_center_median()
