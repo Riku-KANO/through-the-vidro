@@ -1,7 +1,12 @@
+import { join } from 'node:path';
 import type RAPIER from '@dimforge/rapier3d-compat';
+import * as THREE from 'three/webgpu';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { activeSegmentIds, type Sphere, type Vec3 } from '../../layers/footing';
+import { activeSegmentIds, type Sphere, splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
+import { type AssembledAsset, addAssetColliders, assembleAsset } from '../assets';
+import { loadGlbInNode } from '../assets/node-glb';
+import { BODY_RADIUS } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import {
@@ -13,23 +18,43 @@ import {
   EDGE_Z,
   FAR,
   FOOTING_SEGMENT,
+  FURNACE,
+  FURNACE_FACING,
   GATE,
+  GRATE,
+  MOUTH_PIPE_REACH,
   PEDESTAL_ID,
   PEDESTAL_ORB,
   SPAWNS,
   type SpawnName,
+  TRIAL_SURFACE_WALL,
+  WORKSHOP,
+  WORKSHOP_ASSET,
   WORKSHOP_FLOOR_RADIUS,
+  WORKSHOP_OBJECTS,
 } from './layout';
-import { addRoomColliders, BackFooting, deckSegmentShape, FallGuard, insideAnySphere } from './physics';
+import {
+  addRoomColliders,
+  BackFooting,
+  boxInsideSphere,
+  deckSegmentShape,
+  FallGuard,
+  insideAnySphere,
+  type SurfaceColliderMode,
+  SurfaceColliders,
+} from './physics';
 import { PrologueSession } from './session';
 
 /**
- * The prologue room in a real Rapier world (Node): the same colliders the scene builds, the S-03 body,
- * and the S-02 back-layer footing switched by the materialized sphere.
+ * The prologue room in a real Rapier world (Node): the same colliders the scene builds (the room's own, and the
+ * workshop's furniture from the committed glb, S-24), the S-03 body, and the S-02 back-layer footing switched by the
+ * materialized sphere.
  */
 let R: typeof RAPIER;
+let workshop: AssembledAsset;
 beforeAll(async () => {
   R = await initPhysics();
+  workshop = assembleAsset((await loadGlbInNode(join(process.cwd(), 'public', WORKSHOP_ASSET))).scene);
 });
 
 const DT = 1 / 60;
@@ -39,8 +64,9 @@ const fullSphere: Sphere = { center: PEDESTAL_ORB, radius: MAIN_ORB_RADIUS };
 function room() {
   const world = createWorld();
   addRoomColliders(R, world);
+  const furniture = addAssetColliders(R, world, workshop.colliders);
   const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
-  return { world, footing };
+  return { world, footing, furniture };
 }
 
 function body(r: ReturnType<typeof room>, at: SpawnName | { feet: Vec3; yaw: number }) {
@@ -241,5 +267,183 @@ describe('picking the vidro up never drops you into the valley (罰がない、�
     guard.observe([0, -0.5, -14.6], false, false); // in the air: not a safe place
     expect(guard.rescue([0, -0.5, -14.6])).toBeNull(); // still above the floor of the guard
     expect(guard.rescue([0, -1.2, -14.8])).toEqual([0, 0, -13.5]);
+  });
+});
+
+describe('S-24 trial: a surface-only wall inside the placed orb’s sphere (S-23 判断待ち9, the designer decides)', () => {
+  const placed = {
+    center: PEDESTAL_ORB,
+    radius: MAIN_ORB_RADIUS,
+    materialize: { progress: 1, target: 1 as const },
+  };
+  const wallSegments = () => splitFooting('trial-wall', TRIAL_SURFACE_WALL, FOOTING_SEGMENT);
+  /** The dead end with the wall on the lip; the orb placed (the bridge on) or not. */
+  function deadEnd(mode: SurfaceColliderMode, orbPlaced: boolean) {
+    const r = room();
+    const wall = new SurfaceColliders(R, r.world, wallSegments(), mode);
+    const spheres = orbPlaced ? [placed] : [];
+    r.footing.sync(spheres);
+    wall.sync(spheres);
+    return { ...r, wall };
+  }
+  const towardBridge = { feet: [0.05, 0, EDGE_Z + 1.4] as Vec3, yaw: 0 };
+
+  it('the whole wall is inside the sphere of the orb on the dead-end pedestal (it vanishes from view there)', () => {
+    for (const seg of wallSegments()) expect(boxInsideSphere(seg, placed)).toBe(true);
+  });
+
+  it('keep (as now): with the orb placed the wall is cut from view but still stops you before the bridge', () => {
+    const r = deadEnd('keep', true);
+    const p = body(r, towardBridge);
+    walk(r, p, forward, 4);
+    expect(r.wall.offCount).toBe(0);
+    expect(p.feet.z).toBeGreaterThan(TRIAL_SURFACE_WALL.max[2]);
+  });
+
+  it('cut: with the orb placed the wall is gone in both senses, and you walk onto the bridge', () => {
+    const r = deadEnd('cut', true);
+    const p = body(r, towardBridge);
+    walk(r, p, forward, 4);
+    expect(r.wall.offCount).toBe(wallSegments().length);
+    expect(p.feet.z).toBeLessThan(EDGE_Z - 1);
+  });
+
+  it('cut: without the orb the wall is solid like any wall', () => {
+    const r = deadEnd('cut', false);
+    expect(r.wall.offCount).toBe(0);
+  });
+
+  it('cut: picking the orb up while standing in the wall would shut the body in — a pickup check has to refuse it', () => {
+    const r = deadEnd('cut', true);
+    const inWall: Vec3 = [0.05, 0, (TRIAL_SURFACE_WALL.min[2] + TRIAL_SURFACE_WALL.max[2]) / 2];
+    expect(r.wall.enclosing(inWall, BODY_RADIUS, 1.75).length).toBeGreaterThan(0);
+    // the orb is picked up: the sphere shrinks (no longer ground), the wall comes back around the body
+    const p = body(r, { feet: inWall, yaw: Math.PI });
+    r.wall.sync([{ ...placed, materialize: { target: 0 as const } }]);
+    expect(r.wall.offCount).toBe(0);
+    const s = walk(r, p, forward, 2);
+    // what Rapier's character controller does with a body that starts inside a collider: recorded in S-24.md
+    const moved = Math.hypot((s.at(-1)?.x ?? 0) - inWall[0], (s.at(-1)?.z ?? 0) - inWall[2]);
+    expect(moved).toBeLessThan(0.1);
+  });
+});
+
+describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直に, from the glb’s _col)', () => {
+  /** Steers the body through waypoints like a player would (turn toward the next point, walk). */
+  function walkThrough(
+    r: ReturnType<typeof room>,
+    from: SpawnName,
+    points: [number, number][],
+    seconds: number,
+  ) {
+    const s = SPAWNS[from];
+    const p = body(r, { feet: s.feet, yaw: s.yaw });
+    const samples: { x: number; z: number; speed: number }[] = [];
+    let next = 0;
+    for (let t = 0; t < seconds && next < points.length; t += DT) {
+      const target = points[next] as [number, number];
+      const f = p.feet;
+      if (Math.hypot(target[0] - f.x, target[1] - f.z) < 0.25) {
+        next++;
+        continue;
+      }
+      const yaw = Math.atan2(-(target[0] - f.x), -(target[1] - f.z));
+      const turn = Math.atan2(Math.sin(yaw - p.yaw), Math.cos(yaw - p.yaw));
+      r.world.step();
+      p.update(DT, { move: { x: 0, y: 1 }, sprint: false, lookYaw: turn, lookPitch: 0 });
+      const v = p.velocity;
+      samples.push({ x: p.feet.x, z: p.feet.z, speed: Math.hypot(v.x, v.z) });
+    }
+    return { reached: next, samples };
+  }
+
+  it('from where you wake, round the bench and out of the door onto the way, nothing is in the way', () => {
+    const r = room();
+    const route: [number, number][] = [
+      [-0.15, -1.55],
+      [0, -3.6],
+      [0, -6],
+    ];
+    const w = walkThrough(r, 'bench', route, 12);
+    expect(w.reached).toBe(route.length);
+    // walking all along (no furniture to slide along): after the first second the pace holds
+    const walking = w.samples.slice(60);
+    expect(walking.filter((q) => q.speed < 1.1).length).toBeLessThan(walking.length * 0.08);
+  });
+
+  it('nothing stands on the floor under the skylight (天窓の下の中央は空ける)', () => {
+    const r = room();
+    r.world.step();
+    const furniture = new Set(r.furniture.fixed.map((c) => c.handle));
+    const hits: number[] = [];
+    // a column as wide as the skylight, from just above the floor to above the head
+    r.world.intersectionsWithShape(
+      { x: 0, y: 1.0, z: 0 },
+      { x: 0, y: 0, z: 0, w: 1 },
+      new R.Cylinder(0.9, WORKSHOP.oculus),
+      (c) => {
+        if (furniture.has(c.handle)) hits.push(c.handle);
+        return true;
+      },
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('you cannot walk into what you see: a ray that meets a piece meets its collider first (or within 5 cm)', () => {
+    const r = room();
+    r.world.step();
+    const shapes = workshop.colliders.filter((c) => c.layer !== 'back');
+    const raycaster = new THREE.Raycaster();
+    const misses: string[] = [];
+    for (const piece of Object.values(WORKSHOP_OBJECTS).filter((o) => o.col)) {
+      const visual = workshop.layered.find((l) => l.object.userData.name === piece.name)?.object;
+      const collider = r.furniture.fixed[shapes.findIndex((c) => c.name === `${piece.name}_col`)];
+      if (!visual || !collider) throw new Error(`no ${piece.name} or its collider`);
+      visual.updateWorldMatrix(true, true);
+      for (const h of [0.25, 0.6, 1.0, 1.5]) {
+        for (let i = 0; i < 24; i++) {
+          // off the pieces' symmetry lines: a ray exactly along a mesh edge can slip between its two triangles
+          const a = ((i + 0.37) / 24) * Math.PI * 2;
+          const dir = new THREE.Vector3(-Math.cos(a), 0, -Math.sin(a));
+          const origin = new THREE.Vector3(piece.at[0] + Math.cos(a) * 3, h, piece.at[1] + Math.sin(a) * 3);
+          raycaster.set(origin, dir);
+          raycaster.far = 6;
+          const seen = raycaster.intersectObject(visual, true)[0]?.distance;
+          if (seen === undefined) continue;
+          const felt = r.world.castRay(
+            new R.Ray(origin, dir),
+            6,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            (c) => c === collider,
+          )?.timeOfImpact;
+          if (felt === undefined || felt > seen + 0.05)
+            misses.push(`${piece.name} h${h} a${i}: seen ${seen.toFixed(2)} felt ${felt?.toFixed(2)}`);
+        }
+      }
+    }
+    expect(misses).toEqual([]);
+  });
+
+  it('walking at the fire, the body slides by the pipe left in the mouth and round the furnace, never through either', () => {
+    const r = room();
+    const p = body(r, 'furnace');
+    const [fx, fz] = FURNACE_FACING;
+    const [cx, , cz] = FURNACE.center;
+    /** Distance in x/z from the pipe's axis (it runs from the mouth to MOUTH_PIPE_REACH, at hip height). */
+    const offPipe = (x: number, z: number): number => {
+      const along = Math.max(0.55, Math.min(MOUTH_PIPE_REACH, (x - cx) * fx + (z - cz) * fz));
+      return Math.hypot(x - (cx + fx * along), z - (cz + fz * along));
+    };
+    const s = walk(r, p, forward, 5);
+    const closest = Math.min(...s.map((q) => Math.hypot(q.x - cx, q.z - cz)));
+    for (const q of s) expect(offPipe(q.x, q.z)).toBeGreaterThan(BODY_RADIUS - 0.02);
+    // it got right up to the furnace (it was pushed toward it all along) but never into its bubbles (about 0.9 m out
+    // at body height) — a round thing makes the body slide along it rather than come to rest
+    expect(closest).toBeLessThan(GRATE.near + 0.5);
+    expect(closest).toBeGreaterThan(1.0);
   });
 });

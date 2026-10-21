@@ -37,12 +37,117 @@ export const WORKSHOP_FLOOR_RADIUS = Math.sqrt(WORKSHOP.radius ** 2 - WORKSHOP.s
 /** Highest point of the dome (the rim of the skylight is a little lower). */
 export const WORKSHOP_TOP = WORKSHOP.sphereCenterY + WORKSHOP.radius;
 
-/** 作業台: a wooden bench, top at 0.9 m, along the wall left of the door. */
+/** Radius of the dome's wall at height y (the wall leans in as it rises: furniture against it follows it). */
+export function domeWallRadius(y: number): number {
+  return Math.sqrt(Math.max(0, WORKSHOP.radius ** 2 - (y - WORKSHOP.sphereCenterY) ** 2));
+}
+
+/*
+ * The workshop's interior (S-24, the plan the designer approved on 2026-10-22): 職人がついさっきまで仕事をしていた工房.
+ * 世界観 > 語り口: 寂しさではなく見つける喜び、まだそこで暮らしている気配. Furniture keeps to the walls; the walk from where
+ * you wake to the bench and out of the door, and the floor under the skylight, stay clear (空間の可読性と導線).
+ * Modelled in Blender by script (blender/scripts/make_workshop.py, the same numbers) and loaded from WORKSHOP_ASSET;
+ * src/game/assets/workshop-asset.test.ts checks that the exported objects stand where these say. Positions are 仮
+ * (the plan allows moving them while keeping its rules).
+ */
+
+/** 作業台: a frosted-glass top on a brass frame, top at 0.9 m, along the wall left of the door (it was wood until S-24). */
 export const BENCH = { center: [-1.55, 0, -2.45] as Vec3, size: [2.1, 0.9, 0.8] as Vec3 };
 /** 作業台に一つだけ残っていたビードロ (世界観 > 主人公): where the orb rests on the bench. */
 export const BENCH_ORB: Vec3 = [-1.55, 0.99, -2.28];
-/** The furnace (炉) on the right, a warm light in the blue (光と時間帯: 夜明け前の青). */
+/**
+ * The furnace (炉) on the right, the only warm light of the workshop (光と時間帯: 夜明け前の青). A cluster of milky-glass
+ * bubbles (形のルール: 泡の集合) glowing from inside; `radius` is its footprint.
+ */
 export const FURNACE = { center: [2.35, 0, -1.4] as Vec3, radius: 0.95 };
+/** Unit (x, z) the furnace's mouth faces: the centre of the dome, where the grate is. */
+export const FURNACE_FACING: readonly [number, number] = (() => {
+  const l = Math.hypot(FURNACE.center[0], FURNACE.center[2]);
+  return [-FURNACE.center[0] / l, -FURNACE.center[2] / l] as const;
+})();
+/** Distance from the furnace's centre to its glowing mouth (the fire at the back of the opening), and its height. */
+const MOUTH_REACH = 0.62;
+/** The fire in the furnace's mouth: where its light stands (S-25: the furnace's burning sound). */
+export const FURNACE_MOUTH: Vec3 = [
+  FURNACE.center[0] + FURNACE_FACING[0] * MOUTH_REACH,
+  0.46,
+  FURNACE.center[2] + FURNACE_FACING[1] * MOUTH_REACH,
+];
+/**
+ * 真鍮の格子 on the floor in front of the furnace (空間の可読性と導線 1: 床と道は曇りガラス・石畳・真鍮の格子): `depth` along
+ * the furnace's facing, from `near` metres off its centre, `width` across. Footsteps there are brass (FLOOR_ZONES).
+ */
+export const GRATE = { near: 0.9, depth: 1.0, width: 1.3 } as const;
+/** Centre (x, z) of the grate. */
+export const GRATE_CENTER: readonly [number, number] = [
+  FURNACE.center[0] + FURNACE_FACING[0] * (GRATE.near + GRATE.depth / 2),
+  FURNACE.center[2] + FURNACE_FACING[1] * (GRATE.near + GRATE.depth / 2),
+];
+/** One blowpipe left in the furnace's mouth reaches this far from the furnace's centre (it rests on a brass yoke). */
+export const MOUTH_PIPE_REACH = 1.75;
+/** 吹き竿の立て掛け: brass blowpipes leaning on a rail along the wall, right of the furnace. */
+export const BLOWPIPE_RACK = { center: [3.45, 0, 0.55] as Vec3, fromDeg: -3, toDeg: 19 };
+/** マーバー台 (a brass slab on frosted-glass legs) with a vessel half made on it; long side along the wall. */
+export const MARVER = { center: [2.3, 0, 1.6] as Vec3, size: [0.9, 0.85, 0.5] as Vec3 };
+/** 水桶: a frosted-glass tub with brass hoops, left of the marver (S-25: a drop falls into it). Water surface at `water`. */
+export const WATER_TUB = { center: [1.45, 0, 1.85] as Vec3, radius: 0.33, height: 0.46, water: 0.36 };
+/** 徐冷炉: a frosted-glass bubble at the back, open toward the centre, warm inside (finished pieces cooling). */
+export const ANNEALER = { center: [0.3, 0, 3.4] as Vec3, radius: 0.66, height: 1.0 };
+/**
+ * 作品の棚: three tiers in an arc along the wall, from the left side round to the back (azimuth from +X toward +Z, the
+ * dome's own). Each tier follows the leaning wall: its back stays `wallGap` off the glass at its height.
+ */
+export const WORKS_SHELF = {
+  fromDeg: 115,
+  toDeg: 165,
+  tiers: [0.42, 0.88, 1.34] as readonly number[],
+  depth: 0.3,
+  wallGap: 0.06,
+} as const;
+/** Radius of the front edge of a shelf tier at height y. */
+export function shelfFrontRadius(y: number): number {
+  return domeWallRadius(y) - WORKS_SHELF.wallGap - WORKS_SHELF.depth;
+}
+/** 椅子: a stool left of the bench, pushed back as if someone just stood up. */
+export const CHAIR = { center: [-3.0, 0, -1.4] as Vec3, radius: 0.24, seat: 0.46 };
+/** 飲みかけの湯のみ on the left end of the bench. */
+export const TEA_CUP: Vec3 = [-2.38, 0.9, -2.2];
+/** 風鈴 above the door, inside (S-25: the wind from the door rings it). The bell's centre. */
+export const WIND_CHIME: Vec3 = [0, 2.22, -3.22];
+
+/** The workshop's glb (`pnpm assets`, job "workshop"), under the app's base URL. */
+export const WORKSHOP_ASSET = 'assets/workshop/a0.glb';
+/**
+ * The objects of WORKSHOP_ASSET (設計書 命名規則: <area>_<kind>_<id>, A0 = 序章) and where each stands (x, z). `col`: it has a
+ * collider (_col) shaped like it (空間の可読性と導線 4); the grate is floor, the chime hangs above the head, the pieces
+ * stand on furniture.
+ */
+export const WORKSHOP_OBJECTS = {
+  bench: { name: 'A0_bnch_work01', at: [BENCH.center[0], BENCH.center[2]], col: true },
+  benchWares: { name: 'A0_ware_bench01', at: [BENCH.center[0], BENCH.center[2]], col: false },
+  furnace: { name: 'A0_frn_furnace01', at: [FURNACE.center[0], FURNACE.center[2]], col: true },
+  grate: { name: 'A0_grt_floor01', at: GRATE_CENTER, col: false },
+  rack: { name: 'A0_pipe_rack01', at: [BLOWPIPE_RACK.center[0], BLOWPIPE_RACK.center[2]], col: true },
+  marver: { name: 'A0_mrv_marver01', at: [MARVER.center[0], MARVER.center[2]], col: true },
+  marverWare: { name: 'A0_ware_marver01', at: [MARVER.center[0], MARVER.center[2]], col: false },
+  tub: { name: 'A0_tub_water01', at: [WATER_TUB.center[0], WATER_TUB.center[2]], col: true },
+  annealer: { name: 'A0_anl_annealer01', at: [ANNEALER.center[0], ANNEALER.center[2]], col: true },
+  annealerWares: { name: 'A0_ware_anneal01', at: [ANNEALER.center[0], ANNEALER.center[2]], col: false },
+  shelf: { name: 'A0_shlf_works01', at: shelfPoint(), col: true },
+  shelfClear: { name: 'A0_ware_clear01', at: shelfPoint(), col: false },
+  shelfBubble: { name: 'A0_ware_bubble01', at: shelfPoint(), col: false },
+  shelfFrost: { name: 'A0_ware_frost01', at: shelfPoint(), col: false },
+  chair: { name: 'A0_chr_stool01', at: [CHAIR.center[0], CHAIR.center[2]], col: true },
+  cup: { name: 'A0_cup_tea01', at: [TEA_CUP[0], TEA_CUP[2]], col: false },
+  chime: { name: 'A0_chim_door01', at: [WIND_CHIME[0], WIND_CHIME[2]], col: false },
+} as const satisfies Record<string, { name: string; at: readonly [number, number]; col: boolean }>;
+
+/** The middle of the shelf's arc at its lowest tier (x, z). */
+function shelfPoint(): [number, number] {
+  const a = (((WORKS_SHELF.fromDeg + WORKS_SHELF.toDeg) / 2) * Math.PI) / 180;
+  const r = shelfFrontRadius(WORKS_SHELF.tiers[0] ?? 0) + WORKS_SHELF.depth / 2;
+  return [r * Math.cos(a), r * Math.sin(a)];
+}
 
 /** The way from the door to the broken edge (一本道). Starts inside the door, under the floor disc. */
 export const PATH = { minX: -1.3, maxX: 1.3, minZ: -14, maxZ: -4.4 };
@@ -100,6 +205,13 @@ export const PEDESTAL_ORB: Vec3 = [-0.95, 1.05, -13.5];
 /** Collision radius of the pedestal's foot (the drawn foot is 0.26 m). */
 export const PEDESTAL_RADIUS = 0.26;
 
+/**
+ * S-24's trial only (?trial=surface-wall; S-23 判断待ち9): a broken glass wall on the surface layer (裏の層のルール: 表にだけ
+ * あるもの: 崩れた壁) standing on the lip of the dead end, across the way onto the bridge, inside the placed orb's sphere.
+ * Its collider shows what happens to a surface collider inside the sphere (physics.ts SurfaceColliders).
+ */
+export const TRIAL_SURFACE_WALL: Box = { min: [-0.68, 0, EDGE_Z + 0.04], max: [0.78, 1.0, EDGE_Z + 0.16] };
+
 /** 光の雫 (裏の層にしかない): hovering just past the bridge, over the far shore. */
 export const DROP: Vec3 = [-0.2, 1.2, -17.0];
 
@@ -127,15 +239,14 @@ export const LIGHTHOUSE: Vec3 = [3, 0, -82];
  *    radius). It lies over the start of the way, so inside the door it is still glass.
  *  - the one way and the far shore are 石畳 (room-art.ts stoneMaterial; S-06: 一本道は縁の真鍮の線と石畳で読める).
  *  - the back layer's bridge deck is frosted glass (room-art.ts deckMaterial: 歩く床は曇り、手すりだけ透明).
- *  - 真鍮の格子 is drawn nowhere underfoot here (brass is only the frames, the lips, the gate and the lamp posts), so no
- *    floor of this room is brass: what you hear is what you see (空間の可読性 4). A brass floor drawn later (S-24) adds
- *    a line here.
+ *  - 真鍮の格子: the grate in front of the furnace (S-24, GRATE; the workshop's glb draws it on the glass floor). It is
+ *    the only brass underfoot: what you hear is what you see (空間の可読性 4). Listed first, so it wins over the disc.
  * The first zone that holds a point decides; off every floor the answer is 石畳, the town's ground.
  */
 export interface FloorZone {
   readonly name: string;
   readonly material: FloorMaterial;
-  /** A disc around the origin (the workshop) or a box on x and z. */
+  /** A disc around the origin (the workshop), a box on x and z, or a rectangle turned to face `axis`. */
   readonly radius?: number;
   readonly box?: {
     readonly minX: number;
@@ -143,9 +254,26 @@ export interface FloorZone {
     readonly minZ: number;
     readonly maxZ: number;
   };
+  readonly rect?: {
+    readonly center: readonly [number, number];
+    /** Unit (x, z) of the rectangle's depth. */
+    readonly axis: readonly [number, number];
+    readonly halfDepth: number;
+    readonly halfWidth: number;
+  };
 }
 
 export const FLOOR_ZONES: readonly FloorZone[] = [
+  {
+    name: 'grate',
+    material: 'brass',
+    rect: {
+      center: GRATE_CENTER,
+      axis: FURNACE_FACING,
+      halfDepth: GRATE.depth / 2,
+      halfWidth: GRATE.width / 2,
+    },
+  },
   { name: 'workshop', material: 'frosted', radius: WORKSHOP_FLOOR_RADIUS + 0.05 },
   { name: 'path', material: 'stone', box: PATH },
   {
@@ -156,14 +284,24 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
   { name: 'far', material: 'stone', box: FAR },
 ];
 
+function inZone(f: FloorZone, x: number, z: number): boolean {
+  if (f.radius !== undefined) return Math.hypot(x, z) <= f.radius;
+  if (f.box) return x >= f.box.minX && x <= f.box.maxX && z >= f.box.minZ && z <= f.box.maxZ;
+  if (f.rect) {
+    const dx = x - f.rect.center[0];
+    const dz = z - f.rect.center[1];
+    const [ax, az] = f.rect.axis;
+    return (
+      Math.abs(dx * ax + dz * az) <= f.rect.halfDepth && Math.abs(-dx * az + dz * ax) <= f.rect.halfWidth
+    );
+  }
+  return false;
+}
+
 /** The floor under a point of the ground: its zone ('none' off every floor) and material. */
 export function floorAt(x: number, z: number): { zone: string; material: FloorMaterial } {
   for (const f of FLOOR_ZONES) {
-    const inside =
-      f.radius !== undefined
-        ? Math.hypot(x, z) <= f.radius
-        : !!f.box && x >= f.box.minX && x <= f.box.maxX && z >= f.box.minZ && z <= f.box.maxZ;
-    if (inside) return { zone: f.name, material: f.material };
+    if (inZone(f, x, z)) return { zone: f.name, material: f.material };
   }
   return { zone: 'none', material: 'stone' };
 }
@@ -184,6 +322,20 @@ export const SPAWNS = {
   'dead-end': { feet: [0.25, 0, -11.9] as Vec3, yaw: 0.16, pitch: -0.14 },
   /** On the far shore, looking back over the bridge to the pedestal and the workshop. */
   far: { feet: [0.2, 0, -18.2] as Vec3, yaw: Math.PI, pitch: -0.12 },
+  /** S-24 views of the workshop: in front of the furnace, past the end of the pipe in its mouth, looking into the fire. */
+  furnace: {
+    feet: [
+      FURNACE.center[0] + FURNACE_FACING[0] * 2.55,
+      0,
+      FURNACE.center[2] + FURNACE_FACING[1] * 2.55,
+    ] as Vec3,
+    yaw: Math.atan2(FURNACE_FACING[0], FURNACE_FACING[1]),
+    pitch: -0.3,
+  },
+  /** Before the works shelf, its arc from the left side round to the back. */
+  shelf: { feet: [-0.9, 0, 0.75] as Vec3, yaw: 2.27, pitch: -0.23 },
+  /** Just inside the door, looking back into the workshop. */
+  door: { feet: [0, 0, -3.75] as Vec3, yaw: Math.PI, pitch: -0.12 },
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;

@@ -2,9 +2,10 @@ import * as THREE from 'three/webgpu';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
-import { segmentsUnder, type Vec3 } from '../../layers/footing';
+import { segmentsUnder, splitFooting, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
 import { glassEase } from '../../layers/tween';
+import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
 import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
@@ -25,14 +26,25 @@ import {
   EDGE_Z,
   FACING_DEG,
   FAR,
+  FOOTING_SEGMENT,
   lookDirection,
   PEDESTAL_ID,
   PEDESTAL_ORB,
   REACH,
   SPAWNS,
   type SpawnName,
+  TRIAL_SURFACE_WALL,
+  WORKSHOP_ASSET,
+  WORKSHOP_OBJECTS,
 } from './layout';
-import { addRoomColliders, BackFooting, deckSegmentShape, FallGuard, insideAnySphere } from './physics';
+import {
+  addRoomColliders,
+  BackFooting,
+  deckSegmentShape,
+  FallGuard,
+  insideAnySphere,
+  SurfaceColliders,
+} from './physics';
 import { buildRoomArt } from './room-art';
 import { type InteractTarget, PrologueSession, peekModifier, SHAKE_AMPLITUDE } from './session';
 import { pickTarget, type TargetCandidate } from './targets';
@@ -106,6 +118,26 @@ export interface RoomProbe {
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   autoplay: { step: string; done: boolean } | null;
   layout: { edgeZ: number; farZ: number; pedestalOrb: Vec3; drop: Vec3 };
+  /** The workshop's interior from its glb (S-24), once the room is built. */
+  workshop: WorkshopProbe | null;
+  /** S-24's trial of a surface-only wall in the sphere (?trial=surface-wall&surfaceCol=keep|cut), or null. */
+  trial: { mode: 'keep' | 'cut'; segments: number; off: number } | null;
+}
+
+/** What the room built from the workshop's glb (tests/e2e/S-24-*.spec.ts). */
+export interface WorkshopProbe {
+  loaded: boolean;
+  /** Names of the objects put on a layer. */
+  objects: string[];
+  /** Pieces of the plan (layout.ts WORKSHOP_OBJECTS) that are not in the file. */
+  missing: string[];
+  colliders: string[];
+  problems: { object: string; code: string }[];
+  glass: { object: string; material: string; kind: string; path: string }[];
+  /** Triangles of what is drawn (all pieces). */
+  triangles: number;
+  /** Objects on a layer the camera does not draw (must be none). */
+  hiddenFromCamera: string[];
 }
 
 export interface PrologueRoom extends DiveWorld {
@@ -221,6 +253,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     autoplay: opts.autopilot ? { step: '', done: false } : null,
     layout: { edgeZ: EDGE_Z, farZ: FAR.maxZ, pedestalOrb: PEDESTAL_ORB, drop: DROP },
+    workshop: null,
+    trial: null,
   };
   const dive = createDivePath();
   const placeholder = new THREE.Scene();
@@ -281,12 +315,29 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const world = createWorld();
   addRoomColliders(R, world);
   const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
+  // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col
+  const workshop = await loadAreaAsset(renderer, quality, `${import.meta.env.BASE_URL}${WORKSHOP_ASSET}`);
+  const furniture = addAssetColliders(R, world, workshop.assembled.colliders);
+  // S-24's trial (S-23 判断待ち9, process/slices/S-24.md): a surface-only wall on the dead end's lip, whose collider stays
+  // (keep, as assets do today) or goes while it is wholly inside a placed orb's sphere (cut). Off unless asked for.
+  const trialWall = ctx.params.get('trial') === 'surface-wall';
+  const trial = trialWall
+    ? new SurfaceColliders(
+        R,
+        world,
+        splitFooting('trial-wall', TRIAL_SURFACE_WALL, FOOTING_SEGMENT),
+        ctx.params.get('surfaceCol') === 'cut' ? 'cut' : 'keep',
+      )
+    : null;
   world.step();
 
   const shadowsBefore = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = true;
   const field = new LayerField();
-  const art = buildRoomArt(renderer, quality, field);
+  const art = buildRoomArt(renderer, quality, field, trialWall ? { trialWall: TRIAL_SURFACE_WALL } : {});
+  const workshopTriangles = triangleCount(workshop.assembled.root);
+  for (const { object, layer } of workshop.assembled.layered) field.assign(object, layer);
+  art.scene.add(workshop.assembled.root);
   for (const m of field.membranes) art.scene.add(m);
   const pipeline = new PeekPipeline({
     renderer,
@@ -298,6 +349,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     environment: art.environment,
     finish: finishModeFrom(ctx.params),
   });
+
+  probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
 
   const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };
   const session = new PrologueSession({
@@ -483,9 +536,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     field.setSpheres(fieldList);
     // The footing takes the session's spheres as they are (the same array until the orbs change) and decides
     // the fence itself (physics.holdsGround). The dev hold uses what it draws.
-    footing.sync(
-      opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius })),
-    );
+    const footingSpheres =
+      opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius }));
+    footing.sync(footingSpheres);
+    if (trial) {
+      trial.sync(footingSpheres);
+      probe.trial = { mode: trial.mode, segments: trial.segments.length, off: trial.offCount };
+    }
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;
@@ -687,11 +744,52 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       prompt.remove();
       player.dispose();
       footing.dispose();
+      furniture.dispose();
+      trial?.dispose();
       world.free();
+      workshop.dispose();
       pipeline.dispose();
       field.dispose();
       art.dispose();
       renderer.shadowMap.enabled = shadowsBefore;
     },
+  };
+}
+
+/** Triangles drawn under `root` (indexed or not). */
+function triangleCount(root: THREE.Object3D): number {
+  let n = 0;
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const index = mesh.geometry.getIndex();
+    n += (index ? index.count : (mesh.geometry.getAttribute('position')?.count ?? 0)) / 3;
+  });
+  return n;
+}
+
+function workshopProbe(area: AreaAsset, triangles: number, camera: THREE.Camera): WorkshopProbe {
+  const name = (o: THREE.Object3D): string =>
+    typeof o.userData.name === 'string' ? o.userData.name : o.name;
+  const objects = area.assembled.layered.map((l) => name(l.object));
+  return {
+    loaded: true,
+    objects,
+    missing: Object.values(WORKSHOP_OBJECTS)
+      .map((o) => o.name)
+      .filter((n) => !objects.includes(n)),
+    colliders: area.assembled.colliders.map((c) => c.name),
+    problems: area.problems.map((p) => ({ object: p.object, code: p.code })),
+    glass: area.glass.map((g) => ({ object: g.object, material: g.material, kind: g.kind, path: g.path })),
+    triangles,
+    hiddenFromCamera: area.assembled.layered
+      .filter(({ object }) => {
+        let seen = false;
+        object.traverse((o) => {
+          if ((o as THREE.Mesh).isMesh && o.layers.test(camera.layers)) seen = true;
+        });
+        return !seen;
+      })
+      .map((l) => name(l.object)),
   };
 }

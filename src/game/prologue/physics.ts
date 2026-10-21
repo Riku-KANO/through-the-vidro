@@ -1,10 +1,14 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
-import { activeSegmentIds, type FootingSegment, type Sphere, type Vec3 } from '../../layers/footing';
+import {
+  activeSegmentIds,
+  type Box,
+  type FootingSegment,
+  type Sphere,
+  type Vec3,
+} from '../../layers/footing';
 import { cylinderMesh, type MeshData } from '../player/walk-lab-field';
 import {
-  BENCH,
   FAR,
-  FURNACE,
   GATE,
   LAMP_HEIGHT,
   LAMP_POST_RADIUS,
@@ -72,17 +76,8 @@ export function addRoomColliders(R: typeof RAPIER, world: RAPIER.World): RAPIER.
   });
   descs.push(trimesh(R, floor, [0, -SLAB / 2, 0]));
   descs.push(trimesh(R, domeWall(), [0, 0, 0]));
-  // the workbench and the furnace
-  const [bx, , bz] = BENCH.center;
-  const [sx, sy, sz] = BENCH.size;
-  descs.push(
-    R.ColliderDesc.roundCuboid(sx / 2 - 0.03, sy / 2 - 0.03, sz / 2 - 0.03, 0.03).setTranslation(
-      bx,
-      sy / 2,
-      bz,
-    ),
-  );
-  descs.push(R.ColliderDesc.ball(FURNACE.radius).setTranslation(FURNACE.center[0], 0, FURNACE.center[2]));
+  // The workshop's furniture (the bench, the furnace…) collides as the _col shapes of its glb (S-24, room.ts loads it
+  // and src/game/assets adds them): the same artist-made shapes as what is drawn.
   // the way, the far shore and the gate that closes it
   descs.push(slab(R, PATH.minX, PATH.maxX, PATH.minZ, PATH.maxZ));
   descs.push(slab(R, FAR.minX, FAR.maxX, FAR.minZ, FAR.maxZ));
@@ -198,6 +193,88 @@ export class BackFooting {
     for (const c of this.colliders.values()) this.world.removeCollider(c, false);
     this.colliders.clear();
     this.handles.clear();
+  }
+}
+
+/**
+ * S-24's trial of S-23 判断待ち9 (the designer decides): colliders of things that are on the surface layer only, inside
+ * a placed orb's sphere. 裏の層のルール: 玉を置くと、その球の中では裏が表を置き換える…表にしかない壁は消えて通れるようになる.
+ *  - `keep` is what assets do today: a surface collider stays solid where its drawing is cut away (an invisible wall)
+ *  - `cut` switches each segment off while it lies wholly inside a sphere that holds ground (holdsGround: a placed orb),
+ *    and on again once the orb is picked up. A segment the sphere's film crosses stays solid (it is still partly drawn)
+ * Not used by the game unless the room is opened with ?trial=surface-wall (process/slices/S-24.md).
+ */
+export type SurfaceColliderMode = 'keep' | 'cut';
+
+/** True when every corner of the box is inside (or on) the sphere. */
+export function boxInsideSphere(b: Box, s: Sphere): boolean {
+  if (!(s.radius > 0)) return false;
+  for (const x of [b.min[0], b.max[0]])
+    for (const y of [b.min[1], b.max[1]])
+      for (const z of [b.min[2], b.max[2]])
+        if (Math.hypot(x - s.center[0], y - s.center[1], z - s.center[2]) > s.radius) return false;
+  return true;
+}
+
+export class SurfaceColliders {
+  private readonly colliders: RAPIER.Collider[];
+  private spheres: readonly FootingSphere[] = [];
+  private off: boolean[];
+
+  constructor(
+    R: typeof RAPIER,
+    private readonly world: RAPIER.World,
+    readonly segments: readonly FootingSegment[],
+    readonly mode: SurfaceColliderMode,
+  ) {
+    this.colliders = segments.map((s) =>
+      world.createCollider(
+        R.ColliderDesc.cuboid(
+          (s.max[0] - s.min[0]) / 2,
+          (s.max[1] - s.min[1]) / 2,
+          (s.max[2] - s.min[2]) / 2,
+        ).setTranslation((s.min[0] + s.max[0]) / 2, (s.min[1] + s.max[1]) / 2, (s.min[2] + s.max[2]) / 2),
+      ),
+    );
+    this.off = segments.map(() => false);
+  }
+
+  /** Segments switched off now. */
+  get offCount(): number {
+    return this.off.filter(Boolean).length;
+  }
+
+  /** Switches the segments for the current spheres (the same array as BackFooting.sync gets). */
+  sync(spheres: readonly FootingSphere[]): boolean {
+    if (spheres === this.spheres) return false;
+    this.spheres = spheres;
+    let changed = false;
+    this.segments.forEach((seg, i) => {
+      const off = this.mode === 'cut' && spheres.some((s) => holdsGround(s) && boxInsideSphere(seg, s));
+      if (off === this.off[i]) return;
+      this.off[i] = off;
+      this.colliders[i]?.setEnabled(!off);
+      changed = true;
+    });
+    return changed;
+  }
+
+  /** Switched-off segments that a body (feet, radius, height) stands in: picking the orb up would shut it in. */
+  enclosing(feet: Vec3, radius: number, height: number): FootingSegment[] {
+    return this.segments.filter(
+      (s, i) =>
+        this.off[i] &&
+        feet[0] + radius > s.min[0] &&
+        feet[0] - radius < s.max[0] &&
+        feet[2] + radius > s.min[2] &&
+        feet[2] - radius < s.max[2] &&
+        feet[1] + height > s.min[1] &&
+        feet[1] < s.max[1],
+    );
+  }
+
+  dispose(): void {
+    for (const c of this.colliders) this.world.removeCollider(c, false);
   }
 }
 
