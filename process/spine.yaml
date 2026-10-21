@@ -304,7 +304,9 @@ slices:
 
   - id: S-13
     title: 動的解像度の揺れへの強さ（手応えの検査と再開）
-    status: todo
+    status: integrated
+    branch: slice/S-13-dynres-noise
+    accepted: レビュー2巡で P1 なし、P2 は記録の書き足しで解消（統合時に親）。判断待ち4・5・6は S-07 の後に見直す（2026-10-21）
     depends: [S-11]
     requirements:
       - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
@@ -312,6 +314,7 @@ slices:
       - src/core/perf/**
       - scripts/sim/**
       - tests/e2e/scenes.spec.ts
+      - src/core/perf/load-sim.ts（試験用。単体テストと scripts/sim が共有）
       - tests/e2e/S-13-*.spec.ts
       - process/slices/S-13.md
       - src/core/CHANGELOG.md

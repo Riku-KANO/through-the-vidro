@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DYNRES_MAX_RESUMES, type GovernorAction, PerfGovernor, type PerfGovernorOptions } from './governor';
+import {
+  DYNRES_MAX_RESUMES,
+  DYNRES_MAX_WASTED_RESUMES,
+  type GovernorAction,
+  PerfGovernor,
+  type PerfGovernorOptions,
+} from './governor';
+import { type Cost, driveLikeApp, logNormalAr1, spikes, vsyncFrame } from './load-sim';
 
 const FRAME = 1000 / 60;
 
@@ -31,32 +38,12 @@ function simulate(
 }
 
 /**
- * Drives the governor exactly like src/main.ts: a GPU sample requested every 8th frame while none is in flight,
- * read back 2 frames later with the epoch of the request, the cost taken at the scale the frame was rendered at.
- * Frames take one refresh interval, or two when the GPU cost does not fit (vsync).
+ * Drives the governor exactly like src/main.ts (load-sim.ts): a GPU sample requested every 8th frame while none is in
+ * flight, read back 2 frames later with the epoch of the request, the cost taken at the scale the frame was rendered
+ * at. Frames take one refresh interval, or two when the GPU cost does not fit.
  */
-function simulateApp(
-  g: PerfGovernor,
-  seconds: number,
-  gpuMs: (scale: number, elapsedMs: number) => number,
-): GovernorAction[] {
-  const actions: GovernorAction[] = [];
-  let pending: { ms: number; epoch: number; at: number } | null = null;
-  let elapsed = 0;
-  for (let i = 0; elapsed < seconds * 1000; i++) {
-    const cost = gpuMs(g.scale, elapsed);
-    const ms = cost <= FRAME ? FRAME : FRAME * 2;
-    elapsed += ms;
-    if (pending && i >= pending.at) {
-      g.gpu(pending.ms, pending.epoch);
-      pending = null;
-    }
-    if (!pending && i % 8 === 0) pending = { ms: cost, epoch: g.epoch, at: i + 2 };
-    const a = g.frame(ms);
-    if (a) actions.push(a);
-  }
-  return actions;
-}
+const simulateApp = (g: PerfGovernor, seconds: number, gpuMs: Cost): GovernorAction[] =>
+  driveLikeApp(g, seconds, gpuMs);
 
 /** Deterministic uniform noise in [min, max) (32-bit LCG on the high bits), whatever the sampling stride. */
 function noise(min: number, max: number, seed = 7): () => number {
@@ -389,22 +376,22 @@ describe('PerfGovernor: dynamic resolution resumes after a stop (S-11)', () => {
     expect(g.scale).toBe(0.85);
   });
 
-  it('d: resumes at most DYNRES_MAX_RESUMES times when every new load again does not follow the resolution', () => {
+  it('d: resumes at most DYNRES_MAX_WASTED_RESUMES times when every new load again does not follow the resolution', () => {
     const g = new PerfGovernor(opts({ dynres: true, dynresTargetMs: 6 }));
     // A staircase of constant costs, each 40% above the last: every step is a new load, none follows the pixels.
     let cost = 5;
-    for (let i = 0; i <= DYNRES_MAX_RESUMES; i++) {
+    for (let i = 0; i <= DYNRES_MAX_WASTED_RESUMES; i++) {
       simulateApp(g, 20, () => cost);
       cost *= 1.4;
     }
-    expect(g.dynresResumes).toBe(DYNRES_MAX_RESUMES);
-    expect(g.dynresStops).toBe(DYNRES_MAX_RESUMES + 1);
+    expect(g.dynresResumes).toBe(DYNRES_MAX_WASTED_RESUMES);
+    expect(g.dynresStops).toBe(DYNRES_MAX_WASTED_RESUMES + 1);
     expect(g.dynresStopReason).toMatch(/for the session/);
     expect(g.dynresResumeAtMs).toBeNull();
     expect(g.scale).toBe(0.85);
     // One more new load: no more resumes, the preset scale stays.
     expect(simulateApp(g, 30, () => cost)).toEqual([]);
-    expect(g.dynresResumes).toBe(DYNRES_MAX_RESUMES);
+    expect(g.dynresResumes).toBe(DYNRES_MAX_WASTED_RESUMES);
     expect(g.gpuReliable).toBe(true);
   });
 
@@ -428,5 +415,203 @@ describe('PerfGovernor: dynamic resolution resumes after a stop (S-11)', () => {
     expect(g.dynresResumes).toBe(0);
     // Already stopped: the reason changes, it does not count as another stop.
     expect(g.dynresStops).toBe(1);
+  });
+});
+
+/**
+ * S-13: GPU time that swings for a second or more (log-normal AR(1), load-sim.ts; σ = spread in log units, τ = how
+ * long a swing lasts), as the span does under vsync. Each case runs a fixed set of seeds and bounds the share of runs
+ * that go wrong. The bounds leave room for the seed set: each comment gives the rate on 200 seeds (scripts/sim), the
+ * count on these seeds, its range over 9 other sets of the same size (seeds shifted by 100 to 900, review round 1
+ * found bounds set at the rate itself failed on a quarter of the sets), and S-11 (98185af) on these seeds.
+ * Frames follow vsync (vsyncFrame), so a swing above two refresh intervals is not mistaken for an implausible reading.
+ */
+describe('PerfGovernor under swinging GPU time (S-13)', () => {
+  const swinging = (base: (scale: number) => number, sigma: number, tauSec: number, seed: number): Cost => {
+    const n = logNormalAr1({ sigma, tauSec, seed });
+    return (s, _t, dt) => base(s) * n.next(dt);
+  };
+  const drive = (g: PerfGovernor, seconds: number, cost: Cost) =>
+    driveLikeApp(g, seconds, cost, { frame: vsyncFrame });
+  /** Seeds k × 7919 for k = 1..seeds, the runs for which `run` returns true. */
+  const count = (seeds: number, run: (seed: number) => boolean): number => {
+    let n = 0;
+    for (let k = 1; k <= seeds; k++) if (run(k * 7919)) n++;
+    return n;
+  };
+  const real = { level: 'mid', dynres: true } as const;
+  const light = { level: 'high', dynres: true, dynresTargetMs: 6 } as const;
+  const pixels = (msAtPreset: number, preset: number) => (s: number) => msAtPreset * (s / preset) ** 2;
+
+  // σ 0.2: 6.5% on 200 seeds; these 100: 7, other sets 3–8; S-11 33. σ 0.3: 17%; these 100: 16, other sets 8–23; S-11 45.
+  it.each([
+    [0.2, 14],
+    [0.3, 30],
+  ])(
+    'a load that follows the pixels is rarely stopped (real target, 25 ms at mid, σ %s, τ 1 s): ≤ %i of 100',
+    (sigma, most) => {
+      const stopped = count(100, (seed) => {
+        const g = new PerfGovernor(opts(real));
+        drive(g, 30, swinging(pixels(25, 0.85), sigma, 1, seed));
+        return g.dynresStops > 0;
+      });
+      expect(stopped).toBeLessThanOrEqual(most);
+    },
+  );
+
+  // σ 0.1: 100% on 200 seeds; these 100: 100, other sets 99–100; S-11 100. σ 0.3: 88%; these 100: 82, other sets
+  // 78–91; S-11 87 (two misses in a row cost some at σ 0.3). A protective bound: green before and after.
+  it.each([
+    [0.1, 97],
+    [0.3, 72],
+  ])(
+    'a load that does not follow the pixels is still stopped (real target, 25 ms flat, σ %s, τ 1 s): ≥ %i of 100',
+    (sigma, least) => {
+      const stopped = count(100, (seed) => {
+        const g = new PerfGovernor(opts(real));
+        drive(
+          g,
+          30,
+          swinging(() => 25, sigma, 1, seed),
+        );
+        return g.dynresStops > 0 && g.scale === 0.85;
+      });
+      expect(stopped).toBeGreaterThanOrEqual(least);
+    },
+  );
+
+  it('a load that does not follow and reaches the floor before two verdicts is stopped there (low preset)', () => {
+    const g = new PerfGovernor(opts({ level: 'low', dynres: true }));
+    simulateApp(g, 15, () => 25);
+    expect(g.dynresStopReason).toMatch(/floor/);
+    expect(g.scale).toBe(0.67);
+  });
+
+  // Target 6: 11% of the stopped on 200 seeds; these 100: 5/75, other sets 3–10%; S-11 29/89 (33%). Real target:
+  // 0/169 on 200 seeds; these 100: 0/82, other sets 0–2.2%; S-11 6/83 (7%).
+  it.each([
+    ['target 6, high, 5.3 ms, σ 0.2', light, 5.3, 0.2, 15, 0.2],
+    ['real target, mid, 14.5 ms, σ 0.15', real, 14.5, 0.15, 20, 0.04],
+  ] as const)(
+    'swings of the load it stopped on do not resume it (%s, τ 1 s, 120 s)',
+    (_l, o, ms, sigma, first, share) => {
+      let stopped = 0;
+      const resumed = count(100, (seed) => {
+        const g = new PerfGovernor(opts(o));
+        const cost = swinging(() => ms, sigma, 1, seed);
+        drive(g, first, cost);
+        if (g.dynresStops === 0) return false;
+        stopped++;
+        drive(g, 120, cost);
+        return g.dynresResumes > 0;
+      });
+      expect(stopped).toBeGreaterThanOrEqual(50);
+      expect(resumed).toBeLessThanOrEqual(Math.floor(stopped * share));
+    },
+  );
+
+  // Single long frames on top of the swing, as on hardware (S-13 closed loop: 2–4 ms with samples at 8–48 ms): taken
+  // as swing, two of them among 15 samples put the threshold out of reach of a new load (the first S-13 rule).
+  // 171/179 (96%) on 200 seeds; these 150: 117/124 (94%), other sets 92–97%; with the 90th percentile of the raw
+  // samples as the swing 89/124 (72%); S-11 131/134.
+  it('single spikes around the stop do not keep a new load from resuming (target 6, high, σ 0.2 + spikes)', () => {
+    let stopped = 0;
+    const resumed = count(150, (seed) => {
+      const g = new PerfGovernor(opts(light));
+      const n = logNormalAr1({ sigma: 0.2, tauSec: 1, seed });
+      const spike = spikes({ p: 0.1, lo: 3, hi: 6, seed: seed + 1 });
+      const cost =
+        (base: (s: number) => number): Cost =>
+        (s, _t, dt) =>
+          base(s) * n.next(dt) * spike();
+      drive(
+        g,
+        15,
+        cost(() => 5.3),
+      );
+      if (g.dynresStops === 0) return false;
+      stopped++;
+      drive(
+        g,
+        3,
+        cost(() => 5.3),
+      );
+      drive(g, 30, cost(pixels(9.5, 1)));
+      return g.dynresResumes > 0;
+    });
+    expect(stopped).toBeGreaterThanOrEqual(75);
+    expect(resumed).toBeGreaterThanOrEqual(Math.ceil(stopped * 0.85));
+  });
+
+  // These 100: 73/75 (97%), other sets 89.9–97.5%; S-11 62/89 (70%: its resumed controller often stopped again on a swing).
+  it('a new load after the stop still resumes it and lowers the scale (target 6, high, σ 0.2, τ 1 s)', () => {
+    let stopped = 0;
+    const lowered = count(100, (seed) => {
+      const g = new PerfGovernor(opts(light));
+      drive(
+        g,
+        15,
+        swinging(() => 5.3, 0.2, 1, seed),
+      );
+      if (g.dynresStops === 0) return false;
+      stopped++;
+      drive(g, 30, swinging(pixels(9.5, 1), 0.2, 1, seed + 1));
+      return g.dynresResumes > 0 && g.scale < 0.9;
+    });
+    expect(stopped).toBeGreaterThanOrEqual(50);
+    expect(lowered).toBeGreaterThanOrEqual(Math.ceil(stopped * 0.8));
+  });
+
+  it('resumes at most DYNRES_MAX_RESUMES times in all, even when no resume was wasted', () => {
+    // Deterministic (review round 2 of S-13): each round a flat load stops it, a heavier load that follows the pixels
+    // resumes it and is lowered with a response (so the resume is not wasted), and a light load lets it climb back.
+    // The 11th stop finds the total used up: off for the session although no resume was wasted.
+    const g = new PerfGovernor(opts(light));
+    for (let round = 0; round < DYNRES_MAX_RESUMES + 1; round++) {
+      drive(g, 20, () => 5);
+      expect(g.dynresStopReason).not.toBeNull();
+      drive(g, 25, pixels(9.5, 1));
+      drive(g, 30, () => 3);
+    }
+    expect(g.dynresResumes).toBe(DYNRES_MAX_RESUMES);
+    expect(g.dynresWastedResumes).toBe(0);
+    expect(g.dynresStopReason).toMatch(/resumed 10 times \(at most 10\).*off for the session/);
+    expect(g.dynresResumeAtMs).toBeNull();
+  });
+
+  it('only wasted resumes count: resumes whose controller lowered the scale with a response do not use up the cap', () => {
+    const g = new PerfGovernor(opts(light));
+    // Each round: a load that does not follow the pixels stops it, a heavier one that does resumes it and is lowered,
+    // and a light one lets the controller climb back to the preset scale.
+    const rounds = [
+      [5, 9.5],
+      [9, 15],
+      [15, 25],
+      [25, 40],
+    ] as const;
+    for (const [flat, heavy] of rounds) {
+      drive(g, 20, () => flat);
+      expect(g.dynresStopReason).toMatch(/follow/);
+      drive(g, 25, pixels(heavy, 1));
+      expect(g.dynresStopReason).toBeNull();
+      expect(g.scale).toBeLessThan(0.9);
+      drive(g, 30, () => 3);
+      expect(g.scale).toBe(1);
+    }
+    expect(g.dynresResumes).toBe(4);
+    expect(g.dynresWastedResumes).toBe(0);
+    expect(g.gpuReliable).toBe(true);
+  });
+
+  it('a resume that stops again without a response is wasted; the cap counts those', () => {
+    const g = new PerfGovernor(opts(light));
+    // The staircase of the S-11 test d: every new load is constant, so every resume is wasted.
+    let cost = 5;
+    for (let i = 0; i <= DYNRES_MAX_WASTED_RESUMES; i++) {
+      drive(g, 20, () => cost);
+      cost *= 1.4;
+    }
+    expect(g.dynresWastedResumes).toBe(DYNRES_MAX_WASTED_RESUMES);
+    expect(g.dynresStopReason).toMatch(/in vain.*off for the session/);
   });
 });
