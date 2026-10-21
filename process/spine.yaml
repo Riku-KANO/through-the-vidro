@@ -470,7 +470,9 @@ slices:
 
   - id: S-21
     title: 音まわりの小さな整理 — エンジンの作り方と出来事の名前付けを1か所に
-    status: todo
+    status: integrated
+    branch: slice/S-21-audio-tidy
+    accepted: レビュー2巡目で指摘なし（2026-10-21）
     depends: [S-16, S-18]
     paths:
       - src/audio/engine.ts（新規。createVidroEngine(context, room)）
