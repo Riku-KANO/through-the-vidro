@@ -24,10 +24,8 @@ describe('footsteps (サウンドデザイン > 環境音: 床の材質ごとに
     const ids = new Set<string>();
     for (const m of FLOOR_MATERIALS) {
       expect(FOOTSTEP_SOURCES[m]).toHaveLength(8);
-      for (const s of FOOTSTEP_SOURCES[m]) {
-        expect(s.kind).toBe('synth');
-        ids.add(s.id);
-      }
+      // synthesized or recorded, each is its own sound (a row may be swapped for a recording: S-22.md)
+      for (const s of FOOTSTEP_SOURCES[m]) ids.add(s.id);
     }
     expect(ids.size).toBe(24);
   });

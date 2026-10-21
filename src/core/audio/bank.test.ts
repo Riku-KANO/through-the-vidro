@@ -187,6 +187,28 @@ describe('a sound bank: synthesized and recorded sources through one port (S-22)
   });
 });
 
+describe('stopping a load', () => {
+  it('leaves the sources not yet begun when it is aborted, and says nothing about them', async () => {
+    const ctx = new FakeCtx();
+    const stop = new AbortController();
+    const made: string[] = [];
+    const errors: string[] = [];
+    const source = (id: string) =>
+      synth(id, () => {
+        made.push(id);
+        if (id === 'b') stop.abort();
+        return new Float32Array(2);
+      });
+    const bank = await loadBank(asCtx(ctx), [source('a'), source('b'), source('c')], {
+      signal: stop.signal,
+      onError: (id) => errors.push(id),
+    });
+    expect(made).toEqual(['a', 'b']);
+    expect(bank.map((b) => b !== null)).toEqual([true, true, false]);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('playing a buffer (one-shot and loop)', () => {
   it('a one-shot starts at its time, at its rate and gain, and ends when the buffer has played', () => {
     const ctx = new FakeCtx();

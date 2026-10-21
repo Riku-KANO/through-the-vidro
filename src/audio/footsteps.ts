@@ -260,9 +260,9 @@ export function footstepGain(speedRatio: number): number {
 
 export type FootstepBanks = Readonly<Record<FloorMaterial, readonly (AudioBuffer | null)[]>>;
 
-export async function loadFootstepBanks(ctx: BaseAudioContext): Promise<FootstepBanks> {
+export async function loadFootstepBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<FootstepBanks> {
   const out = {} as Record<FloorMaterial, (AudioBuffer | null)[]>;
-  for (const m of FLOOR_MATERIALS) out[m] = await loadBank(ctx, FOOTSTEP_SOURCES[m]);
+  for (const m of FLOOR_MATERIALS) out[m] = await loadBank(ctx, FOOTSTEP_SOURCES[m], { signal });
   return out;
 }
 
@@ -275,7 +275,12 @@ export class Footsteps {
     private readonly rng: Rng = mulberry32(randomSeed()),
   ) {}
 
-  /** One step on `material` from `emitter`, now. Null if the engine refused it (or the material has no sound). */
+  /** Whether any sound of `material` could be loaded (a floor with none stays silent). */
+  has(material: FloorMaterial): boolean {
+    return this.banks[material].some((b) => b);
+  }
+
+  /** One step on `material` from `emitter`, now. Null if the engine refused it, or the material has no sound. */
   play(
     engine: AudioEngine,
     emitter: Emitter,
@@ -283,7 +288,7 @@ export class Footsteps {
     speedRatio: number,
   ): { variant: number } | null {
     const bank = this.banks[material];
-    if (!bank.some((b) => b)) return null;
+    if (!this.has(material)) return null;
     let variant = nextVariant(this.last[material], bank.length, this.rng);
     // a variant that could not be loaded is skipped over
     for (let tries = 0; !bank[variant] && tries < bank.length; tries++) variant = (variant + 1) % bank.length;

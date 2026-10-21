@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { decayT60, estimatePitch, peak, rms } from '../core/audio/analysis';
 import { mulberry32 } from '../core/audio/rng';
 import { isInScale, midiToHz } from '../core/audio/scale';
@@ -114,7 +114,7 @@ describe('ガラスの隙間を抜ける風 (持続)', () => {
 
   it('is a loop of a few seconds, the same every time it is made', () => {
     expect(wind.length).toBe(Math.round(WIND_LOOP_SECONDS * SR));
-    expect(WIND_SOURCE.kind).toBe('synth');
+    expect(WIND_SOURCE.id).toBe('wind-loop');
     expect(Array.from(renderWind(SR).subarray(0, 64))).toEqual(Array.from(wind.subarray(0, 64)));
   });
 
@@ -322,7 +322,7 @@ describe('the ambience player (src/audio/ambience.ts AmbiencePlayer)', () => {
     expect(r.shots().length).toBeGreaterThan(0);
   });
 
-  it('stops: fades out, stops the loops, plans no more; disposed, it lets go of where it played', () => {
+  it('stops: fades out, stops the loops, plans no more', () => {
     const r = rigPlayer();
     r.player.start(0);
     r.run(0, 5);
@@ -333,18 +333,41 @@ describe('the ambience player (src/audio/ambience.ts AmbiencePlayer)', () => {
     r.run(5, 40);
     expect(r.shots().length).toBe(n);
     expect(r.player.playing).toBe(false);
-    r.player.dispose();
-    // the inputs are the emitters' (their owner's to let go of); its own faders into them are disconnected
-    const inputs: Node[] = Object.values(r.inputs);
-    for (const input of inputs) expect(input.disconnected).toBe(0);
-    const faders = r.ctx.gains.filter((g) => g.outputs.some((o) => inputs.includes(o)));
-    expect(faders).toHaveLength(4);
-    for (const f of faders) expect(f.disconnected).toBeGreaterThan(0);
+  });
+
+  it('disposed while sounding, it fades out quickly before it lets go (no cut tail, no click)', () => {
+    vi.useFakeTimers();
+    try {
+      const r = rigPlayer();
+      r.player.start(0);
+      r.run(0, 5);
+      r.player.dispose();
+      const inputs: Node[] = Object.values(r.inputs);
+      const faders = r.ctx.gains.filter((g) => g.outputs.some((o) => inputs.includes(o)));
+      expect(faders).toHaveLength(4);
+      for (const f of faders) {
+        // heading for silence from now, quickly
+        const last = f.gain.calls.at(-1);
+        expect(last?.[0]).toBe('target');
+        expect(last?.[1]).toBe(0);
+        expect(f.disconnected).toBe(0);
+      }
+      for (const l of r.ctx.sources.filter((s) => s.loop)) expect(l.stopped).toBeLessThan(5.1);
+      vi.advanceTimersByTime(200);
+      // the emitters' inputs stay their owner's; its own faders are let go of once the fade has run
+      for (const input of inputs) expect(input.disconnected).toBe(0);
+      for (const f of faders) expect(f.disconnected).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tells how loud each kind is sounding right now (the probe’s ears)', () => {
     const r = rigPlayer();
     r.player.start(0);
+    // the ears are only put in when first asked (the game itself never asks)
+    expect(r.ctx.analysers).toHaveLength(0);
+    expect(r.player.levels()).toEqual({ wind: 0, chimes: 0, drops: 0 });
     const taps = r.ctx.analysers;
     expect(taps).toHaveLength(3);
     (taps[0] as Analyser).level = 0.1;

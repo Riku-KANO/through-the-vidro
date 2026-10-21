@@ -635,16 +635,20 @@ const fakeBanks = (): SoundBanks => ({
 });
 
 /** The room's sound with banks that arrive at once; `shared` plays it on an engine handed over (S-18). */
-function soundscapeRig(shared = false) {
+function soundscapeRig(shared = false, banks: () => SoundBanks = fakeBanks) {
   vi.stubGlobal('navigator', { userActivation: { isActive: true } });
   const target = new EventTarget();
   const room = fakeRoom();
   room.probe.position = { x: SPAWNS.bench.feet[0], y: 0, z: SPAWNS.bench.feet[2] };
   const engine = new FakeEngine();
   const waiting = new Set<(e: AudioEngine) => void>();
+  const loads: (AbortSignal | undefined)[] = [];
   const sound = createPrologueSound(room, {
     target,
-    loadBanks: async () => fakeBanks(),
+    loadBanks: async (_ctx, signal) => {
+      loads.push(signal);
+      return banks();
+    },
     makeContext: () => new FakeContext() as unknown as AudioContext,
     makeEngine: async () => engine as unknown as AudioEngine,
     ...(shared
@@ -677,7 +681,7 @@ function soundscapeRig(shared = false) {
     room.probe.footfalls++;
     frame();
   };
-  return { room, engine, sound, begin, frame, stepTo, settle };
+  return { room, engine, sound, begin, frame, stepTo, settle, loads };
 }
 
 const loops = (e: FakeEngine) => e.ctx.sources.filter((s) => s.loop);
@@ -742,6 +746,51 @@ describe('footsteps in the room (S-22: 歩くと歩幅に合わせて足元か�
     r.stepTo(-1.4, -1.5);
     expect(r.sound.probe.footsteps.count).toBe(1);
     r.sound.dispose();
+  });
+
+  it('a long frame that held two footfalls plays one step and counts the other as skipped', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    r.room.probe.footfalls += 2;
+    r.room.probe.position = { x: 0, y: 0, z: -8 };
+    r.frame();
+    const f = r.sound.probe.footsteps;
+    expect(f.count).toBe(1);
+    expect(f.skipped).toBe(1);
+    expect(f.count + f.refused + f.skipped + f.missing).toBe(r.room.probe.footfalls - (f.since ?? 0));
+    r.sound.dispose();
+  });
+
+  it('a floor none of whose sounds could be loaded stays silent, counted as missing (not as refused by the engine)', async () => {
+    const r = soundscapeRig(false, () => {
+      const b = fakeBanks();
+      return { ...b, footsteps: { ...b.footsteps, stone: b.footsteps.stone.map(() => null) } };
+    });
+    await r.begin();
+    r.frame();
+    const before = r.engine.started.length;
+    r.stepTo(0, -8);
+    expect(r.engine.started.length).toBe(before);
+    expect(r.sound.probe.footsteps.missing).toBe(1);
+    expect(r.sound.probe.footsteps.refused).toBe(0);
+    // the glass floor still sounds
+    r.stepTo(-1.4, -1.5);
+    expect(r.sound.probe.footsteps.count).toBe(1);
+    r.sound.dispose();
+  });
+
+  it('left while its sounds are still being made, it stops making them', async () => {
+    const r = soundscapeRig();
+    r.room.events.emit({ type: 'peekStart' });
+    r.sound.dispose();
+    expect(r.loads).toHaveLength(0);
+    const s = soundscapeRig();
+    await s.begin();
+    expect(s.loads).toHaveLength(1);
+    expect(s.loads[0]?.aborted).toBe(false);
+    s.sound.dispose();
+    expect(s.loads[0]?.aborted).toBe(true);
   });
 
   it('counts its steps on their own: the cue count stays the cues’ (S-16 / S-18 probes unchanged)', async () => {

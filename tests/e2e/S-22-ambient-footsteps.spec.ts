@@ -7,6 +7,7 @@ import { VIDRO_VOLUMES } from '../../src/audio/levels';
 import { VIDRO_SCALE } from '../../src/audio/tuning';
 import { correlation, estimatePitch, peak, rms } from '../../src/core/audio/analysis';
 import { Biquad } from '../../src/core/audio/dsp';
+import { volumeToGain } from '../../src/core/audio/mix';
 import { isInScale, midiToHz } from '../../src/core/audio/scale';
 import { EDGE_Z, FAR, PATH, WORKSHOP_FLOOR_RADIUS } from '../../src/game/prologue/layout';
 
@@ -78,6 +79,7 @@ interface SoundProbe {
     count: number;
     refused: number;
     skipped: number;
+    missing: number;
     since: number | null;
     voicesStarted: number;
     log: FootstepEntry[];
@@ -296,7 +298,8 @@ function expectHonestSteps(log: FootstepEntry[], track: Track): void {
 function expectOneStepPerFootfall(s: SoundProbe, r: RoomProbe): void {
   const f = s.footsteps;
   expect(f.since).not.toBeNull();
-  expect(f.count + f.refused + f.skipped).toBe(r.footfalls - (f.since as number));
+  expect(f.count + f.refused + f.skipped + f.missing).toBe(r.footfalls - (f.since as number));
+  expect(f.missing).toBe(0);
   expect(f.refused).toBe(0);
   expect(f.skipped).toBeLessThanOrEqual(1);
 }
@@ -446,7 +449,8 @@ for (const backend of backends) {
       expect(over, `chime at ${h.at.toFixed(2)} s`).toBeGreaterThan(1.4);
     }
     const ratio = rmsAt(half.mono, sr, 3, seconds) / rmsAt(full.mono, sr, 3, seconds);
-    const expected = VIDRO_VOLUMES.ambience * 0.25;
+    // the volume slider's square law (src/core/audio/mix.ts): half the slider against the game's starting position
+    const expected = volumeToGain(0.5) / volumeToGain(VIDRO_VOLUMES.ambience);
     expect(ratio).toBeGreaterThan(expected * 0.85);
     expect(ratio).toBeLessThan(expected * 1.15);
     expect(rmsAt(none.mono, sr, 0, seconds)).toBeLessThan(1e-6);
@@ -468,6 +472,39 @@ for (const backend of backends) {
     writeFileSync(join(out, `offline-${backend}.json`), JSON.stringify(report, null, 2));
     // the offline renders made no live context and need no gesture
     expect((await sound(page)).state).toBe('locked');
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-22 footfalls before the first gesture are never played, nor anything else of the room's steps after it [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    mkdirSync(out, { recursive: true });
+    const errors = collectErrors(page);
+    // the scripted play walks the whole way with no gesture: every footfall happens while there is no audio
+    await page.goto(`/?scene=prologue-proto&direct=1&autoplay=1${webgl}`);
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 90_000);
+    expect(done.footfalls, 'the script walked').toBeGreaterThan(10);
+    let s = await sound(page);
+    expect(s.state).toBe('locked');
+    expect(s.footsteps.ready).toBe(false);
+    // the first gesture starts the audio: the steps begin counting from now, none of the earlier ones comes out
+    await page.mouse.click(640, 360);
+    await waitSound(page, "s.state === 'running' && s.footsteps.ready", 15_000);
+    await page.waitForTimeout(800);
+    s = await sound(page);
+    const r = await room(page);
+    writeFileSync(
+      join(out, `before-gesture-${backend}.json`),
+      JSON.stringify({ backend, room: r, sound: s }, null, 2),
+    );
+    expect(s.footsteps.since).toBe(r.footfalls);
+    expect(s.footsteps.count).toBe(0);
+    expect(s.footsteps.voicesStarted).toBe(0);
+    // the engine started nothing at all: no cue, no step (the ambience plays outside the voice allocator)
+    expect(s.engineVoices).toBe(0);
+    expect(s.ambience.playing).toBe(true);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });

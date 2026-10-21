@@ -268,8 +268,8 @@ export interface SoundBanks {
   ambience: AmbienceBanks;
 }
 
-export async function loadSoundBanks(ctx: BaseAudioContext): Promise<SoundBanks> {
-  return { footsteps: await loadFootstepBanks(ctx), ambience: await loadAmbienceBanks(ctx) };
+export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<SoundBanks> {
+  return { footsteps: await loadFootstepBanks(ctx, signal), ambience: await loadAmbienceBanks(ctx, signal) };
 }
 
 /* ---------- S-22: offline renders for the sensor (OfflineAudioContext, through the game's engine) ---------- */
@@ -385,8 +385,9 @@ export interface SoundProbe {
   /** Panning model of each live emitter. */
   readonly panning: string[];
   /**
-   * Voices the engine started / refused: on its own engine, all of them (only this sound plays there); on a shared
-   * one, those started while answering this sound's cues (the engine also counts the UI's).
+   * Voices the engine started / refused while answering this sound's cues, on its own engine as on a shared one
+   * (S-22: the engine also plays the footsteps, counted under `footsteps`, and a shared one the UI's). The engine's
+   * whole count is `engineVoices`.
    */
   readonly voicesStarted: number;
   readonly voicesDropped: number;
@@ -426,10 +427,14 @@ export interface FootstepEntry {
 export interface FootstepsProbe {
   /** The steps' sounds are loaded and the feet's emitter placed. */
   ready: boolean;
-  /** Steps that sounded, the engine refused, and footfalls that fell in a frame that had already stepped. */
+  /**
+   * Footfalls answered: steps that sounded, that the engine refused, footfalls that fell in a frame that had already
+   * stepped, and steps on a floor none of whose sounds could be loaded.
+   */
   count: number;
   refused: number;
   skipped: number;
+  missing: number;
   /** The room's footfall count when the steps began to answer it (earlier footfalls are never played). */
   since: number | null;
   /** Voices the engine started for the steps. */
@@ -483,8 +488,11 @@ export interface SoundOptions {
   makeContext?: () => AudioContext;
   /** Builds the engine on that context. Default: the game's engine (src/audio/engine.ts) in the workshop. */
   makeEngine?: (context: AudioContext) => Promise<AudioEngine>;
-  /** Loads the footsteps' and the ambience's sounds once the engine is there (S-22). Default: loadSoundBanks. */
-  loadBanks?: (ctx: BaseAudioContext) => Promise<SoundBanks>;
+  /**
+   * Loads the footsteps' and the ambience's sounds once the engine is there (S-22); `signal` is aborted when the room
+   * is left. Default: loadSoundBanks.
+   */
+  loadBanks?: (ctx: BaseAudioContext, signal?: AbortSignal) => Promise<SoundBanks>;
 }
 
 const vidroEngine = (context: AudioContext): Promise<AudioEngine> =>
@@ -518,7 +526,9 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   let steps: { player: Footsteps; feet: Emitter } | null = null;
   let ambience: AmbiencePlayer | null = null;
   const stepLog: FootstepEntry[] = [];
-  const stepCounts = { count: 0, refused: 0, skipped: 0, voices: 0 };
+  const stepCounts = { count: 0, refused: 0, skipped: 0, missing: 0, voices: 0 };
+  /** Stops the loading of the sounds when the room is left before they are all made. */
+  const loading = new AbortController();
   let stepsSince: number | null = null;
   let lastFootfalls = 0;
   const feetAt = { x: 0, y: 0, z: 0 };
@@ -590,7 +600,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     live.push(emitters.hand, emitters.orb, emitters.drop);
     follow();
     // S-22: the footsteps' and the ambience's sounds (rendered or decoded a little at a time, off the gesture)
-    void loadBanks(e.ctx).then(
+    void loadBanks(e.ctx, loading.signal).then(
       (banks) => {
         if (disposed || engine !== e) return;
         const p = roomProbe.position;
@@ -600,7 +610,9 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         steps = { player: new Footsteps(banks.footsteps), feet };
         ambience = placed.player;
       },
-      (err) => console.error('S-22: the footsteps and the ambience could not be loaded:', err),
+      (err) => {
+        if (!disposed) console.error('S-22: the footsteps and the ambience could not be loaded:', err);
+      },
     );
   };
 
@@ -608,6 +620,10 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   const step = (e: AudioEngine, s: NonNullable<typeof steps>): void => {
     const { x, y, z } = roomProbe.position;
     const floor = floorAt(x, z);
+    if (!s.player.has(floor.material)) {
+      stepCounts.missing++;
+      return;
+    }
     feetAt.x = x;
     feetAt.y = y;
     feetAt.z = z;
@@ -761,6 +777,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         count: stepCounts.count,
         refused: stepCounts.refused,
         skipped: stepCounts.skipped,
+        missing: stepCounts.missing,
         since: stepsSince,
         voicesStarted: stepCounts.voices,
         log: stepLog,
@@ -791,7 +808,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       subscribed = false;
       stopListening();
       stopWaiting?.();
-      // the ambience fades out and lets go of its nodes before its emitters go
+      loading.abort();
+      // the ambience glides to silence (~20 ms) and lets go of its own nodes once that has run; the emitters fade too
       ambience?.dispose();
       for (const e of live) e.dispose();
       live.length = 0;

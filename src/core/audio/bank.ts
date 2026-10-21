@@ -43,6 +43,8 @@ export interface BankLoadOptions {
   pause?: () => Promise<void>;
   /** Told about each source that could not be had (default: console.error, which the sensors count). */
   onError?: (id: string, error: unknown) => void;
+  /** Stops loading: the sources not yet begun are left null, and nothing more is reported. */
+  signal?: AbortSignal;
 }
 
 const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -65,6 +67,10 @@ export async function loadBank(
   const out: (AudioBuffer | null)[] = [];
   for (const source of sources) {
     await pause();
+    if (opts.signal?.aborted) {
+      out.push(null);
+      continue;
+    }
     try {
       out.push(
         source.kind === 'synth'

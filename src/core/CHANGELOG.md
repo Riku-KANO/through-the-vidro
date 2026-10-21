@@ -11,7 +11,7 @@
   「録音のファイル」（`recording(id, ...urls)`: 同じ音を形式違いで、使いたい順に）のどちらか。`loadBank(ctx, sources, opts)` が
   どちらも `AudioBuffer` にする（合成は文脈の標本化周波数か、音源が求めた周波数で描く。ファイルは先頭から順に読み、最初に
   デコードできたものを使う。どれも駄目なら null にして `onError`〈既定は console.error〉に知らせ、残りは読み続ける。音源ごとに
-  `pause`〈既定は setTimeout 0〉を挟み、主スレッドを長く止めない）。再生は `scheduleBuffer`（一度きり。ScheduledVoice を返すので
+  `pause`〈既定は setTimeout 0〉を挟み、主スレッドを長く止めない。`signal`〈AbortSignal〉で途中で止められる。止めた後の音は null で知らせない）。再生は `scheduleBuffer`（一度きり。ScheduledVoice を返すので
   エンジンの `startVoice` に渡せる。`rate` と `gain`）と `startLoop`（ループ。開始位置の折り返し、フェードイン、`stop(at, fade)`）。
   合成の仮置きを録音に替えるときは、ゲームの表の `synth(...)` を `recording(...)` に替えるだけでよい
 - `audio/dsp.ts`（新規、純粋）: JS で標本を作る部品。`Biquad`（RBJ の low/high/band-pass、1標本ずつ、鳴らしながら係数を変えられる）、

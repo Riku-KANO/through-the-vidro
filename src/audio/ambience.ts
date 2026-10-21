@@ -217,10 +217,10 @@ export interface AmbienceBanks {
   drops: readonly (AudioBuffer | null)[];
 }
 
-export async function loadAmbienceBanks(ctx: BaseAudioContext): Promise<AmbienceBanks> {
-  const [wind = null] = await loadBank(ctx, [WIND_SOURCE]);
-  const chimes = await loadBank(ctx, CHIME_SOURCES);
-  const drops = await loadBank(ctx, DROP_SOURCES);
+export async function loadAmbienceBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<AmbienceBanks> {
+  const [wind = null] = await loadBank(ctx, [WIND_SOURCE], { signal });
+  const chimes = await loadBank(ctx, CHIME_SOURCES, { signal });
+  const drops = await loadBank(ctx, DROP_SOURCES, { signal });
   return { wind, chimes, drops };
 }
 
@@ -318,6 +318,9 @@ interface PlaceState {
 }
 
 const MAX_HITS = 64;
+/** Leaving: the faders' fade (≈ -60 dB in 20 ms), and when their nodes are let go of after it. */
+const DISPOSE_TAU = 0.003;
+const DISPOSE_WAIT_MS = 60;
 
 /**
  * Plays the ambience of one space. `start` fades it in and starts the wind; `update(now)` (every frame, the audio
@@ -327,7 +330,8 @@ const MAX_HITS = 64;
 export class AmbiencePlayer {
   readonly hits: AmbienceHit[] = [];
   private readonly states: PlaceState[];
-  private readonly taps: Record<AmbienceKind, AnalyserNode>;
+  /** The probe's ears, made the first time levels() is asked (the game itself never needs them). */
+  private taps: Record<AmbienceKind, AnalyserNode> | null = null;
   private readonly waitForRunning: boolean;
   private readonly scratch = new Float32Array(2048);
   private started = false;
@@ -342,19 +346,10 @@ export class AmbiencePlayer {
     opts: AmbienceOptions = {},
   ) {
     this.waitForRunning = opts.waitForRunning ?? true;
-    const taps = {} as Record<AmbienceKind, AnalyserNode>;
-    for (const kind of KINDS) {
-      const a = ctx.createAnalyser();
-      a.fftSize = 2048;
-      taps[kind] = a;
-    }
-    this.taps = taps;
     this.states = places.map((place) => {
       const fader = ctx.createGain();
       fader.gain.value = 0;
       fader.connect(place.input);
-      // the probe's ears: an analyser keeps no output, so it plays nothing
-      fader.connect(taps[place.kind]);
       return { place, fader, loop: null, next: Number.POSITIVE_INFINITY, plays: 0, ends: [] };
     });
   }
@@ -430,12 +425,26 @@ export class AmbiencePlayer {
   }
 
   /** Stops (at once) and lets go of its own nodes; the inputs are the emitters' owner's. */
+  /**
+   * Leaving: a quick fade (≈ 20 ms to -60 dB) and the wind stops, then its own nodes are let go of once the fade has
+   * run (at once if the context is not running). The inputs are the emitters' owner's.
+   */
   dispose(): void {
     if (this.disposed) return;
-    if (this.playing) this.stop(this.ctx.currentTime);
     this.disposed = true;
-    for (const s of this.states) s.fader.disconnect();
-    for (const kind of KINDS) this.taps[kind].disconnect();
+    this.stopped = true;
+    const now = this.ctx.currentTime;
+    for (const s of this.states) {
+      s.fader.gain.cancelScheduledValues(now);
+      s.fader.gain.setTargetAtTime(0, now, DISPOSE_TAU);
+      s.loop?.stop(now, DISPOSE_TAU * 3);
+    }
+    const letGo = (): void => {
+      for (const s of this.states) s.fader.disconnect();
+      if (this.taps) for (const kind of KINDS) this.taps[kind].disconnect();
+    };
+    if (this.ctx.state === 'running') setTimeout(letGo, DISPOSE_WAIT_MS);
+    else letGo();
   }
 
   get sources(): AmbienceSourceState[] {
@@ -449,11 +458,30 @@ export class AmbiencePlayer {
     }));
   }
 
-  /** How loud each kind sounds right now (RMS of its last ~43 ms at the source, before distance). */
-  levels(): Record<AmbienceKind, number> {
-    const out = {} as Record<AmbienceKind, number>;
+  /** The analysers the probe listens through: one per kind, fed from every fader of that kind, with no output. */
+  private ears(): Record<AmbienceKind, AnalyserNode> {
+    if (this.taps) return this.taps;
+    const taps = {} as Record<AmbienceKind, AnalyserNode>;
     for (const kind of KINDS) {
-      const a = this.taps[kind];
+      const a = this.ctx.createAnalyser();
+      a.fftSize = 2048;
+      taps[kind] = a;
+    }
+    for (const s of this.states) s.fader.connect(taps[s.place.kind]);
+    this.taps = taps;
+    return taps;
+  }
+
+  /**
+   * How loud each kind sounds right now (RMS of its last ~43 ms at the source, before distance). The first call puts
+   * the ears in; they hear from then on.
+   */
+  levels(): Record<AmbienceKind, number> {
+    const out = { wind: 0, chimes: 0, drops: 0 };
+    if (this.disposed) return out;
+    const taps = this.ears();
+    for (const kind of KINDS) {
+      const a = taps[kind];
       const buf = this.scratch.length === a.fftSize ? this.scratch : new Float32Array(a.fftSize);
       a.getFloatTimeDomainData(buf);
       let sum = 0;
