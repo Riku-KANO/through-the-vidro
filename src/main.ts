@@ -1,3 +1,4 @@
+import type * as THREE from 'three/webgpu';
 import {
   checkBudget,
   type FrameStats,
@@ -6,6 +7,7 @@ import {
   summarizeFrameTimes,
   summarizeGpuTimes,
 } from './core/bench';
+import { missesBackdropResize } from './core/glass/backdrop';
 import { parseParams } from './core/params';
 import { PerfGovernor } from './core/perf/governor';
 import { GpuSpanTimer, type GpuTimeSource } from './core/perf/gpu-span';
@@ -82,9 +84,37 @@ export interface VidroProbe {
   sceneProbe: Record<string, unknown>;
 }
 
+/**
+ * A material that three r186 may draw with a destroyed transmission backdrop once the render size has changed
+ * (src/core/glass/backdrop.ts, S-12). One entry per material.
+ */
+export interface BackdropRisk {
+  /** material.name ('' when unnamed). */
+  material: string;
+  /** three's type and id, e.g. MeshPhysicalNodeMaterial#36. */
+  materialType: string;
+  thickness: number | null;
+  /** How many objects use it, and the first few of them (name, or type#id). */
+  objects: number;
+  objectNames: string[];
+}
+
+/** ?debug=1 only: internals for page scripts (Playwright, DevTools). */
+export interface VidroDebug {
+  renderer: THREE.WebGPURenderer;
+  /** Sets the render scale directly, past the governor. */
+  setScale(scale: number): void;
+  /**
+   * Materials of the current scene that need followBackdropResize() (S-14): those of sandbox.scene and of every
+   * root the scene has drawn or compiled since it was created.
+   */
+  backdropRisks(): BackdropRisk[];
+}
+
 declare global {
   interface Window {
     __vidro: VidroProbe;
+    __vidroDebug?: VidroDebug;
   }
 }
 
@@ -154,6 +184,44 @@ function renderSceneList(root: HTMLElement): void {
   root.appendChild(list);
 }
 
+/**
+ * The materials under these roots that core's missesBackdropResize() flags, one entry per material (?debug=1, S-14).
+ * Sees what is in the scene graph right now: not a material swapped in only during a pass, nor a node added to a
+ * material after it was first drawn (three decided then; process/slices/S-14.md).
+ */
+function backdropRisks(roots: Iterable<THREE.Object3D>): BackdropRisk[] {
+  const risks = new Map<THREE.Material, BackdropRisk>();
+  const seen = new Set<THREE.Object3D>();
+  const check = (material: THREE.Material | null | undefined, object: THREE.Object3D): void => {
+    if (!material?.isMaterial || !missesBackdropResize(material)) return;
+    let risk = risks.get(material);
+    if (!risk) {
+      // id: three numbers every material (Material.js), the typings leave it out
+      const { thickness, id } = material as { thickness?: unknown; id?: number };
+      risk = {
+        material: material.name,
+        materialType: `${material.type}#${id}`,
+        thickness: typeof thickness === 'number' ? thickness : null,
+        objects: 0,
+        objectNames: [],
+      };
+      risks.set(material, risk);
+    }
+    risk.objects++;
+    if (risk.objectNames.length < 3) risk.objectNames.push(object.name || `${object.type}#${object.id}`);
+  };
+  for (const root of roots) {
+    root.traverse((object) => {
+      if (seen.has(object)) return; // roots can overlap
+      seen.add(object);
+      const { material } = object as { material?: THREE.Material | THREE.Material[] };
+      for (const m of Array.isArray(material) ? material : [material]) check(m, object);
+      check((object as Partial<THREE.Scene>).overrideMaterial, object);
+    });
+  }
+  return [...risks.values()];
+}
+
 async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app missing');
@@ -185,6 +253,8 @@ async function main(): Promise<void> {
   let overlay: HTMLDivElement | null = null;
   let sandbox: SandboxScene | null = null;
   let sceneGeneration = 0;
+  /** ?debug=1: every root drawn or compiled since the current scene instance was created (backdropRisks). */
+  const drawnRoots = new Set<THREE.Object3D>();
 
   const stats = new StatsOverlay(document.body, backend);
   stats.visible = params.stats;
@@ -227,6 +297,7 @@ async function main(): Promise<void> {
     if (sandbox) sandbox.dispose();
     overlay?.remove();
     sandbox = null;
+    drawnRoots.clear();
     const nextOverlay = document.createElement('div');
     nextOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5';
     document.body.appendChild(nextOverlay);
@@ -262,12 +333,32 @@ async function main(): Promise<void> {
     return Promise.race([createScene(level), timeout]).finally(() => window.clearTimeout(timer));
   };
 
+  // ?debug=1 exposes internals to page scripts (Playwright, DevTools): one-off investigations and tests that
+  // must drive the render scale directly, independent of the governor. Set up before the first scene is created,
+  // so that what it compiles while it loads is recorded too.
+  if (params.raw.get('debug') === '1') {
+    // A scene may draw more than sandbox.scene (the dive world into the home orb's image, a world built later):
+    // note every root handed to render() and compileAsync(). Passes and shadow maps also call render().
+    const render = renderer.render.bind(renderer);
+    renderer.render = (scene, camera) => {
+      drawnRoots.add(scene);
+      return render(scene, camera);
+    };
+    const compileAsync = renderer.compileAsync.bind(renderer);
+    renderer.compileAsync = (scene, camera, targetScene, onProgress) => {
+      drawnRoots.add(scene);
+      if (targetScene) drawnRoots.add(targetScene);
+      return compileAsync(scene, camera, targetScene, onProgress);
+    };
+    window.__vidroDebug = {
+      renderer,
+      setScale: applyScale,
+      backdropRisks: () => backdropRisks(sandbox ? [sandbox.scene, ...drawnRoots] : drawnRoots),
+    };
+  }
+
   await createScene(params.quality);
   window.addEventListener('resize', resize);
-  // ?debug=1 exposes internals to page scripts (Playwright, DevTools): one-off investigations and tests that
-  // must drive the render scale directly, independent of the governor.
-  if (params.raw.get('debug') === '1')
-    Object.assign(window, { __vidroDebug: { renderer, setScale: applyScale } });
 
   const governor = new PerfGovernor({
     level: params.quality,

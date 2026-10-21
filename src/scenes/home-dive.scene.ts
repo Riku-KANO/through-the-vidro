@@ -15,6 +15,7 @@ import {
   vec3,
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import { followBackdropResize } from '../core/glass';
 import type { SceneFactory } from '../core/scene';
 import type { DiveWorld } from '../game/dive-world';
 import { createHomeDive } from '../ui/home/dive-host';
@@ -263,17 +264,21 @@ function createGameWorld(): GameWorld {
   pipe.position.set(-0.15, 0.97, 0.28);
   bench.add(pipe);
   // a few blown vessels on the bench: near transmission glass, kept to a handful (性能の目標と予算)
+  // Hand-made transmissive glass has no node, so three would skip refreshing it and keep a destroyed backdrop
+  // after a render scale change (S-12). followBackdropResize gives it one without changing the look (S-14).
   const vesselMat = keep(
-    new THREE.MeshPhysicalNodeMaterial({
-      color: 0xffffff,
-      roughness: 0,
-      metalness: 0,
-      transmission: 1,
-      ior: 1.5,
-      thickness: 0.08,
-      attenuationColor: new THREE.Color(0xdaf2e6),
-      attenuationDistance: 0.5,
-    }),
+    followBackdropResize(
+      new THREE.MeshPhysicalNodeMaterial({
+        color: 0xffffff,
+        roughness: 0,
+        metalness: 0,
+        transmission: 1,
+        ior: 1.5,
+        thickness: 0.08,
+        attenuationColor: new THREE.Color(0xdaf2e6),
+        attenuationDistance: 0.5,
+      }),
+    ),
   );
   const profiles: [number, number][][] = [
     [

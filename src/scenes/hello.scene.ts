@@ -1,5 +1,6 @@
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three/webgpu';
+import { followBackdropResize } from '../core/glass';
 import type { SceneFactory } from '../core/scene';
 
 export const title = 'S-00 pipeline check: one transmissive glass orb over a checker floor';
@@ -40,16 +41,20 @@ const create: SceneFactory = async ({ renderer }) => {
   floor.rotation.x = -Math.PI / 2;
   scene.add(floor);
 
-  const glass = new THREE.MeshPhysicalNodeMaterial({
-    color: 0xffffff,
-    metalness: 0,
-    roughness: 0,
-    transmission: 1,
-    ior: 1.5,
-    thickness: 0.6,
-    attenuationColor: new THREE.Color(0xe8fff4),
-    attenuationDistance: 2.5,
-  });
+  // Hand-made transmissive glass has no node, so three would skip refreshing it and keep a destroyed backdrop
+  // after a render scale change (S-12). followBackdropResize gives it one without changing the look (S-14).
+  const glass = followBackdropResize(
+    new THREE.MeshPhysicalNodeMaterial({
+      color: 0xffffff,
+      metalness: 0,
+      roughness: 0,
+      transmission: 1,
+      ior: 1.5,
+      thickness: 0.6,
+      attenuationColor: new THREE.Color(0xe8fff4),
+      attenuationDistance: 2.5,
+    }),
+  );
   const orb = new THREE.Mesh(new THREE.SphereGeometry(0.6, 96, 64), glass);
   orb.position.set(0, 0.6, 0);
   scene.add(orb);
