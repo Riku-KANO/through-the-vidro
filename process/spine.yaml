@@ -160,7 +160,9 @@ slices:
 
   - id: S-06
     title: M0統合 — 序章の試作部屋（歩く→覗く→置く→渡る→雫）
-    status: todo
+    status: integrated
+    branch: slice/S-06-prologue
+    accepted: 発案者がレビュー2巡の上限で受け入れ（2026-10-21）
     depends: [S-01, S-02, S-03, S-04, S-05]
     requirements:
       - パズル設計 > 難易度の曲線（序章）
@@ -169,6 +171,8 @@ slices:
       - 進行構造とエリア設計（序章「工房」）
     paths:
       - src/scenes/prologue-proto.scene.ts
+      - src/scenes/home-dive.scene.ts（createHomeDive への載せ替え）
+      - src/ui/home/dive-host.ts
       - src/game/**
       - tests/e2e/S-06-*.spec.ts
       - process/slices/S-06.md
