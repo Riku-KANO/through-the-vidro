@@ -457,11 +457,16 @@ slices:
 
   - id: S-20
     title: 速い画面でも three のタイムスタンプの読み出しが溢れないようにする
-    status: todo
+    status: integrated
+    branch: slice/S-20-timestamp-drain
+    accepted: レビュー2巡目で指摘なし（2026-10-21）
     depends: [S-11, S-17]
     paths:
       - src/main.ts（タイムスタンプの読み出しの間隔だけ）
       - scripts/bench-probe.mjs（フレームの上限を指定できるようにするときだけ）
+      - src/dev/timestamp-drain.ts（読み出しの判断の純粋なロジック）
+      - src/dev/timestamp-drain.test.ts
+      - tests/e2e/S-20-timestamp-drain.spec.ts
       - process/slices/S-20.md
     acceptance:
       - 仕上げのある場面（試作部屋、負荷シーン）を WebGL2 で垂直同期なし（約600fps）で回すと出る `beginQuery：a query is already active` を、まず再現する手順として記録する

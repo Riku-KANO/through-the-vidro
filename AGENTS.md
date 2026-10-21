@@ -25,7 +25,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 速い検査（型・lint・単体・ビルド） | `scripts/check.sh` |
 | 全検査（＋ブラウザセンサー） | `scripts/check.sh --full`、対象を絞るなら `SCENES=a,b scripts/check.sh --full` |
 | 計測結果の表 | `node scripts/bench-report.mjs` |
-| URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`） |
+| URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`、`FPS=<n>` はその速さの画面のようにフレームを出す） |
 | 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
 | 整形 | `pnpm format` |
 
@@ -111,9 +111,13 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   止めるのは手応えなしが2回続いたとき（下限に着いたときも、段の列の全体で1回判定する）。止めた後も、GPU 時間が止めた水準の1.3倍・揺れ幅・縮める閾値の
   高い方を2秒続けて上回ったら再開する（S-11、S-13）。上限は「無駄だった再開」3回と、再開の合計10回（1セッション）。揺れへの強さは
   `node scripts/sim/dynres-noise.mjs`（種固定、直す前と比べる表）で確かめる。実機の揺れ（σ・τ）は S-07 で測る（σ0.4 以上なら S-13 の判断待ち5を先に直す）。
-- **three のタイムスタンプは描画の外で読む（S-11）。** パスごとのタイムスタンプが有効な間は、使う人がいなくても main.ts が8フレームごとに描画の外で
-  読み出す。読まないとプールが埋まって描画の途中でリセットされ、WebGL2 で `beginQuery: a query is already active` が出る。シーン側で読み出さない
-  （読み出し中に別の読み出しが来ると three は前回の値を返し、古い値が governor に混ざる）。
+- **three のタイムスタンプは描画の外で読む（S-11、S-20）。** パスごとのタイムスタンプが有効な間は、使う人がいなくても main.ts が描画の外で
+  読み出す（8フレームごと。WebGL2 ではプールの4分の1が埋まったら早めに）。読まないとプール（r186 の WebGL2 は描画 1024 回分）が埋まって描画の
+  途中でリセットされ、WebGL2 で `beginQuery: a query is already active` が出る。WebGL2 では読み出しを始めた時点から終わるまでパスごとの
+  タイムスタンプを止める（垂直同期なしでは読み出しが 100 ms〜1.7 秒かかり、その間に溢れた）。`backend.trackTimestamp` の切り替えと
+  `resolveTimestampsAsync` の呼び出しは main.ts の `PassTimestampDrain`（`src/dev/timestamp-drain.ts`）だけが行う。シーン側で読み出したり
+  切り替えたりしない（読み出し中に別の読み出しが来ると three は前回の値を返し、古い値が governor に混ざる）。three を上げたら
+  `tests/e2e/S-20-timestamp-drain.spec.ts`（垂直同期なし）で、プールの大きさと読み出しの振る舞いが変わっていないかを確かめる。
 - **透過の背景画像の解像度は品質で変えられない（three r186、S-10）。** 背景は描画先と同じ大きさで写されるので、
   品質プリセットの `transmissionScale` は効かない。効くのは描画解像度（renderScale）と動的解像度だけ。
 - **Web Audio の音の経路は、鳴り終わるまで JS から参照する（S-09）。** 参照の切れた ConvolverNode とその下流の GainNode は、
