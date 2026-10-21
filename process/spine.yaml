@@ -390,7 +390,9 @@ slices:
 
   - id: S-17
     title: 試作部屋の画面の仕上げ — 覗く合成の後ろに抑えたブルームとプリセットのアンチエイリアス
-    status: todo
+    status: integrated
+    branch: slice/S-17-prologue-finishing
+    accepted: 発案者が上限（実装3回・見た目3巡・レビュー2巡）で受け入れ。2巡目の P2 は3回目の実装で直したが再レビューなし。重さの条件は親の QUIET=1 の計測で確定する（2026-10-21）
     depends: [S-06]
     parallel: true
     requirements:
@@ -402,6 +404,7 @@ slices:
       - src/game/orb/orb-composite.ts（出力の変換を合成から外すときだけ）
       - src/game/prologue/room.ts（品質の値を PeekPipeline へ渡すだけ）
       - src/scenes/layers-lab.scene.ts（PeekPipeline の引数が変わるときだけ）
+      - （room.ts から開発用のスイッチ ?finish= も渡す。1行の逸脱を統合時に追認）
       - tests/e2e/S-17-*.spec.ts
       - process/slices/S-17.md
     acceptance:
@@ -427,4 +430,35 @@ slices:
       - ホーム経由で試作部屋に入ったとき、AudioContext が1つだけ作られる（今は S-04 の AudioGate と S-16 の音で2つ）。作るのは最初の操作の中（AGENTS.md の決まり）
       - ホームの雫の仮の音と試作部屋の音が、同じエンジンの4系統の音量に従う。直接モード（?direct=1）では S-16 のとおり自分で作る
       - e2e で、ホーム経由と直接の両方について、コンテキストの数・状態と、S-16 の音の列が変わらないことを確かめる。両経路でエラーなし
+
+  - id: S-19
+    title: 光の雫を遠くからも光らせる — 雫の芯を明るくして、行き止まりからもブルームで滲ませる
+    status: todo
+    depends: [S-17]
+    parallel: true
+    requirements:
+      - アートディレクション > 画面の仕上げ（ブルームは控えめに、強い光源と光の雫だけが滲む）
+      - パズル設計 > 難易度の曲線（序章）
+    paths:
+      - src/game/prologue/room-art.ts（雫の芯の明るさだけ）
+      - tests/e2e/S-19-*.spec.ts
+      - process/slices/S-19.md
+    acceptance:
+      - 行き止まりから覗いたとき、5m 先の雫のまわりがブルームで滲む。明るさの増分を S-17 の e2e と同じ測り方で取り、近くで狙ったとき（+9.2/255）の半分以上にする（今は +1.2/255）
+      - ほかの物は滲み方が変わらない（明るくなる画素の大半が明るい源のそば、という S-17 の確認を保つ）。近くで見た雫が白く飛ばない（スクリーンショットで確かめる）
+      - 両経路でエラーなし、描画呼び出しと三角形は変わらない
+    note: 発案者の判断（2026-10-21）。しきい値は下げない（空まで滲む）、発光物だけのブルーム（MRT）は重いので採らない
+
+  - id: S-20
+    title: 速い画面でも three のタイムスタンプの読み出しが溢れないようにする
+    status: todo
+    depends: [S-11, S-17]
+    paths:
+      - src/main.ts（タイムスタンプの読み出しの間隔だけ）
+      - scripts/bench-probe.mjs（フレームの上限を指定できるようにするときだけ）
+      - process/slices/S-20.md
+    acceptance:
+      - 仕上げのある場面（試作部屋、負荷シーン）を WebGL2 で垂直同期なし（約600fps）で回すと出る `beginQuery：a query is already active` を、まず再現する手順として記録する
+      - 読み出しの間隔をフレーム数ではなく、プールに溜まった量（またはパスの数）に合わせるなどして、垂直同期なしでも warning が出ないようにする。60fps のセンサー（scenes.spec.ts）と動的解像度の e2e は緑のまま
+      - 144・240fps 相当で溢れないことを、フレームの上限を固定した計測か計算で確かめ、記録する
 

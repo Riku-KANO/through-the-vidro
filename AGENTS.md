@@ -33,7 +33,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
 `gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `gpuSpan=0`（自前の span を測らない） `gpuPasses=0`（three のパスごとのタイムスタンプを使わない）
 `dynresResponse=0`（手応えの検査を切る。配線だけを確かめる試験用） `debug=1`（`window.__vidroDebug` に renderer・setScale・backdropRisks を出し、描いた根を記録するため `renderer.render` と `compileAsync` を
-インスタンスの上で包む。`status` が `running` になってから使う。さらに包むコードは元の関数を `apply(renderer, args)` で呼ぶ）。
+インスタンスの上で包む。`status` が `running` になってから使う。さらに包むコードは元の関数を `apply(renderer, args)` で呼ぶ）。 `finish=0|aa`（PeekPipeline を使うシーンの仕上げを分けて比べる。
+`0` = AgX だけ、`aa` = ブルームなし。S-17）。
 `quality=auto` と `bench` を一緒に使うと計測の途中でプリセットが変わるので、計測は固定のプリセットで行う。
 シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
@@ -120,6 +121,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **ゲームの AudioContext は最初のユーザー操作の中で作る（S-16）。** 操作の前に作ると、実機の Chrome は自動再生の警告を出しうる。ヘッドレスの
   Chromium は `--autoplay-policy` を渡しても操作の前から running で始まり警告も出ないので、センサーでは見えない。作りで防ぎ、e2e は操作の前に
   コンテキストがないことで確かめる。操作の前に作る試験用のシーン（audio-lab）は、作った直後に止めて最初の操作で再開する。
+- **何が光るかは、ブルームのしきい値ではなく美術で決める（S-17）。** しきい値は線形の輝度 0.9（`PeekPipeline`、負荷シーン）。光として滲ませたい物
+  （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
+- **ブルームの明るい所を取り出すパスを画面の半分より小さくするときは、1画素が代表するブロック全体を読む（S-17）。** 4点のバイリニアなど。
+  1点だけだと、小さい光が視点の動きでブルームに出入りしてちらつく。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
