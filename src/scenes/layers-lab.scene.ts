@@ -46,7 +46,7 @@ import {
   peekMoveSpeedMultiplier,
   stepPeek,
 } from '../game/orb/peek';
-import { PeekPipeline } from '../game/orb/peek-pipeline';
+import { finishModeFrom, PeekPipeline } from '../game/orb/peek-pipeline';
 import { canPeek, canPickUp, canPlace } from '../game/orb/rules';
 import { type FieldSphere, LayerField } from '../layers/field';
 import { type FootingSegment, sphereOverlapsBox, splitFooting, type Vec3 } from '../layers/footing';
@@ -537,7 +537,10 @@ const create: SceneFactory = async ({ renderer, canvas, quality, params }) => {
     camera,
     field,
     peekScale: quality.peekScale,
+    antialias: quality.antialias,
     environment: env,
+    // ?finish=0|aa takes the finishing apart (S-17's sensor)
+    finish: finishModeFrom(params),
   });
   // 開発用ツール > 層の表示切り替え (minimal): ?hideBack=1 draws the peek image without the back layer.
   if (params.get('hideBack') === '1') pipeline.peekMask = 1;

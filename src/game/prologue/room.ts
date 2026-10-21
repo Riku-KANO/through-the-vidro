@@ -9,7 +9,7 @@ import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { peekMoveSpeedMultiplier } from '../orb/peek';
-import { PeekPipeline } from '../orb/peek-pipeline';
+import { finishModeFrom, PeekPipeline } from '../orb/peek-pipeline';
 import { EYE_HEIGHT, FOV_DEFAULT } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
@@ -289,7 +289,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     camera,
     field,
     peekScale: quality.peekScale,
+    antialias: quality.antialias,
     environment: art.environment,
+    finish: finishModeFrom(ctx.params),
   });
 
   const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };

@@ -1,8 +1,44 @@
-import { pass } from 'three/tsl';
+import { bloom } from 'three/addons/tsl/display/BloomNode.js';
+import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
+import { smaa } from 'three/addons/tsl/display/SMAANode.js';
+import { pass, renderOutput, rtt, uniform, uv, vec2, vec4 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
 import { OrbComposite, type OrbFrame } from './orb-composite';
+
+/**
+ * How much of the finishing runs (1フレームの描画の流れ 6). `full` is the game; the others take the chain apart so
+ * a sensor can compare the same frame with and without a step: `aa` leaves out the bloom, `none` is AgX alone
+ * (the frame before S-17).
+ */
+export type FinishMode = 'full' | 'aa' | 'none';
+
+/** Dev switch `?finish=0|aa` (default: everything). */
+export function finishModeFrom(params: URLSearchParams): FinishMode {
+  const v = params.get('finish');
+  return v === '0' ? 'none' : v === 'aa' ? 'aa' : 'full';
+}
+
+/**
+ * 画面の仕上げ: ブルームは控えめにし、強い光源と光の雫だけが滲む. The values of the stress scene (S-05), whose
+ * finishing this pipeline repeats: a quarter strength, a short radius, and a threshold on the linear luminance above
+ * the lit surfaces and the dawn sky (≤ ≈ 0.7) and below the emissive glass (milky lamps, the vidro's rim light).
+ * Only what is drawn brighter than the threshold bleeds, so the room's art decides which things are lights: the
+ * prologue's light drop bleeds up close as the target, but from the dead end it is drawn about as bright as the dawn
+ * sky and hardly does (S-17 判断待ち1).
+ */
+const BLOOM_STRENGTH = 0.25;
+const BLOOM_RADIUS = 0.3;
+const BLOOM_THRESHOLD = 0.9;
+/**
+ * Size of the bloom's bright pass and mips relative to the render size (three's default, and the stress scene, use
+ * 0.5). At 0.5 the prologue's heaviest view at mid quality outweighed the stress scene at 1080p (1.15 vs 1.10 ms per
+ * frame, vsync off); at 0.25 it stays at or under it (process/slices/S-17.md 計測値). The halos come out a little wider
+ * and as smooth.
+ */
+const BLOOM_RESOLUTION = 0.25;
 
 export interface PeekPipelineOptions {
   renderer: THREE.WebGPURenderer;
@@ -11,7 +47,11 @@ export interface PeekPipelineOptions {
   field: LayerField;
   /** quality.peekScale: resolution of the back image relative to the render size. */
   peekScale: number;
+  /** quality.antialias: FXAA (low) or SMAA (mid, high) at the end of the finishing. */
+  antialias: QualityPreset['antialias'];
   environment: THREE.Texture | null;
+  /** Default `full`; see FinishMode. */
+  finish?: FinishMode;
 }
 
 export type PeekFrame = Omit<OrbFrame, 'camera' | 'width' | 'height'>;
@@ -20,7 +60,12 @@ export type PeekFrame = Omit<OrbFrame, 'camera' | 'width' | 'height'>;
  * The frame pipeline for a scene with layers and the hand orb (技術設計 > 1フレームの描画の流れ):
  *   1–3  the normal frame (surface + shared + materialized back) into the scene pass
  *   4    only while peeking: the back layer (back + shared, uncut) into a separate image at peekScale
- *   5–6  a full-screen composite draws the hand orb, refracting both images, then AgX output
+ *   5    a full-screen composite draws the hand orb, refracting both images (linear HDR; its chromatic aberration
+ *        through the orb is part of the composite)
+ *   6    finishing, in the stress scene's order: restrained bloom on the linear composite → AgX (renderOutput) →
+ *        the preset's FXAA or SMAA on the display image
+ * Every target of the chain is a full-screen quad (the bloom's smaller mips included); no transmissive material is
+ * drawn outside the scene pass, which has the canvas size (AGENTS.md).
  */
 export class PeekPipeline {
   readonly backTarget: THREE.RenderTarget;
@@ -30,6 +75,10 @@ export class PeekPipeline {
   private readonly pipeline: THREE.RenderPipeline;
   private readonly scenePass: ReturnType<typeof pass>;
   private readonly composite: OrbComposite;
+  /** Finishing nodes that own render targets. */
+  private readonly finishing: { dispose(): void }[] = [];
+  /** One pixel of the drawing buffer in UV units, for the bloom's prefilter. */
+  private readonly uTexel = uniform(new THREE.Vector2(1, 1));
   /** Layers the peek image draws; a dev switch can narrow it (e.g. hide the back layer). */
   peekMask = viewMask('peek');
 
@@ -51,7 +100,9 @@ export class PeekPipeline {
       back: this.backTarget.texture,
       environment: opts.environment,
     });
-    this.pipeline = new THREE.RenderPipeline(opts.renderer, this.composite.node);
+    this.pipeline = new THREE.RenderPipeline(opts.renderer, this.finish(opts.finish ?? 'full'));
+    // renderOutput applies AgX and the output colour space before the anti-aliasing; not again at the end
+    this.pipeline.outputColorTransform = false;
     this.orbFrame = {
       center: [0, 0, 0],
       radius: 0,
@@ -63,6 +114,36 @@ export class PeekPipeline {
       sunDirection: new THREE.Vector3(0, 1, 0),
     };
     this.resize();
+  }
+
+  /**
+   * 6. 仕上げ behind the composite. The composite is stored once at the drawing-buffer size; the bloom reads that
+   * image, so bright things glow where they are drawn, through the orb too (at this threshold the image inside the
+   * orb keeps its contrast, tests/e2e/S-17-finishing.spec.ts). The bloom's bright pass runs at a quarter of the size,
+   * so one of its pixels stands for a 4×4 block: it reads four bilinear taps at ±1 pixel, which cover the whole block.
+   * Reading the block once (its middle 2×2) let small highlights drop in and out of the bloom as the view turned
+   * (S-17 review: about 2.7× the frame-to-frame jitter of half size; with the four taps it is back at that level).
+   */
+  private finish(mode: FinishMode): THREE.Node {
+    const linear = this.composite.node;
+    let hdr = linear;
+    if (mode === 'full') {
+      const stored = rtt(linear);
+      const at = (x: number, y: number) =>
+        stored.sample(uv().add(this.uTexel.mul(vec2(x, y)))) as unknown as THREE.Node<'vec4'>;
+      const block = at(-1, -1).add(at(1, -1)).add(at(-1, 1)).add(at(1, 1)).mul(0.25);
+      const glow = bloom(block, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+      glow.setResolutionScale(BLOOM_RESOLUTION);
+      this.finishing.push(stored, glow);
+      hdr = vec4(stored.rgb.add(glow.rgb), 1);
+    }
+    const graded = renderOutput(hdr);
+    if (mode === 'none') return graded;
+    // the display image once at the drawing-buffer size, then the preset's anti-aliasing reads it
+    const display = rtt(graded);
+    const aa = this.opts.antialias === 'smaa' ? smaa(display) : fxaa(display);
+    this.finishing.push(display, aa);
+    return aa;
   }
 
   /** Render size in pixels (drawing buffer). */
@@ -121,6 +202,7 @@ export class PeekPipeline {
     f.sunDirection = frame.sunDirection;
     f.width = this.size.x;
     f.height = this.size.y;
+    this.uTexel.value.set(1 / Math.max(1, this.size.x), 1 / Math.max(1, this.size.y));
     this.composite.update(f);
     this.pipeline.render();
   }
@@ -128,6 +210,7 @@ export class PeekPipeline {
   dispose(): void {
     this.backTarget.dispose();
     this.scenePass.dispose();
+    for (const n of this.finishing) n.dispose();
     this.pipeline.dispose();
   }
 }
