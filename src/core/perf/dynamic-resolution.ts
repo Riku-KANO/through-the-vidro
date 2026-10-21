@@ -70,10 +70,13 @@ const RESPONSE_GAP_SEC = 2.5;
 /** resumeWatch: a new load is this much above the level the controller stopped at (発案者の判断, S-11). */
 export const RESUME_RISE = 1.3;
 /**
- * resumeWatch: ...and this much above the swing seen around the stop (S-13, the example in the acceptance criteria):
- * the threshold clears the 90th percentile of the samples there (see swingOf) by this margin.
+ * resumeWatch: ...and above the swing seen around the stop (S-13): the threshold is at least the 90th percentile of
+ * the samples there (see swingOf) times this. The acceptance criteria gave 1.1 as the example; review round 1 of S-13
+ * took 1.0: on top of a rise of 30%, a further 10% held back loads only 1.35–1.6× heavier at the real target, while
+ * the wrong resumes it prevented were few (scripts/sim, 1.1 → 1.0: 1.45× with spikes resumed 156 → 165 of 188, 1.6×
+ * with spikes 172 → 181; wrong resumes at target 6 ms, σ 0.2, 15 → 16 of 144).
  */
-export const RESUME_SWING_MARGIN = 1.1;
+export const RESUME_SWING_MARGIN = 1.0;
 /** The 90th and 75th percentiles of the standard normal distribution (swingOf). */
 const Z90 = 1.2816;
 const Z75 = 0.6745;
@@ -361,10 +364,13 @@ export class ResumeWatch {
  * The swing of a window: its 90th percentile over its median, read off the upper quartile as a log-normal swing would
  * have it ((p75 / median) ^ (z90 / z75)). On hardware single samples spike to 3–10× (S-13 closed loop), and two such
  * samples among 15 are the 90th percentile itself; they move the quartile only once a quarter of the window spikes.
- * The watch judges on the median of 5 samples, which ignores single spikes too.
+ * The watch judges on the median of 5 samples, which ignores single spikes too. Never more than the 90th percentile
+ * the window actually has: a swing between two levels (a GPU switching clocks) has a high quartile and nothing above
+ * it, which the log-normal reading would stretch.
  */
 function swingOf(w: RollingWindow): number {
-  return (w.quantile(0.75) / w.median()) ** (Z90 / Z75);
+  const median = w.median();
+  return Math.min((w.quantile(0.75) / median) ** (Z90 / Z75), w.quantile(0.9) / median);
 }
 
 /** The middle one of three values. */

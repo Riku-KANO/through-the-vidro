@@ -6,6 +6,7 @@
 //   node scripts/sim/dynres-noise.mjs                 before = 98185af (S-13's base), after = the working tree
 //   node scripts/sim/dynres-noise.mjs --before main   compare with another commit; --before none for the tree only
 //   node scripts/sim/dynres-noise.mjs --runs 50 --only prop,flat   fewer runs (default 200, sessions 100), some groups
+//   (groups: prop, flat, noresume, resume, resume-real, regime, cap, spiky, session)
 // Seeds are fixed (run k uses seed k × a per-scenario prime), so a run prints the same numbers every time.
 import { loadTs } from './lib/load-ts.mjs';
 
@@ -38,16 +39,27 @@ const flat = (ms) => () => ms;
 /**
  * One session: phases run back to back on one governor, each with its own noise (seeded from the run).
  * A phase with `untilStop` runs in 0.25 s chunks until dynamic resolution stops (or `seconds` pass).
+ * A phase with `regime` switches between two levels of the cost (×1 and ×factor), staying in each for an exponential
+ * time with the given means: a GPU that changes clocks, which the log-normal swing does not produce.
  */
 function session(mod, o, phases, seed) {
   const g = new mod.PerfGovernor({ auto: false, autoWindowSec: 3, dynres: true, gpuTiming: true, ...o });
   const target = o.dynresTargetMs ?? TARGET;
+  // The floor of dynamic resolution for this preset, as governor.ts computes it.
+  const floor = Math.max(mod.DYNRES_MIN_SCALE, Math.round(g.scale * mod.DYNRES_MIN_FRACTION * 100) / 100);
   const marks = [];
   let clock = 0;
   for (const [k, ph] of phases.entries()) {
     const noise = logNormalAr1({ sigma: ph.sigma, tauSec: ph.tau, seed: seed * 31 + k });
     const uniform = ph.uniform ? mulberry32(seed * 131 + k) : null;
     const spike = ph.spikes ? spikeTrain({ ...ph.spikes, seed: seed * 137 + k }) : () => 1;
+    const regimeDraw = ph.regime ? mulberry32(seed * 139 + k) : null;
+    let high = false;
+    const regime = (dt) => {
+      if (!regimeDraw) return 1;
+      if (regimeDraw() < 1 - Math.exp(-dt / 1000 / (high ? ph.regime.hiSec : ph.regime.loSec))) high = !high;
+      return high ? ph.regime.factor : 1;
+    };
     // Per phase: first stop / resume (s into the phase), lowest scale, time stopped (and stopped at an overload).
     const m = {
       stopsBefore: g.dynresStops,
@@ -62,7 +74,7 @@ function session(mod, o, phases, seed) {
     };
     const cost = (s, _t, dt) => {
       const base = uniform ? ph.uniform[0] + (ph.uniform[1] - ph.uniform[0]) * uniform() : ph.cost(s);
-      return base * noise.next(dt) * spike();
+      return base * noise.next(dt) * spike() * regime(dt);
     };
     const onFrame = (_e, c, frameMs) => {
       clock += frameMs;
@@ -85,6 +97,7 @@ function session(mod, o, phases, seed) {
     m.stops = g.dynresStops - m.stopsBefore;
     m.resumes = g.dynresResumes - m.resumesBefore;
     m.endScale = g.scale;
+    m.atFloor = g.scale <= floor + 1e-9;
     m.stoppedAtEnd = g.dynresStopReason !== null;
     m.offForSession = /resumed .*for the session/.test(g.dynresStopReason ?? '');
     m.implausible = !g.gpuReliable;
@@ -153,8 +166,7 @@ const scenarios = [
       ],
       [
         'at the floor at 30 s, not stopped',
-        (rs) =>
-          frac(rs.filter((r) => !r.marks[0].stoppedAtEnd && r.marks[0].endScale <= 0.61).length, rs.length),
+        (rs) => frac(rs.filter((r) => !r.marks[0].stoppedAtEnd && r.marks[0].atFloor).length, rs.length),
       ],
     ],
   })),
@@ -174,8 +186,7 @@ const scenarios = [
       ],
       [
         'at the floor at 15 s, not stopped',
-        (rs) =>
-          frac(rs.filter((r) => !r.marks[0].stoppedAtEnd && r.marks[0].endScale <= 0.61).length, rs.length),
+        (rs) => frac(rs.filter((r) => !r.marks[0].stoppedAtEnd && r.marks[0].atFloor).length, rs.length),
       ],
     ],
   },
@@ -292,6 +303,113 @@ const scenarios = [
       ],
     ],
   })),
+  // S-13 review round 1, P2-1: at the real target, a light load that does not follow stops it, then a load only
+  // 1.35–1.6× heavier that does follow the pixels arrives 3 s later. Does it resume?
+  ...[1.35, 1.45, 1.6].flatMap((factor) =>
+    [false, true].map((withSpikes) => {
+      const ph = (cost, seconds, extra = {}) => ({
+        seconds,
+        cost,
+        sigma: 0.15,
+        tau: 1,
+        ...(withSpikes ? { spikes: { p: 0.1, lo: 3, hi: 6 } } : {}),
+        ...extra,
+      });
+      const stoppedFirst = (rs) => rs.filter((r) => r.marks[0].stops > 0);
+      return {
+        id: `resume-real-${factor}${withSpikes ? '-spikes' : ''}`,
+        group: 'resume-real',
+        title: `real target, mid: 14.5 ms flat σ 0.15 τ 1 s${withSpikes ? ' + spikes' : ''} until it stops, 3 s later ${factor} × 14.5 ms × (s/0.85)²`,
+        o: real,
+        phases: [
+          ph(flat(14.5), 30, { untilStop: true }),
+          ph(flat(14.5), 3),
+          ph(pixels(14.5 * factor, 0.85), 30),
+        ],
+        prime: 999983,
+        metrics: [
+          ['stopped in the first phase', (rs) => frac(stoppedFirst(rs).length, rs.length)],
+          [
+            'resumed within 30 s (of those)',
+            (rs) =>
+              frac(stoppedFirst(rs).filter((r) => r.marks[2].resumes > 0).length, stoppedFirst(rs).length),
+          ],
+          [
+            'median time to resume',
+            (rs) =>
+              sec(
+                median(
+                  stoppedFirst(rs)
+                    .map((r) => r.marks[2].firstResume)
+                    .filter((t) => t !== null),
+                ),
+              ),
+          ],
+        ],
+      };
+    }),
+  ),
+  // S-13 review round 1, P3-7: a GPU that switches between two clocks (×1.78, 1 s high / 2 s low on average) under a
+  // small swing (σ 0.1 τ 1 s): wrong stops, wrong resumes, and a new load after the stop.
+  ...(() => {
+    const regime = { factor: 1.78, hiSec: 1, loSec: 2 };
+    const ph = (cost, seconds, extra = {}) => ({ seconds, cost, sigma: 0.1, tau: 1, regime, ...extra });
+    const stoppedFirst = (rs) => rs.filter((r) => r.marks[0].stops > 0);
+    return [
+      {
+        id: 'regime-prop-real',
+        title: 'two clocks: real target, mid, 25 ms × (s/0.85)², 30 s',
+        o: real,
+        phases: [ph(pixels(25, 0.85), 30)],
+        metrics: [
+          ['stopped wrongly', (rs) => frac(rs.filter((r) => r.marks[0].stops > 0).length, rs.length)],
+          [
+            'still stopped at 30 s',
+            (rs) => frac(rs.filter((r) => r.marks[0].stoppedAtEnd).length, rs.length),
+          ],
+        ],
+      },
+      {
+        id: 'regime-noresume-t6',
+        title: 'two clocks: target 6, high, 4.5 ms flat until it stops, then the same for 120 s',
+        o: t6high,
+        phases: [ph(flat(4.5), 30, { untilStop: true }), ph(flat(4.5), 120)],
+        metrics: [
+          ['stopped in the first phase', (rs) => frac(stoppedFirst(rs).length, rs.length)],
+          [
+            'resumed within 120 s (of those)',
+            (rs) =>
+              frac(stoppedFirst(rs).filter((r) => r.marks[1].resumes > 0).length, stoppedFirst(rs).length),
+          ],
+        ],
+      },
+      {
+        id: 'regime-resume-t6',
+        title: 'two clocks: target 6, high, 4.5 ms flat until it stops, 3 s later 9.5 ms × s²',
+        o: t6high,
+        phases: [ph(flat(4.5), 30, { untilStop: true }), ph(flat(4.5), 3), ph(pixels(9.5, 1), 30)],
+        metrics: [
+          ['stopped in the first phase', (rs) => frac(stoppedFirst(rs).length, rs.length)],
+          [
+            'resumed within 30 s (of those)',
+            (rs) =>
+              frac(stoppedFirst(rs).filter((r) => r.marks[2].resumes > 0).length, stoppedFirst(rs).length),
+          ],
+          [
+            'median time to resume',
+            (rs) =>
+              sec(
+                median(
+                  stoppedFirst(rs)
+                    .map((r) => r.marks[2].firstResume)
+                    .filter((t) => t !== null),
+                ),
+              ),
+          ],
+        ],
+      },
+    ].map((sc) => ({ ...sc, group: 'regime', prime: 1299709 }));
+  })(),
   // P2-2: false resumes used up the cap: 300 s of the same swinging load after the stop, then a real new load
   ...[
     [

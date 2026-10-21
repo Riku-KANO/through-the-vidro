@@ -15,17 +15,22 @@
   - `responded`: 判定のどれかが手応えありだったか（governor が「無駄だった再開」を数えるのに使う）
   - `ResumeWatch`: 止めた水準を「止めた時点の EMA・止めた時点の直近5サンプルの中央値・止めた直後15サンプルの中央値」の**真ん中**に
     した（以前は EMA と止めた直後の中央値の低い方で、揺れのある負荷では低めに偏って揺れで再開した）。再開の閾値に**揺れ幅**を入れた:
-    `max(水準 × 1.3, 水準 × 揺れ × 1.1, 目標の8割)`。揺れは15サンプルの「90パーセンタイル ÷ 中央値」を、上側の四分位から対数正規として
+    `max(水準 × 1.3, 水準 × 揺れ, 目標の8割)`（揺れの余白 `RESUME_SWING_MARGIN` は 1.0。受け入れ条件の例は 1.1 だったが、レビュー1巡目で
+    控えめな新しい重さが残るので 1.0 にした）。揺れは15サンプルの「90パーセンタイル ÷ 中央値」を、上側の四分位から対数正規として
     読んだ値（`(p75 ÷ 中央値)^(z90 ÷ z75)`。実機の span は1サンプルだけ3〜10倍に跳ねることがあり、15個に2個あれば90パーセンタイルそのものに
-    なるため）。止める直前と直後で取った小さい方を使う（直後の窓に新しい重さが入ったとき、止める前の段で負荷が下がっていたときに、
-    片方だけが膨らむため）
+    なるため）で、窓の実際の「90パーセンタイル ÷ 中央値」は超えない（二つの周波数を行き来する揺れで伸びすぎないため）。止める直前と直後で
+    取った小さい方を使う（直後の窓に新しい重さが入ったとき、止める前の段で負荷が下がっていたときに、片方だけが膨らむため）。
+    **振る舞いの変更**: 止めた水準の 1.35〜1.45倍しか重くならない新しい重さでは、再開が減り遅くなる（シミュレーション: 実際の目標・1.35倍で
+    170/183 → 135/174、7.4秒 → 11.2秒）
   - 定数 `RESPONSE_STEPS`・`RESPONSE_MIN`・`RESPONSE_MISSES`・`RESUME_RISE`・`RESUME_SWING_MARGIN` を export（理由の文字列を組み立てるため）
   - 中央値の窓を `perf/rolling.ts` の `RollingWindow` に置き換えた（振る舞いは同じ）
 - `perf/governor.ts`:
-  - **再開の上限に数えるのは「無駄だった再開」だけ**（再開した制御が手応えの判定に一度も通らずに再び止まった）。定数を
-    `DYNRES_MAX_RESUMES` から `DYNRES_MAX_WASTED_RESUMES`（3）に改名。`dynresWastedResumes` を追加（`dynresResumes` は全部の回数のまま）
+  - **再開の上限に数えるのは「無駄だった再開」だけ**（再開した制御が手応えの判定に一度も通らずに再び止まった）。その上限は
+    `DYNRES_MAX_WASTED_RESUMES`（3）。ほかに**再開の合計**を1セッション `DYNRES_MAX_RESUMES`（10）回までにした（揺れる比例しない負荷では、
+    再開した後の判定がたまたま通って無駄に数えられないことがあるため）。`dynresWastedResumes` を追加（`dynresResumes` は全部の回数のまま）。
+    **注意**: 0.5.0 の `DYNRES_MAX_RESUMES`（3、全部の再開の上限）は意味が変わった（無駄だった再開は `DYNRES_MAX_WASTED_RESUMES`、合計は 10）
   - 止めた・再開した理由の文字列を定数から組み立てる（以前は「30%」「three steps」「10%」を直に書いていた）。下限で止めたときは
-    「the steps down to the floor ...」、上限に達したときは「resumed N times, W of them in vain, off for the session」
+    「the steps down to the floor ...」、上限に達したときは「resumed N times (at most 10), W of them in vain (at most 3), off for the session」
   - 品質の切り替え（`switchTo`・`sceneFailed`）で、止まって見張っている状態なら見張りを捨てて新しい制御で始める（今は steady より前にしか
     切り替えないので起きない。状態の食い違いをなくすため）
   - 内部の `Rolling` を `perf/rolling.ts` の `RollingWindow` に置き換えた（振る舞いは同じ）
@@ -33,7 +38,8 @@
 - `perf/load-sim.ts`（新規、試験用。アプリからは使わない）: governor をアプリと同じ取り方（8フレームごと・2フレーム遅れ・垂直同期）で
   動かす `driveLikeApp`、種を固定した対数正規 AR(1) の揺れ `logNormalAr1`、1フレームだけ長くなる跳ね `spikes`、`vsyncFrame`。
   単体テストと `scripts/sim/` が共有する
-- 案2で使うときは、`PerfGovernor` の使い方は変わらない。`DYNRES_MAX_RESUMES` を参照していたら `DYNRES_MAX_WASTED_RESUMES` に直す。
+- 案2で使うときは、`PerfGovernor` の使い方は変わらない。`DYNRES_MAX_RESUMES` を「無駄だった再開の上限」の意味で参照していたら
+  `DYNRES_MAX_WASTED_RESUMES` に直す。
   プローブに無駄だった再開の回数を出すならアプリ側で `dynresWastedResumes` を写す
 
 ## 0.5.0 — 2026-10-21（S-11 動的解像度の止めっぱなしの解消、WebGL2 のタイムスタンプの読み出し、警告も数えるセンサー）

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DynamicResolution } from './dynamic-resolution';
+import { DynamicResolution, ResumeWatch } from './dynamic-resolution';
 
 const TARGET = 1000 / 60;
 const DT = 1 / 60;
@@ -198,5 +198,28 @@ describe('DynamicResolution: response check under swings (S-13)', () => {
     run(dr, (s) => 18 + 10 * (s / 0.85) ** 2, 30);
     expect(dr.unresponsive).toBe(false);
     expect(dr.scale).toBe(0.51);
+  });
+});
+
+describe('ResumeWatch threshold (S-13 review round 1)', () => {
+  /** A watch stopped at 5 ms (target 6 ms, so the overload line is 4.8 ms), fed the 15 samples after the stop. */
+  const settled = (after: number[]) => {
+    const w = new ResumeWatch({ smoothedMs: 5, medianMs: 5, swing: 2 }, 6, 0.08);
+    for (const ms of after) w.update(ms, 8 / 60);
+    return w;
+  };
+
+  it('clears the swing itself, not 10% above it: a swing whose 90th percentile is 1.4× puts it at 1.4×', () => {
+    // Median 5, upper quartile 6, 90th percentile 7 (1.4×): above the 30% rise, so the swing sets the threshold.
+    const w = settled([4, 7, 4, 5, 6, 4, 5, 4, 7, 5, 4, 6, 4, 5, 4]);
+    expect(w.baselineMs).toBe(5);
+    expect(w.thresholdMs).toBeCloseTo(7, 5);
+  });
+
+  it('reads the swing off the quartile, but never above the 90th percentile the window has (two clock levels)', () => {
+    // Seven samples at 4 ms, one at 5, seven at 6.5: the quartile reads as a log-normal swing of 1.65× at the 90th
+    // percentile, but the window has nothing above 6.5 ms (1.3×). The threshold stays at the 30% rise.
+    const w = settled([4, 6.5, 4, 6.5, 4, 6.5, 4, 5, 6.5, 4, 6.5, 4, 6.5, 4, 6.5]);
+    expect(w.thresholdMs).toBeCloseTo(6.5, 5);
   });
 });

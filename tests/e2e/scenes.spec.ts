@@ -44,7 +44,7 @@ interface KnownMessage {
 }
 const KNOWN_CONSOLE: KnownMessage[] = [
   {
-    pattern: /GPU stall/i,
+    pattern: /GPU stall due to ReadPixels/,
     kinds: ['error', 'warning'],
     reason:
       "Chrome's own performance notice from the GL driver when a readback stalls (ReadPixels), not a fault of the page. " +
@@ -54,7 +54,7 @@ const KNOWN_CONSOLE: KnownMessage[] = [
     example: 'GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels',
   },
   {
-    pattern: /powerPreference/i,
+    pattern: /powerPreference option is currently ignored/,
     kinds: ['error', 'warning'],
     reason:
       "Chrome's notice that requestAdapter() ignores powerPreference on some platforms (Windows), not a fault of the " +

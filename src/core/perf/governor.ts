@@ -44,8 +44,9 @@ import { RollingWindow } from './rolling';
  *   over and judges the response again. A resume is wasted when that controller stops again without any verdict
  *   having found a response; after DYNRES_MAX_WASTED_RESUMES of them it stays off for the session, so a load that
  *   never follows the resolution cannot make it go back and forth. Resumes that helped do not count (S-13: before,
- *   every resume counted, and swings that resumed it wrongly used up the session). Each stop also sets a new
- *   baseline, so going back to a load already judged does not resume either.
+ *   every resume counted, and swings that resumed it wrongly used up the session); all resumes together are capped
+ *   at DYNRES_MAX_RESUMES. Each stop also sets a new baseline, so going back to a load already judged does not
+ *   resume either.
  */
 export type GovernorAction =
   | { kind: 'scale'; scale: number }
@@ -99,6 +100,13 @@ export const DYNRES_MIN_SCALE = 0.5;
  * time and never follows the resolution.
  */
 export const DYNRES_MAX_WASTED_RESUMES = 3;
+/**
+ * Resumes of dynamic resolution per session in all, wasted or not (S-13 review round 1): a swinging load that does
+ * not follow the resolution can pass a verdict by chance after each resume, so those resumes do not count as wasted
+ * and nothing else bounds them (simulation: up to 15 in an hour at σ 0.5, τ 5 s). Large enough that loads which really
+ * change and really follow the pixels never reach it in a play session.
+ */
+export const DYNRES_MAX_RESUMES = 10;
 
 export class PerfGovernor {
   level: QualityLevel;
@@ -254,7 +262,9 @@ export class PerfGovernor {
     const next = this.dynres.update(ms, sampleDt);
     if (this.dynres.unresponsive) {
       if (this.resumed && !this.dynres.responded) this.dynresWastedResumes++;
-      const watch = this.dynresWastedResumes < DYNRES_MAX_WASTED_RESUMES ? this.dynres.resumeWatch() : null;
+      const capped =
+        this.dynresWastedResumes >= DYNRES_MAX_WASTED_RESUMES || this.dynresResumes >= DYNRES_MAX_RESUMES;
+      const watch = capped ? null : this.dynres.resumeWatch();
       const why = this.dynres.stoppedAtFloor
         ? `the steps down to the floor lowered it by less than ${pct(RESPONSE_MIN)} per ${RESPONSE_STEPS} steps`
         : `${RESPONSE_STEPS} steps down lowered it by less than ${pct(RESPONSE_MIN)}, ${RESPONSE_MISSES} times in a row`;
@@ -262,7 +272,8 @@ export class PerfGovernor {
         `GPU time did not follow the resolution (${why}); ` +
           (watch
             ? `resumes on a new load (GPU time held ${pct(RESUME_RISE - 1)} and its swing above where it stopped)`
-            : `resumed ${this.dynresResumes} times, ${this.dynresWastedResumes} of them in vain, off for the session`),
+            : `resumed ${this.dynresResumes} times (at most ${DYNRES_MAX_RESUMES}), ${this.dynresWastedResumes} of them ` +
+              `in vain (at most ${DYNRES_MAX_WASTED_RESUMES}), off for the session`),
       );
       this.resumeWatch = watch;
       return null;
@@ -317,7 +328,8 @@ export class PerfGovernor {
     this.dynresResumeReason =
       `GPU time rose to ${ms2(watch.smoothedMs)} ms, above the ${ms2(watch.thresholdMs)} ms it resumes at ` +
       `(${pct(RESUME_RISE - 1)} and the swing above the ${ms2(watch.baselineMs)} ms it stopped at; resume ` +
-      `${this.dynresResumes}, ${this.dynresWastedResumes} of ${DYNRES_MAX_WASTED_RESUMES} wasted so far)`;
+      `${this.dynresResumes} of at most ${DYNRES_MAX_RESUMES}, ${this.dynresWastedResumes} of ${DYNRES_MAX_WASTED_RESUMES} ` +
+      'wasted so far)';
   }
 
   /**
