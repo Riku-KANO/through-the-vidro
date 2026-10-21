@@ -209,6 +209,26 @@ describe('falling and footing (落下死はない、でも宙には浮かない)
     expect(-player.feet.z).toBeGreaterThan(0.5);
   });
 
+  it('ground refused by allowGround is not stepped onto: the body eases to a stop before it (S-06 fence)', () => {
+    // One floor, but only the part with z > -2 counts as ground (like back footing outside a sphere).
+    const world = floorWorld();
+    const player = new PlayerController(world, {
+      feet: { x: 0, y: 0, z: 0 },
+      allowGround: (_x, _y, z) => z > -2,
+    });
+    const s = run(player, world, forward, 4);
+    expect(s.every((p) => p.grounded && Math.abs(p.y) < 0.03)).toBe(true);
+    expect(player.feet.z).toBeGreaterThan(-2);
+    expect(player.feet.z).toBeLessThan(-1.5);
+    // Soft: it slows over several frames instead of hitting a wall.
+    expect(s.some((p) => p.speed > 0.2 && p.speed < 1.1)).toBe(true);
+    // Without the rule the same floor is walked on freely.
+    const w2 = floorWorld();
+    const free = new PlayerController(w2, { feet: { x: 0, y: 0, z: 0 } });
+    run(free, w2, forward, 4);
+    expect(free.feet.z).toBeLessThan(-4);
+  });
+
   it('never sinks into the floor while walking across it', () => {
     for (const dx of [-0.05, -0.01, -2e-5, 0, 2e-5, 0.01, 0.05]) {
       const world = floorWorld();
