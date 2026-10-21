@@ -60,7 +60,7 @@ describe('backdropRisks: which materials need followBackdropResize() (S-14)', ()
     group.add(mesh(glass, 'inside'));
     scene.add(group);
     const report = backdropRisks([scene, group, scene]);
-    expect(report.roots).toEqual([`Scene#${scene.id}`, `Group#${group.id}`]);
+    expect(report.roots.map((r) => r.label)).toEqual([`Scene#${scene.id}`, `Group#${group.id}`]);
     expect(report.risks.map((r) => r.objects)).toEqual([1]);
   });
 
@@ -71,6 +71,30 @@ describe('backdropRisks: which materials need followBackdropResize() (S-14)', ()
     world.add(mesh(riskyGlass('vessel'), 'vessel'));
     expect(flagged([home])).toEqual([]);
     expect(flagged([home, world])).toEqual([{ material: 'vessel', objects: 1, names: ['vessel'] }]);
+  });
+
+  it('counts per root the materials that read the backdrop, safe ones included, for scenes after the first too (S-15)', () => {
+    // home-dive's shape: sandbox.scene first, then a helper scene that was drawn (PMREM's environment), the dive world
+    // (a scene of its own, drawn into the orb's image) and a group of that world compiled on its own
+    const home = new THREE.Scene();
+    home.add(mesh(new THREE.MeshStandardNodeMaterial()));
+    const helper = new THREE.Scene();
+    helper.add(mesh(new THREE.MeshStandardNodeMaterial()));
+    const world = new THREE.Scene();
+    const vessel = followBackdropResize(riskyGlass('vessel')); // reads the backdrop, and is safe
+    const risky = riskyGlass('risky');
+    const opaque = new THREE.MeshPhysicalNodeMaterial({ roughness: 0.2 });
+    const shelf = new THREE.Group();
+    shelf.add(mesh(vessel), mesh(vessel));
+    world.add(shelf, mesh([opaque, risky, risky]), mesh(opaque));
+    const { roots, risks } = backdropRisks([home, helper, world, shelf]);
+    expect(roots).toEqual([
+      { label: `Scene#${home.id}`, backdropReaders: 0 },
+      { label: `Scene#${helper.id}`, backdropReaders: 0 },
+      { label: `Scene#${world.id}`, backdropReaders: 2 }, // each material once: vessel, risky
+      { label: `Group#${shelf.id}`, backdropReaders: 1 },
+    ]);
+    expect(risks.map((r) => r.material)).toEqual(['risky']);
   });
 
   it('names objects by type and id when unnamed, and lists at most three', () => {
