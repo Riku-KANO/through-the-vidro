@@ -12,8 +12,11 @@
     破棄済みの背景画像のまま描かれる（WebGPU: `Destroyed texture … used in a submit` が毎フレーム出て、その submit が丸ごと捨てられる。
     WebGL2: `bindTexture: attempt to use a deleted object`）。動的解像度が倍率を変えるので、プレイ中に起きる
   - `followBackdropResize(material)`: ノードを持たない透過の材質に `thicknessNode = materialThickness`（three が null のときに使う値と同じ。
-    見た目は変わらない）を入れ、three が毎フレーム更新するようにする。最初に描く前に呼ぶ。ノードを持つ材質と透過でない材質には何もしない
-  - `missesBackdropResize(material)`（危ない材質の判定）、`readsBackdrop(material)`、`hasNodeProperty(material)`
+    見た目は変わらない）を入れ、three が毎フレーム更新するようにする。transmission を決めた後、最初に描く前に呼ぶ（描いた後なら
+    `material.needsUpdate = true` も要る）。ノードを持つ材質と透過でない材質には何もしない
+  - `missesBackdropResize(material)`（危ない材質の判定）、`readsBackdrop(material)`（three の `useTransmission` があればそれ）、`hasNodeProperty(material)`
+  - 単体テストは three の `NodeMaterialObserver.needsRefresh()` を直接呼んで、回避策を通した材質が毎フレーム `FULL` になることを確かめる。
+    three を上げたらこのテストと、`process/slices/S-12.md` の最小の再現で回避策がまだ要るかを確かめる
   - `createGlass()` の透過のガラスは、もともと `thicknessNode` を持つので対象外（単体テストで全種類・全品質・全配置を確かめている）。
     手で `MeshPhysicalNodeMaterial({ transmission })` を作るときは `followBackdropResize()` を通すか、`createGlass()` を使う
   - 代償: その材質の物は毎フレーム three のノードとバインドの更新を通る（`createGlass()` のガラスと同じ扱いになる）

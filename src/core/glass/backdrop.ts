@@ -18,8 +18,13 @@ import type * as THREE from 'three/webgpu';
  * followBackdropResize().
  */
 
-/** Uses transmission, i.e. reads the backdrop (the same test as three's MeshPhysicalNodeMaterial.useTransmission). */
+/**
+ * Uses transmission, i.e. reads the backdrop: three's MeshPhysicalNodeMaterial.useTransmission where the material has
+ * it, otherwise the same test on its fields (as isTransmissive in src/layers/field.ts).
+ */
 export function readsBackdrop(material: THREE.Material): boolean {
+  const useTransmission = (material as { useTransmission?: unknown }).useTransmission;
+  if (typeof useTransmission === 'boolean') return useTransmission;
   const m = material as { transmission?: number; transmissionNode?: unknown };
   return (m.transmission ?? 0) > 0 || (m.transmissionNode ?? null) !== null;
 }
@@ -43,7 +48,9 @@ export function missesBackdropResize(material: THREE.Material): boolean {
  * Makes three refresh the objects of this transmissive material on every frame, so they follow the backdrop when a
  * size change recreates it (see the top of this file). Sets thicknessNode to materialThickness, which is what three
  * uses when thicknessNode is null, so the look does not change. Leaves materials alone that already have a node
- * property or do not use transmission. Call it before the material is first drawn.
+ * property or do not use transmission.
+ * Call it after transmission is set and before the material is first drawn: three decides whether a material has a
+ * node when it builds the shader, so on a material that was already drawn also set `material.needsUpdate = true`.
  */
 export function followBackdropResize<T extends THREE.MeshPhysicalNodeMaterial>(material: T): T {
   if (missesBackdropResize(material)) material.thicknessNode = materialThickness;

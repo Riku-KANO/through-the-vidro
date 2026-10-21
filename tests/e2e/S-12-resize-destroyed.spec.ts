@@ -54,94 +54,74 @@ async function frames(page: Page, n: number): Promise<void> {
   );
 }
 
+/** The scale goes down by this much and back to where it started (A → B → A), like one dynamic resolution step. */
+const STEP_DOWN = 0.05;
+
 interface Case {
   name: string;
   query: string;
   backend: 'webgpu' | 'webgl2';
-  /** Scales to go through, ending where it started (A → B → A). */
-  scales: number[];
-  /** How long to keep rendering after the change, long enough for off-screen glass to come back. */
+  /**
+   * How long to keep rendering after the change, long enough for the off-screen glass to come back into view: set by
+   * the stress scene's camera path (update() in src/scenes/stress.scene.ts).
+   */
   waitMs: number;
-  /** Wait for the prologue room to be ready as well (beyond status 'running'). */
-  ready?: 'room';
 }
 
+// prologue-proto and glass-gallery were green here before the fix as well: all their transmissive glass comes from
+// createGlass(), which src/core/glass/backdrop.test.ts covers for every kind, preset, placement and role (S-12 record).
 const cases: Case[] = [
   {
     // The reported steps; the far glass (transmissive on high only) comes back after ~18 s.
     name: 'stress high',
     query: '?scene=stress&quality=high&dynres=0&debug=1',
     backend: 'webgpu',
-    scales: [0.95, 1],
     waitMs: 27_000,
   },
   {
     name: 'stress high',
     query: '?scene=stress&quality=high&dynres=0&debug=1&webgl=1',
     backend: 'webgl2',
-    scales: [0.95, 1],
     waitMs: 27_000,
   },
   {
-    // Not only high: the near glass is transmissive on every preset and comes back when the camera loops.
+    // Not only high: the near glass is transmissive on every preset and comes back when the camera loops (~34 s).
     name: 'stress mid',
     query: '?scene=stress&quality=mid&dynres=0&debug=1',
     backend: 'webgpu',
-    scales: [0.8, 0.85],
     waitMs: 40_000,
-  },
-  {
-    // The prologue room played by the autopilot (the camera walks, turns and peeks), started in the room.
-    name: 'prologue-proto high',
-    query: '?scene=prologue-proto&quality=high&dynres=0&debug=1&direct=1&autoplay=1',
-    backend: 'webgpu',
-    scales: [0.95, 1],
-    waitMs: 27_000,
-    ready: 'room',
-  },
-  {
-    name: 'glass-gallery high',
-    query: '?scene=glass-gallery&quality=high&dynres=0&debug=1',
-    backend: 'webgpu',
-    scales: [0.95, 1],
-    waitMs: 27_000,
   },
 ];
 
 for (const c of cases) {
-  test(`S-12 ${c.name}: no destroyed texture after the render scale goes ${c.scales.join(' → ')} [${c.backend}]`, async ({
+  test(`S-12 ${c.name}: no destroyed texture after the render scale goes down and back [${c.backend}]`, async ({
     page,
   }) => {
     test.setTimeout(c.waitMs + 60_000);
     const seen = collectConsole(page);
     await page.goto(c.query);
-    await page.waitForFunction(
-      (ready) => {
-        const v = window.__vidro;
-        if (v?.status === 'error') return true;
-        if (v?.status !== 'running') return false;
-        return ready !== 'room' || (v.sceneProbe.room as { ready?: boolean } | undefined)?.ready === true;
-      },
-      c.ready ?? null,
-      { timeout: 45_000 },
-    );
+    await page.waitForFunction(() => ['running', 'error'].includes(window.__vidro?.status), undefined, {
+      timeout: 45_000,
+    });
     expect(await page.evaluate(() => window.__vidro.status)).toBe('running');
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(c.backend);
     // Let every object of the starting view be drawn once at the starting size (bind groups created).
     await page.waitForTimeout(2_000);
-    for (const scale of c.scales) {
+    // Back to the very scale it started at, whatever the preset's scale is: A → B → C would not reproduce the bug.
+    const start = await page.evaluate(() => window.__vidro.renderScale);
+    const scales = [Math.round((start - STEP_DOWN) * 100) / 100, start];
+    for (const scale of scales) {
       await page.evaluate((s) => {
         (window as unknown as { __vidroDebug: { setScale(v: number): void } }).__vidroDebug.setScale(s);
       }, scale);
       // A few frames at each size, so the render targets and the backdrop are really recreated.
       await frames(page, 12);
     }
-    const scale = await page.evaluate(() => window.__vidro.renderScale);
-    expect(scale).toBe(c.scales[c.scales.length - 1]);
+    expect(await page.evaluate(() => window.__vidro.renderScale), `back at ${start}`).toBe(start);
     await page.waitForTimeout(c.waitMs);
     expect(await page.evaluate(() => window.__vidro.status)).toBe('running');
     const destroyed = seen.filter((m) => DESTROYED.test(m.text));
-    expect(summarize(destroyed), 'destroyed textures used after the scale change').toEqual([]);
+    expect(summarize(destroyed), `destroyed textures used after ${scales.join(' → ')}`).toEqual([]);
     expect(summarize(seen), 'console errors and warnings').toEqual([]);
     expect(await page.evaluate(() => window.__vidro.errors), 'probe errors').toEqual([]);
   });

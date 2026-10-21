@@ -288,6 +288,7 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
     scene,
     camera,
     update(_dt, t) {
+      // S-12's e2e waits are set by this path: the far ring comes back into view after ~18 s, the near glass per loop.
       const z = 4 - ((t * 1.4) % 50);
       camera.position.set(Math.sin(t * 0.3) * 0.6, 1.6, z);
       camera.lookAt(Math.sin(t * 0.2) * 3, 1.4, z - 8);

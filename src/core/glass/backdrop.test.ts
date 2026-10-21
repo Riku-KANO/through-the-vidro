@@ -7,30 +7,58 @@ import { GLASS_KINDS } from './kinds';
 import { createGlass } from './materials';
 import type { GlassPlacement, GlassRole } from './policy';
 
+const { FULL, SHARED } = THREE.RenderObjectRefreshType;
+
+/** The part of three r186's NodeMaterialObserver this test drives (needsRefresh is not in @types/three). */
+interface Observer {
+  needsRefresh(renderObject: unknown, nodeFrame: unknown): number;
+}
+
 /**
- * Whether three would refresh this material's objects on every frame. Asked from three's own observer (the
- * class that decides it at runtime), so a three update that changes the rule fails here, not silently in play.
+ * How three refreshes one object of this material over three frames in which nothing about it changes, decided by
+ * three's own NodeMaterialObserver (the class Renderer._renderObjectDirect asks; exported from three/webgpu).
+ * FULL updates the object's nodes and bindings; SHARED only the shared uniforms, so its bindings keep whatever
+ * backdrop texture they point at. The render object and node frame are minimal stand-ins with only the fields
+ * r186 reads; if three changes their shape this throws or returns something else and the tests fail, which is the
+ * point: then the workaround has to be checked again with the minimal repro in process/slices/S-12.md.
  */
-function threeRefreshesEveryFrame(material: THREE.Material): boolean {
-  const builder = { material, object: new THREE.Mesh(), context: {} } as unknown as THREE.NodeBuilder;
-  return new THREE.NodeMaterialObserver(builder).hasNode;
+function refreshOverStillFrames(material: THREE.Material): number[] {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), material);
+  const builder = { material, object: mesh, context: {} } as unknown as THREE.NodeBuilder;
+  const observer = new THREE.NodeMaterialObserver(builder) as unknown as Observer;
+  const renderObject = {
+    object: mesh,
+    material,
+    geometry: mesh.geometry,
+    context: { width: 100, height: 100 },
+    scene: new THREE.Scene(),
+    bundle: null,
+    lightsNode: { getBuiltinLights: () => [] },
+  };
+  const frame = (renderId: number) =>
+    observer.needsRefresh(renderObject, { renderer: { getMRT: () => null }, renderId });
+  const types = [frame(1), frame(2), frame(3)];
+  mesh.geometry.dispose();
+  return types;
 }
 
 const handMadeGlass = () =>
   new THREE.MeshPhysicalNodeMaterial({ roughness: 0.02, transmission: 1, ior: 1.5, thickness: 0.5 });
 
 describe('transmission across render size changes (three r186, S-12)', () => {
-  it('flags hand-made transmissive glass: three skips refreshing it, so it can keep a destroyed backdrop', () => {
+  it('hand-made transmissive glass: three stops refreshing its bindings once nothing changes', () => {
     const glass = handMadeGlass();
     expect(readsBackdrop(glass)).toBe(true);
     expect(missesBackdropResize(glass)).toBe(true);
-    expect(threeRefreshesEveryFrame(glass)).toBe(false);
+    // This is the precondition of the bug: after the first frame its bindings are never rebuilt, so a backdrop
+    // recreated meanwhile is not picked up.
+    expect(refreshOverStillFrames(glass)).toEqual([FULL, SHARED, SHARED]);
   });
 
-  it('makes three refresh it every frame without changing what it draws', () => {
+  it('followBackdropResize makes three refresh it fully on every frame, without changing what it draws', () => {
     const glass = followBackdropResize(handMadeGlass());
+    expect(refreshOverStillFrames(glass)).toEqual([FULL, FULL, FULL]);
     expect(missesBackdropResize(glass)).toBe(false);
-    expect(threeRefreshesEveryFrame(glass)).toBe(true);
     // three reads materialThickness when thicknessNode is null: the same value, so the same look.
     expect(glass.thicknessNode).toBe(materialThickness);
     expect(glass.transmissionNode).toBeNull();
@@ -54,9 +82,12 @@ describe('transmission across render size changes (three r186, S-12)', () => {
     byNode.transmissionNode = float(1);
     expect(readsBackdrop(byNode)).toBe(true);
     expect(missesBackdropResize(byNode)).toBe(false);
+    expect(refreshOverStillFrames(byNode)).toEqual([FULL, FULL, FULL]);
+
+    expect(readsBackdrop(new THREE.MeshStandardNodeMaterial())).toBe(false);
   });
 
-  it('every glass from createGlass follows the backdrop, on every preset and placement', () => {
+  it('every glass from createGlass is refreshed fully on every frame where it reads the backdrop', () => {
     const placements: GlassPlacement[] = ['near', 'far', 'behind-glass'];
     const roles: GlassRole[] = ['scenery', 'orb', 'drop', 'showcase'];
     for (const level of Object.keys(QUALITY_PRESETS) as QualityLevel[]) {
@@ -66,7 +97,8 @@ describe('transmission across render size changes (three r186, S-12)', () => {
             const { material } = createGlass(kind, QUALITY_PRESETS[level], { placement, role });
             const where = `${kind} ${placement} ${role} on ${level}`;
             expect(missesBackdropResize(material), where).toBe(false);
-            if (readsBackdrop(material)) expect(threeRefreshesEveryFrame(material), where).toBe(true);
+            if (readsBackdrop(material))
+              expect(refreshOverStillFrames(material), where).toEqual([FULL, FULL, FULL]);
             material.dispose();
           }
         }
