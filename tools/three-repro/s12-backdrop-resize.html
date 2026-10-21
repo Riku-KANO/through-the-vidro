@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>three: stale transmission backdrop after an off-screen resize</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #111; color: #ddd; }
+      #status { padding: 6px 10px; white-space: pre; }
+    </style>
+    <!--
+      Minimal reproduction for process/slices/S-12.md (three r186): a transmissive material without node properties keeps
+      a destroyed transmission backdrop when the drawing-buffer size goes A -> B -> A while one of its objects is off-screen.
+      URL switches:
+        three=<npm version>|dev|<commit sha>   three build to load (default 0.186.1)
+        webgl=1                                WebGPURenderer with forceWebGL
+        fix=1                                  give the material a node property (the workaround: thicknessNode)
+    -->
+    <script>
+      // Import map for the requested three build; added before any module script runs.
+      const v = new URLSearchParams(location.search).get('three') ?? '0.186.1';
+      const base =
+        v === 'dev' || /^[0-9a-f]{7,40}$/.test(v)
+          ? `https://cdn.jsdelivr.net/gh/mrdoob/three.js@${v}/build/`
+          : `https://cdn.jsdelivr.net/npm/three@${v}/build/`;
+      const map = document.createElement('script');
+      map.type = 'importmap';
+      map.textContent = JSON.stringify({
+        imports: {
+          three: `${base}three.webgpu.js`,
+          'three/webgpu': `${base}three.webgpu.js`,
+          'three/tsl': `${base}three.tsl.js`,
+        },
+      });
+      document.currentScript.after(map);
+    </script>
+  </head>
+  <body>
+    <div id="status">loading…</div>
+    <script type="module">
+      import { materialThickness } from 'three/tsl';
+      import * as THREE from 'three/webgpu';
+
+      const params = new URLSearchParams(location.search);
+      const forceWebGL = params.get('webgl') === '1';
+      const fix = params.get('fix') === '1';
+      const status = document.getElementById('status');
+
+      // Count what the backend reports. WebGPU: three logs uncaptured validation errors. WebGL2: poll gl.getError().
+      const result = { revision: THREE.REVISION, backend: '', fix, done: false, destroyed: 0, glErrors: 0, phases: {} };
+      window.__repro = result;
+      let phase = 'setup';
+      const count = (key, n = 1) => {
+        result[key] += n;
+        result.phases[phase] = result.phases[phase] ?? { destroyed: 0, glErrors: 0 };
+        result.phases[phase][key] += n;
+      };
+      for (const level of ['error', 'warn']) {
+        const original = console[level].bind(console);
+        console[level] = (...args) => {
+          if (args.some((a) => String(a?.message ?? a).includes('Destroyed texture'))) count('destroyed');
+          original(...args);
+        };
+      }
+
+      const renderer = new THREE.WebGPURenderer({ forceWebGL });
+      renderer.setSize(640, 360);
+      document.body.appendChild(renderer.domElement);
+      await renderer.init();
+      result.backend = renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2';
+      const gl = renderer.backend.gl ?? null;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x335577);
+      // A light is needed: without a lighting model the material does not read the backdrop.
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+      const camera = new THREE.PerspectiveCamera(50, 640 / 360, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicNodeMaterial({ color: 0xff8800 }));
+      box.position.set(0, 0, -3);
+      scene.add(box);
+      camera.lookAt(0, 0, -3);
+
+      // One transmissive material without node properties, shared by two meshes.
+      const glass = new THREE.MeshPhysicalNodeMaterial({ transmission: 1, roughness: 0, thickness: 0.5 });
+      if (fix) glass.thicknessNode = materialThickness; // same value as the default
+      const geometry = new THREE.SphereGeometry(0.8, 32, 16);
+      const first = new THREE.Mesh(geometry, glass); // stays in view: re-creates the backdrop at each new size
+      first.position.set(-1, 0, 0);
+      const second = new THREE.Mesh(geometry, glass); // hidden while the size goes 1 -> 0.75 -> 1
+      second.position.set(1, 0, 0);
+      scene.add(first, second);
+
+      // [name, frames, action at the start]
+      const steps = [
+        ['both visible', 10, () => {}],
+        ['second hidden', 10, () => { second.visible = false; }],
+        ['pixel ratio 0.75', 10, () => { renderer.setPixelRatio(0.75); }],
+        ['pixel ratio 1', 10, () => { renderer.setPixelRatio(1); }],
+        ['second visible again', 30, () => { second.visible = true; }],
+      ];
+      let step = 0;
+      let left = 0;
+      const show = () => {
+        status.textContent =
+          `three r${result.revision} · ${result.backend} · fix=${fix ? 1 : 0} · phase: ${phase}\n` +
+          `"Destroyed texture" messages: ${result.destroyed} · gl.getError() != 0: ${result.glErrors}` +
+          (result.done ? ' · done' : '');
+      };
+      renderer.setAnimationLoop(() => {
+        if (left === 0) {
+          if (step >= steps.length) {
+            renderer.setAnimationLoop(null);
+            result.done = true;
+            show();
+            return;
+          }
+          const [name, frames, action] = steps[step++];
+          phase = name;
+          action();
+          left = frames;
+        }
+        left--;
+        renderer.render(scene, camera);
+        if (gl) for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) count('glErrors');
+        show();
+      });
+    </script>
+  </body>
+</html>

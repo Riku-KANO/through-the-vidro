@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>three: transmission drawn into a render target of another size</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #111; color: #ddd; }
+      #status { padding: 6px 10px; white-space: pre; }
+    </style>
+    <!--
+      Reproduction for the rule from process/slices/S-05.md (three r186): drawing a transmissive material into a render
+      target whose size differs from the canvas made WebGPU drop frames ("Destroyed texture used in a submit").
+      Suspected cause: ViewportTextureNode's per-target framebuffer textures share one source (three #34932, fixed by
+      #34636 for r187). The glass has a node property, so the S-12 bug (s12-backdrop-resize.html) does not interfere.
+      URL switches:
+        three=<npm version>|dev|<commit sha>   three build to load (default 0.186.1)
+        webgl=1                                WebGPURenderer with forceWebGL
+        mode=seq|pipeline|reflector            seq: render() into the target, then render() to the canvas.
+                                               pipeline: the same, then a RenderPipeline with pass() (the game's peek pass).
+                                               reflector: no explicit target; a floor with reflector() renders the scene
+                                               into its own target in the middle of the frame (three #34635).
+                                               Default pipeline.
+        rt=half|full                           target size relative to the canvas (default half; full = control)
+      Counted: "Destroyed texture" messages, gl.getError(), and backend.destroyTexture() calls after the first frame
+      (texture re-creations: with a shared source the backdrop textures are re-created every frame).
+    -->
+    <script>
+      // Import map for the requested three build; added before any module script runs.
+      const v = new URLSearchParams(location.search).get('three') ?? '0.186.1';
+      const base =
+        v === 'dev' || /^[0-9a-f]{7,40}$/.test(v)
+          ? `https://cdn.jsdelivr.net/gh/mrdoob/three.js@${v}/build/`
+          : `https://cdn.jsdelivr.net/npm/three@${v}/build/`;
+      const map = document.createElement('script');
+      map.type = 'importmap';
+      map.textContent = JSON.stringify({
+        imports: {
+          three: `${base}three.webgpu.js`,
+          'three/webgpu': `${base}three.webgpu.js`,
+          'three/tsl': `${base}three.tsl.js`,
+        },
+      });
+      document.currentScript.after(map);
+    </script>
+  </head>
+  <body>
+    <div id="status">loading…</div>
+    <script type="module">
+      import { materialThickness, pass, reflector } from 'three/tsl';
+      import * as THREE from 'three/webgpu';
+
+      const params = new URLSearchParams(location.search);
+      const forceWebGL = params.get('webgl') === '1';
+      const mode = ['seq', 'reflector'].includes(params.get('mode')) ? params.get('mode') : 'pipeline';
+      const rtSize = params.get('rt') === 'full' ? 'full' : 'half';
+      const status = document.getElementById('status');
+
+      const result = {
+        revision: THREE.REVISION,
+        backend: '',
+        mode,
+        rt: rtSize,
+        done: false,
+        destroyed: 0,
+        glErrors: 0,
+        recreated: 0,
+      };
+      window.__repro = result;
+      for (const level of ['error', 'warn']) {
+        const original = console[level].bind(console);
+        console[level] = (...args) => {
+          if (args.some((a) => String(a?.message ?? a).includes('Destroyed texture'))) result.destroyed++;
+          original(...args);
+        };
+      }
+
+      const W = 640;
+      const H = 360;
+      const renderer = new THREE.WebGPURenderer({ forceWebGL });
+      renderer.setSize(W, H);
+      document.body.appendChild(renderer.domElement);
+      await renderer.init();
+      result.backend = renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2';
+      const gl = renderer.backend.gl ?? null;
+      let counting = false;
+      const destroyTexture = renderer.backend.destroyTexture.bind(renderer.backend);
+      renderer.backend.destroyTexture = (...args) => {
+        if (counting) result.recreated++;
+        return destroyTexture(...args);
+      };
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x335577);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+      const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
+      camera.position.set(0, 0, 5);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicNodeMaterial({ color: 0xff8800 }));
+      box.position.set(0, 0, -3);
+      scene.add(box);
+      camera.lookAt(0, 0, -3);
+      const glass = new THREE.MeshPhysicalNodeMaterial({ transmission: 1, roughness: 0, thickness: 0.5 });
+      glass.thicknessNode = materialThickness; // keeps the S-12 bug out of this page
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.8, 32, 16), glass));
+
+      const scale = rtSize === 'full' ? 1 : 0.5;
+      const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+      const target = new THREE.RenderTarget(Math.floor(size.x * scale), Math.floor(size.y * scale), {
+        type: THREE.HalfFloatType,
+      });
+      const pipeline = mode === 'pipeline' ? new THREE.RenderPipeline(renderer, pass(scene, camera)) : null;
+      if (mode === 'reflector') {
+        const reflection = reflector({ resolutionScale: scale, bounces: false });
+        const floor = new THREE.Mesh(
+          new THREE.PlaneGeometry(20, 20),
+          new THREE.MeshBasicNodeMaterial({ colorNode: reflection }),
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -1;
+        floor.add(reflection.target);
+        scene.add(floor);
+      }
+
+      let frames = 60;
+      const show = () => {
+        status.textContent =
+          `three r${result.revision} · ${result.backend} · mode=${mode} · rt=${rtSize} (${target.width}×${target.height})\n` +
+          `"Destroyed texture" messages: ${result.destroyed} · gl.getError() != 0: ${result.glErrors}` +
+          ` · textures re-created after frame 1: ${result.recreated}` +
+          (result.done ? ' · done' : '');
+      };
+      renderer.setAnimationLoop(() => {
+        if (frames-- === 0) {
+          renderer.setAnimationLoop(null);
+          result.done = true;
+          show();
+          return;
+        }
+        if (mode !== 'reflector') {
+          // 1. the same scene into a render target of another size (the game's peek image at peekScale)
+          renderer.setRenderTarget(target);
+          renderer.render(scene, camera);
+          renderer.setRenderTarget(null);
+        }
+        // 2. then the frame itself
+        if (pipeline) pipeline.render();
+        else renderer.render(scene, camera);
+        counting = true;
+        if (gl) for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) result.glErrors++;
+        show();
+      });
+    </script>
+  </body>
+</html>

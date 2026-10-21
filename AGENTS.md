@@ -29,6 +29,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 計測結果の表 | `node scripts/bench-report.mjs` |
 | URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`、`FPS=<n>` はその速さの画面のようにフレームを出す） |
 | 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
+| three の不具合の再現（版を比べる） | `node tools/three-repro/run.mjs`（`THREE=0.186.1,dev`、ネットが要る） |
 | 整形 | `pnpm format` |
 | アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ |
 | 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
@@ -108,6 +109,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   途中で破棄され、「Destroyed texture used in a submit」が毎フレーム出て描画が捨てられる（WebGL2 では出ない。ただし S-05 当時は warning を数えていなかったので要再確認、S-12 参照）。覗くパスの裏の層や
   ホームの玉の中の縮図は、iridescence・透明度・発光など透過以外で表現し、玉の屈折は `texture(rt, screenUV + 屈折オフセット)` の自前合成で描く。
   画面と同じ大きさの描画先（`pass()` による仕上げのパスなど）に透過を描くのは問題ない。（S-05 で発見、2026-10-21）
+  原因は three の #34932（描画先ごとの背景画像が `Source` を共有し、大きさの違う描画先を描くたびに作り直される）とみられ、r187 の #34636 で
+  直っている（`tools/three-repro/` で確かめた。0.186.1 は毎フレーム2回作り直し、開発版は0回）。three を上げたら外せるかを確かめる。
 - **影のカメラの layers を明示する。** 影マップは1フレームに1回、最初にそれを使う描画で作られる。影のカメラが既定（layer 0 だけ）のままだと、
   three はその時点のカメラの layers を写すので、覗くパス（共通＋裏）が先に走ると表の層の物が影を落とさなくなる。
   `light.shadow.camera.layers.enable(<表の層>)` のように、影を落とす層を必ず指定する。（S-05 のレビューで発見）
@@ -158,5 +161,6 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
   変えるので、どのシーンでも起きうる。ガラスは `createGlass()` で作るか、手で作った透過の材質を `followBackdropResize()`（`src/core/glass/backdrop.ts`）
-  に通す。ノードの有無はシェーダを組むときに決まるので、最初に描く前に通す。three を上げたら S-12 の最小の再現で確かめ、直っていれば外す。
+  に通す。ノードの有無はシェーダを組むときに決まるので、最初に描く前に通す。three の開発版（2026-10-21）でもまだ起きる。three を上げたら
+  `node tools/three-repro/run.mjs`（S-12 の最小の再現）で確かめ、直っていれば外す。
 

@@ -1,0 +1,11 @@
+body {
+	margin: 0px;
+}
+
+#info {
+	position: absolute;
+	top: 8px;
+	left: 8px;
+	color: #fff;
+	font: 13px/1.4 monospace;
+}
