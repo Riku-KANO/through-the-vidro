@@ -414,7 +414,9 @@ slices:
 
   - id: S-18
     title: AudioContext をひとつに — 読み込み画面の「はじめる」で始めた音のエンジンを UI とゲームで共有する
-    status: todo
+    status: integrated
+    branch: slice/S-18-one-audio-context
+    accepted: レビュー2巡で P1・P2 なし（2026-10-21）
     depends: [S-16]
     requirements:
       - UI/UX設計 > 画面ごとの設計（読み込み：操作があるまで音を鳴らせない）
@@ -461,4 +463,21 @@ slices:
       - 仕上げのある場面（試作部屋、負荷シーン）を WebGL2 で垂直同期なし（約600fps）で回すと出る `beginQuery：a query is already active` を、まず再現する手順として記録する
       - 読み出しの間隔をフレーム数ではなく、プールに溜まった量（またはパスの数）に合わせるなどして、垂直同期なしでも warning が出ないようにする。60fps のセンサー（scenes.spec.ts）と動的解像度の e2e は緑のまま
       - 144・240fps 相当で溢れないことを、フレームの上限を固定した計測か計算で確かめ、記録する
+
+  - id: S-21
+    title: 音まわりの小さな整理 — エンジンの作り方と出来事の名前付けを1か所に
+    status: todo
+    depends: [S-16, S-18]
+    paths:
+      - src/audio/engine.ts（新規。createVidroEngine(context, room)）
+      - src/ui/audio-gate.ts
+      - src/game/prologue/sound.ts
+      - src/game/prologue/events.ts
+      - src/game/prologue/room.ts（probe の出来事の名前を events.ts の関数に替えるだけ）
+      - src/scenes/audio-lab.scene.ts（エンジンの作り方を替えるだけ）
+      - process/slices/S-21.md
+    acceptance:
+      - このゲームの AudioEngine の作り方（部屋・音量の初期値・残響への送り・コンテキスト）が src/audio の1つの関数にまとまり、AudioGate・試作部屋の直接モード・audio-lab がそれを使う（S-18 の提案3）
+      - 出来事の名前（pickup:<from>、shake:<reason> など）を events.ts の1つの関数にまとめ、room.ts の probe と sound.ts が使う（S-16 の提案4）
+      - 振る舞いは変えない。S-09・S-16・S-18 の e2e と単体テストが緑のまま
 
