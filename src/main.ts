@@ -97,7 +97,7 @@ export interface VidroDebug {
   /**
    * Materials of the current scene that need followBackdropResize() (S-14, src/dev/backdrop-risks.ts): those of
    * sandbox.scene (the first of the roots listed) and of every root the scene has drawn or compiled since it was
-   * created.
+   * created; and, per root, how many materials read the backdrop (roots[i].backdropReaders, S-15).
    */
   backdropRisks(): BackdropReport;
 }

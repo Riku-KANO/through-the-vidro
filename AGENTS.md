@@ -52,7 +52,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **ノードのない透過の材質のセンサー（S-14）**: `tests/e2e/backdrop-risks.spec.ts` が全シーンを `?debug=1` で開き、起動の約1秒後と5秒後に
   `window.__vidroDebug.backdropRisks()`（`src/dev/backdrop-risks.ts`、判定は core の `missesBackdropResize`）を呼んで、シーンと、シーンが描いた・
   コンパイルした根の全材質を調べる。1つでもあれば落ちる。既定は WebGPU だけ（`BACKENDS` で WebGL2 も）。限界: 描いた後にノードを足した材質は安全と
-  判定する（見逃す）、5秒までに描きもコンパイルもしない世界は見えない、既定のスイッチで開いたときに玉の中の世界を見ていることは確かめていない（S-15）。
+  判定する（見逃す）、5秒までに描きもコンパイルもしない世界は見えない。home-dive と prologue-proto では、先頭（sandbox.scene）以外の
+  場面に透過を読む材質（core の `readsBackdrop`、安全なものも含む）があることで、玉の中の世界を見ていると判断する（`roots` の根ごとの
+  `backdropReaders`、S-15）。世界でない場面が透過を持つと偽の緑、世界から透過がなくなると偽の赤になる。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲

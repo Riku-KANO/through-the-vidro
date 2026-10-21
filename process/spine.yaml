@@ -348,7 +348,9 @@ slices:
 
   - id: S-15
     title: 透過の材質のセンサーで、玉の中の世界を見ていることを確かめる
-    status: todo
+    status: integrated
+    branch: slice/S-15-backdrop-readers
+    accepted: レビュー1巡で P1・P2 なし（P3 4件は反映済み）。条件3は記録の変異を e2e、同じ変異を移したものを単体テストで確かめる読み替え（2026-10-21）
     depends: [S-14]
     paths:
       - src/dev/backdrop-risks.ts
