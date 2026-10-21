@@ -24,6 +24,16 @@ export type RoomEvent = { type: 'dropTouched' } | { type: 'dropTaken' };
 
 export type PrologueEvent = OrbEvent | RoomEvent;
 
+/**
+ * An event's name in the probes' logs (the room's event log, the sound's played / refused cues; S-21): its type,
+ * with where a pickup came from and why a shake refused — 'pickup:bench', 'shake:peek', 'dropTaken'.
+ */
+export function eventName(event: PrologueEvent): string {
+  if (event.type === 'pickup') return `pickup:${event.from}`;
+  if (event.type === 'shake') return `shake:${event.reason}`;
+  return event.type;
+}
+
 export type Listener<E> = (event: E) => void;
 
 /** Minimal synchronous event bus. */

@@ -1,11 +1,11 @@
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import * as THREE from 'three/webgpu';
+import { createVidroEngine } from '../audio/engine';
 import { strikeGlass, VIDRO_GLASS } from '../audio/glass-tuning';
-import { VIDRO_REVERB_SEND, VIDRO_VOLUMES } from '../audio/levels';
 import { designPopen, type PopenKind, playPopen } from '../audio/popen';
 import { VIDRO_ROOMS, type VidroRoomId } from '../audio/rooms';
 import { glassPitch } from '../audio/tuning';
-import { AudioEngine, type Emitter, type Vec3 } from '../core/audio/engine';
+import type { AudioEngine, Emitter, Vec3 } from '../core/audio/engine';
 import { designGlassVoice, type GlassStrength, scheduleGlassVoice } from '../core/audio/glass';
 import { VOLUME_CHANNELS, type VolumeChannel } from '../core/audio/mix';
 import { mixdown, renderOffline } from '../core/audio/offline';
@@ -77,18 +77,6 @@ declare global {
   interface Window {
     __vidroAudioLab?: { render(spec: RenderSpec): Promise<RenderResult> };
   }
-}
-
-/** Engine with the game's mixer and starting room. */
-function vidroEngine(
-  extra: { context?: BaseAudioContext; maxVoicesPerEmitter?: number } = {},
-): Promise<AudioEngine> {
-  return AudioEngine.create({
-    room: VIDRO_ROOMS.workshop,
-    volumes: VIDRO_VOLUMES,
-    reverbSend: VIDRO_REVERB_SEND,
-    ...extra,
-  });
 }
 
 const CUT_AT = 0.2;
@@ -192,7 +180,7 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     const buf = await renderOffline(
       { duration: spec.duration ?? 1.2, sampleRate, channels: 2 },
       async (ctx) => {
-        const engine = await vidroEngine({ context: ctx });
+        const engine = await createVidroEngine(ctx, VIDRO_ROOMS.workshop);
         for (const ch of VOLUME_CHANNELS) {
           const v = spec.volumes[ch];
           if (v !== undefined) engine.setVolume(ch, v);
@@ -212,7 +200,7 @@ async function renderForSensor(spec: RenderSpec): Promise<RenderResult> {
     // A low glass (A3) rings on one emitter; at CUT_AT it is stolen or the whole mix is faded.
     const held: { engine?: AudioEngine; at?: number } = {};
     const buf = await renderOffline({ duration: 0.6, sampleRate, channels: 2 }, async (ctx) => {
-      const engine = await vidroEngine({ context: ctx, maxVoicesPerEmitter: 1 });
+      const engine = await createVidroEngine(ctx, VIDRO_ROOMS.workshop, { maxVoicesPerEmitter: 1 });
       const emitter = engine.createEmitter('sfx', { x: 0, y: 0, z: -2 });
       strikeGlass(engine, 0.4, 'tap', { emitter, seed: 3 });
       void ctx.suspend(CUT_AT).then(() => {
@@ -290,7 +278,8 @@ const PANEL =
   `font:18px/1.5 ${FONT};text-shadow:0 1px 2px rgba(10,20,35,0.45);`;
 
 const create: SceneFactory = async ({ renderer, overlay, canvas }) => {
-  const engine = await vidroEngine();
+  // made before any gesture (a lab opened alone): the engine makes its own context and keeps it suspended until then
+  const engine = await createVidroEngine(undefined, VIDRO_ROOMS.workshop);
   engine.bindUnlockGestures(window);
 
   // ---------- 3D: pre-dawn blue lab, a brass rail with five glass spheres ----------

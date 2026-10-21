@@ -1,6 +1,6 @@
-import { VIDRO_REVERB_SEND, VIDRO_VOLUMES } from '../audio/levels';
+import { createVidroEngine } from '../audio/engine';
 import { VIDRO_ROOMS } from '../audio/rooms';
-import { AudioEngine } from '../core/audio/engine';
+import type { AudioEngine } from '../core/audio/engine';
 import { fadeAndStop, type PlannedSource } from '../core/audio/glass';
 import { VOLUME_CHANNELS, type VolumeChannel } from '../core/audio/mix';
 import type { RoomPreset } from '../core/audio/reverb';
@@ -27,7 +27,7 @@ export interface AudioGateOptions {
   gestureTarget?: EventTarget;
   /** Makes the AudioContext inside the press. Default: `new AudioContext()` (unit tests pass a stand-in). */
   makeContext?: () => AudioContext;
-  /** Builds the engine on that context. Default: AudioEngine.create with the game's mixer (src/audio/levels.ts). */
+  /** Builds the engine on that context. Default: the game's engine (src/audio/engine.ts). */
   makeEngine?: (context: AudioContext, room: RoomPreset) => Promise<AudioEngine>;
   /**
    * Where an error thrown by a `whenReady` user goes when the engine is handed over later (one handed it at once gets
@@ -49,9 +49,6 @@ export interface AudioGateProbe {
   readonly room: string | null;
   readonly volumes: Record<VolumeChannel, number> | null;
 }
-
-const vidroEngine = (context: AudioContext, room: RoomPreset): Promise<AudioEngine> =>
-  AudioEngine.create({ room, volumes: VIDRO_VOLUMES, reverbSend: VIDRO_REVERB_SEND, context });
 
 /** The stand-in pings' partials: a sine with an inharmonic partial (ratio, level). */
 const PING_PARTIALS = [
@@ -187,7 +184,7 @@ export class AudioGate {
     // ask to start now, synchronously inside the press (browsers that only honour resume() there); the engine
     // asks again once it is made
     if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
-    const make = this.opts.makeEngine ?? vidroEngine;
+    const make = this.opts.makeEngine ?? createVidroEngine;
     this.making = make(ctx, this.room).then(
       (engine) => {
         if (this.disposed) {

@@ -15,7 +15,7 @@ import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import type { Autopilot } from './autopilot';
 import { createDivePath } from './dive-path';
-import { EventBus, type PrologueEvent } from './events';
+import { EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
   BRIDGE,
@@ -327,8 +327,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   probe.orb = session.orbPlace;
   probe.bridgeSegments = footing.segments.length;
   const offEvents = session.events.on((e) => {
-    const name = e.type === 'pickup' ? `pickup:${e.from}` : e.type === 'shake' ? `shake:${e.reason}` : e.type;
-    probe.events.push(name);
+    probe.events.push(eventName(e));
     if (probe.events.length > MAX_EVENTS) probe.events.shift();
     if (e.type === 'dropTaken') arrivalGlow = DROP_ARRIVAL_GLOW_SECONDS;
     events.emit(e);
