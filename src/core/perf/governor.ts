@@ -1,5 +1,12 @@
 import type { QualityLevel } from '../quality';
-import { DynamicResolution, type ResumeWatch } from './dynamic-resolution';
+import {
+  DynamicResolution,
+  RESPONSE_MIN,
+  RESPONSE_MISSES,
+  RESPONSE_STEPS,
+  RESUME_RISE,
+  type ResumeWatch,
+} from './dynamic-resolution';
 import {
   fitsFrameBudget,
   fitsHeadroom,
@@ -8,6 +15,7 @@ import {
   recommendQuality,
   stepLevel,
 } from './quality-select';
+import { RollingWindow } from './rolling';
 
 /**
  * Runtime performance governor: automatic quality selection, its verification, and dynamic resolution.
@@ -31,11 +39,13 @@ import {
  *   of the session), or when lowering the resolution did not lower it (S-08: under vsync at light load the span did
  *   not follow the pixel count; the GPU clocking down and work outside the GPU are both possible causes).
  *   `dynresStopReason` says which.
- * - After the second kind of stop it watches for a new load (S-11): once the GPU time at the preset scale holds 30%
- *   above where it stopped (dynamic-resolution.ts, ResumeWatch), a fresh controller takes over and judges the
- *   response again. At most DYNRES_MAX_RESUMES times per session, so a load that never follows the resolution
- *   cannot make it go back and forth; each stop also sets a new baseline, so going back to a load already judged
- *   does not resume either.
+ * - After the second kind of stop it watches for a new load (S-11): once the GPU time at the preset scale holds
+ *   RESUME_RISE and its swing above where it stopped (dynamic-resolution.ts, ResumeWatch), a fresh controller takes
+ *   over and judges the response again. A resume is wasted when that controller stops again without any verdict
+ *   having found a response; after DYNRES_MAX_WASTED_RESUMES of them it stays off for the session, so a load that
+ *   never follows the resolution cannot make it go back and forth. Resumes that helped do not count (S-13: before,
+ *   every resume counted, and swings that resumed it wrongly used up the session). Each stop also sets a new
+ *   baseline, so going back to a load already judged does not resume either.
  */
 export type GovernorAction =
   | { kind: 'scale'; scale: number }
@@ -75,45 +85,8 @@ const IMPLAUSIBLE_FACTOR = 1.1;
 const IMPLAUSIBLE_CHECKS = 3;
 
 const ms2 = (v: number) => v.toFixed(2);
+const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-/** Fixed-size rolling window with an allocation-free median. */
-class Rolling {
-  private readonly values: Float64Array;
-  private readonly scratch: Float64Array;
-  private len = 0;
-  private idx = 0;
-  constructor(size: number) {
-    this.values = new Float64Array(size);
-    this.scratch = new Float64Array(size);
-  }
-  get full(): boolean {
-    return this.len === this.values.length;
-  }
-  mean(): number {
-    let sum = 0;
-    for (let i = 0; i < this.len; i++) sum += this.values[i] ?? 0;
-    return this.len ? sum / this.len : 0;
-  }
-  push(v: number): void {
-    this.values[this.idx] = v;
-    this.idx = (this.idx + 1) % this.values.length;
-    this.len = Math.min(this.len + 1, this.values.length);
-  }
-  median(): number {
-    const n = this.len;
-    for (let i = 0; i < n; i++) this.scratch[i] = this.values[i] ?? 0;
-    for (let i = 1; i < n; i++) {
-      const v = this.scratch[i] ?? 0;
-      let j = i - 1;
-      while (j >= 0 && (this.scratch[j] ?? 0) > v) {
-        this.scratch[j + 1] = this.scratch[j] ?? 0;
-        j--;
-      }
-      this.scratch[j + 1] = v;
-    }
-    return this.scratch[n >> 1] ?? 0;
-  }
-}
 /**
  * Floor of dynamic resolution. Not in the design doc: chosen so glass edges and text stay readable at 1080p.
  * Revisit with the M1 UI.
@@ -121,10 +94,11 @@ class Rolling {
 export const DYNRES_MIN_FRACTION = 0.6;
 export const DYNRES_MIN_SCALE = 0.5;
 /**
- * Resumes of dynamic resolution per session (S-11). The acceptance criteria give 3 as the example; the staircase in
- * governor.test.ts shows what it bounds: a load that rises 30% at a time and never follows the resolution.
+ * Wasted resumes of dynamic resolution per session (S-11, S-13: only resumes that did not help count). The acceptance
+ * criteria give 3 as the example; the staircase in governor.test.ts shows what it bounds: a load that rises 40% at a
+ * time and never follows the resolution.
  */
-export const DYNRES_MAX_RESUMES = 3;
+export const DYNRES_MAX_WASTED_RESUMES = 3;
 
 export class PerfGovernor {
   level: QualityLevel;
@@ -140,11 +114,12 @@ export class PerfGovernor {
   dynresStopReason: string | null = null;
   /** Why it resumed the last time (null when it never did). */
   dynresResumeReason: string | null = null;
-  /** How many times it stopped and resumed this session. */
+  /** How many times it stopped and resumed this session, and how many of the resumes were wasted (see the header). */
   dynresStops = 0;
   dynresResumes = 0;
-  private readonly recentFrames = new Rolling(30);
-  private readonly recentGpu = new Rolling(8);
+  dynresWastedResumes = 0;
+  private readonly recentFrames = new RollingWindow(30);
+  private readonly recentGpu = new RollingWindow(8);
   private implausible = 0;
   private phaseTime = 0;
   private frameSamples: number[] = [];
@@ -157,6 +132,8 @@ export class PerfGovernor {
   private dynres: DynamicResolution | null;
   /** Set while dynamic resolution is stopped and may resume on a new load. */
   private resumeWatch: ResumeWatch | null = null;
+  /** The running controller was started by a resume (it is wasted if it stops without a response). */
+  private resumed = false;
   /** Dynamic resolution was stopped: go back to the preset scale on the next frame. */
   private restoreScale = false;
 
@@ -195,7 +172,7 @@ export class PerfGovernor {
     if (this.phase !== 'switching') return;
     this.level = this.previousLevel;
     this.scale = presetScale(this.level);
-    if (this.dynres) this.dynres = this.makeDynres();
+    this.restartDynres();
     this.verified = false;
     this.enter('steady');
     this.bump();
@@ -276,12 +253,16 @@ export class PerfGovernor {
     if (!this.dynres) return null;
     const next = this.dynres.update(ms, sampleDt);
     if (this.dynres.unresponsive) {
-      const reason = 'GPU time did not follow the resolution (three steps down lowered it by less than 10%)';
-      const watch = this.dynresResumes < DYNRES_MAX_RESUMES ? this.dynres.resumeWatch() : null;
+      if (this.resumed && !this.dynres.responded) this.dynresWastedResumes++;
+      const watch = this.dynresWastedResumes < DYNRES_MAX_WASTED_RESUMES ? this.dynres.resumeWatch() : null;
+      const why = this.dynres.stoppedAtFloor
+        ? `the steps down to the floor lowered it by less than ${pct(RESPONSE_MIN)} per ${RESPONSE_STEPS} steps`
+        : `${RESPONSE_STEPS} steps down lowered it by less than ${pct(RESPONSE_MIN)}, ${RESPONSE_MISSES} times in a row`;
       this.stopDynres(
-        watch
-          ? `${reason}; resumes on a new load (GPU time held 30% above where it stopped)`
-          : `${reason}; resumed ${this.dynresResumes} times already, off for the session`,
+        `GPU time did not follow the resolution (${why}); ` +
+          (watch
+            ? `resumes on a new load (GPU time held ${pct(RESUME_RISE - 1)} and its swing above where it stopped)`
+            : `resumed ${this.dynresResumes} times, ${this.dynresWastedResumes} of them in vain, off for the session`),
       );
       this.resumeWatch = watch;
       return null;
@@ -330,18 +311,34 @@ export class PerfGovernor {
   private resumeDynres(watch: ResumeWatch): void {
     this.resumeWatch = null;
     this.dynres = this.makeDynres();
+    this.resumed = true;
     this.dynresResumes++;
     this.dynresStopReason = null;
     this.dynresResumeReason =
-      `GPU time rose to ${ms2(watch.smoothedMs)} ms, 30% or more above the ${ms2(watch.baselineMs)} ms it stopped at ` +
-      `(resume ${this.dynresResumes} of ${DYNRES_MAX_RESUMES})`;
+      `GPU time rose to ${ms2(watch.smoothedMs)} ms, above the ${ms2(watch.thresholdMs)} ms it resumes at ` +
+      `(${pct(RESUME_RISE - 1)} and the swing above the ${ms2(watch.baselineMs)} ms it stopped at; resume ` +
+      `${this.dynresResumes}, ${this.dynresWastedResumes} of ${DYNRES_MAX_WASTED_RESUMES} wasted so far)`;
+  }
+
+  /**
+   * A preset change: a running controller starts over at the new preset's scale, and so does a stopped one that was
+   * watching for a new load, since the level it stopped at was measured at the old scale. Off for the session stays
+   * off. (Today presets change only before steady, where dynamic resolution never ran; this keeps the states
+   * consistent if that changes.)
+   */
+  private restartDynres(): void {
+    if (!this.dynres && !this.resumeWatch) return;
+    this.resumeWatch = null;
+    this.resumed = false;
+    this.dynres = this.makeDynres();
+    this.dynresStopReason = null;
   }
 
   private switchTo(level: QualityLevel, reason: string): GovernorAction {
     this.previousLevel = this.level;
     this.level = level;
     this.scale = presetScale(level);
-    if (this.dynres) this.dynres = this.makeDynres();
+    this.restartDynres();
     this.enter('switching');
     this.bump();
     return { kind: 'quality', level, reason };

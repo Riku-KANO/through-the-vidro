@@ -3,6 +3,39 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 未リリース（S-13 動的解像度の揺れへの強さ）
+
+版番号（`VERSION`）は統合のときに親が決める。
+
+- `perf/dynamic-resolution.ts`:
+  - 手応えの検査（`requireResponse`）は、手応えなし（3段で直近5サンプルの中央値が1割下がらない）が **2回続いてから** 止める
+    （`RESPONSE_MISSES`）。以前は1回で止めていた。反応しない負荷では止まるまでに1段（シミュレーションで1〜2秒）多くかかる
+  - **下限に着いたときにも1回判定する**。下限では次の段がないので、その段の列の全体（最初の段の直前から下限まで）で、3段あたり1割の
+    割合で下がったかを見る。足りなければその1回で止める。止めた理由（`stoppedAtFloor`）を残す
+  - `responded`: 判定のどれかが手応えありだったか（governor が「無駄だった再開」を数えるのに使う）
+  - `ResumeWatch`: 止めた水準を「止めた時点の EMA・止めた時点の直近5サンプルの中央値・止めた直後15サンプルの中央値」の**真ん中**に
+    した（以前は EMA と止めた直後の中央値の低い方で、揺れのある負荷では低めに偏って揺れで再開した）。再開の閾値に**揺れ幅**を入れた:
+    `max(水準 × 1.3, 水準 × 揺れ × 1.1, 目標の8割)`。揺れは15サンプルの「90パーセンタイル ÷ 中央値」を、上側の四分位から対数正規として
+    読んだ値（`(p75 ÷ 中央値)^(z90 ÷ z75)`。実機の span は1サンプルだけ3〜10倍に跳ねることがあり、15個に2個あれば90パーセンタイルそのものに
+    なるため）。止める直前と直後で取った小さい方を使う（直後の窓に新しい重さが入ったとき、止める前の段で負荷が下がっていたときに、
+    片方だけが膨らむため）
+  - 定数 `RESPONSE_STEPS`・`RESPONSE_MIN`・`RESPONSE_MISSES`・`RESUME_RISE`・`RESUME_SWING_MARGIN` を export（理由の文字列を組み立てるため）
+  - 中央値の窓を `perf/rolling.ts` の `RollingWindow` に置き換えた（振る舞いは同じ）
+- `perf/governor.ts`:
+  - **再開の上限に数えるのは「無駄だった再開」だけ**（再開した制御が手応えの判定に一度も通らずに再び止まった）。定数を
+    `DYNRES_MAX_RESUMES` から `DYNRES_MAX_WASTED_RESUMES`（3）に改名。`dynresWastedResumes` を追加（`dynresResumes` は全部の回数のまま）
+  - 止めた・再開した理由の文字列を定数から組み立てる（以前は「30%」「three steps」「10%」を直に書いていた）。下限で止めたときは
+    「the steps down to the floor ...」、上限に達したときは「resumed N times, W of them in vain, off for the session」
+  - 品質の切り替え（`switchTo`・`sceneFailed`）で、止まって見張っている状態なら見張りを捨てて新しい制御で始める（今は steady より前にしか
+    切り替えないので起きない。状態の食い違いをなくすため）
+  - 内部の `Rolling` を `perf/rolling.ts` の `RollingWindow` に置き換えた（振る舞いは同じ）
+- `perf/rolling.ts`（新規）: 直近 N サンプルの窓。確保なしの `median`・`quantile`（`bench.ts` の `percentile` と同じ順位）・`mean`
+- `perf/load-sim.ts`（新規、試験用。アプリからは使わない）: governor をアプリと同じ取り方（8フレームごと・2フレーム遅れ・垂直同期）で
+  動かす `driveLikeApp`、種を固定した対数正規 AR(1) の揺れ `logNormalAr1`、1フレームだけ長くなる跳ね `spikes`、`vsyncFrame`。
+  単体テストと `scripts/sim/` が共有する
+- 案2で使うときは、`PerfGovernor` の使い方は変わらない。`DYNRES_MAX_RESUMES` を参照していたら `DYNRES_MAX_WASTED_RESUMES` に直す。
+  プローブに無駄だった再開の回数を出すならアプリ側で `dynresWastedResumes` を写す
+
 ## 0.5.0 — 2026-10-21（S-11 動的解像度の止めっぱなしの解消、WebGL2 のタイムスタンプの読み出し、警告も数えるセンサー）
 
 - `perf/dynamic-resolution.ts`:

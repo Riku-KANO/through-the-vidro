@@ -99,12 +99,14 @@ describe('DynamicResolution with requireResponse (S-08)', () => {
     expect(dr.scale).toBeLessThan(0.7);
   });
 
-  it('gives up after three steps down that do not lower the smoothed GPU time by a tenth', () => {
+  it('gives up when steps down do not lower the GPU time by a tenth over three steps, twice in a row', () => {
     // E.g. the GPU clocks down as the load drops, or the frame is bound by work that does not scale with pixels.
+    // The first verdict comes before the fourth step (0.70 → 0.65), the second before the fifth (S-13: one miss is
+    // not enough, so it takes one step more than in S-08, where it stopped at 0.70).
     const dr = new DynamicResolution({ min: 0.5, max: 0.85, requireResponse: true });
     run(dr, TARGET * 1.5, 20);
     expect(dr.unresponsive).toBe(true);
-    expect(dr.scale).toBe(0.7);
+    expect(dr.scale).toBe(0.65);
     expect(run(dr, TARGET * 3, 10)).toBe(0);
   });
 
@@ -159,5 +161,42 @@ describe('DynamicResolution with requireResponse (S-08)', () => {
     let i = 0;
     run(noisy, () => 20 + ((i++ * 7919) % 11) - 5, 20); // 15–25 ms, deterministic
     expect(noisy.unresponsive).toBe(true);
+  });
+});
+
+describe('DynamicResolution: response check under swings (S-13)', () => {
+  /** Steps down so far, counted from the scale (0.05 per step from max). */
+  const stepsFrom = (max: number, scale: number) => Math.round((max - scale) / 0.05);
+
+  it('one verdict without a response does not stop it: a swing right before the fourth step down', () => {
+    // A load that follows the pixels, 40% heavier while at 0.70 (a swing of the span): the verdict before the fourth
+    // step sees 0.70 vs 0.85 as 0.95× instead of 0.68×, a miss; the next one (0.65 vs 0.80) passes.
+    const dr = new DynamicResolution({ min: 0.51, max: 0.85, requireResponse: true });
+    const base = pixelBound(TARGET * 2);
+    run(dr, (s) => base(s) * (stepsFrom(0.85, s) === 3 ? 1.4 : 1), 20);
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.responded).toBe(true);
+    expect(dr.scale).toBeLessThan(0.6);
+  });
+
+  it('judges once at the floor: a load that does not follow, with fewer steps than two verdicts need', () => {
+    // low preset: 0.67 → 0.62 → 0.57 → 0.52 → 0.50. The only verdict before the floor misses once; S-08 stopped there
+    // at 0.52. Now it takes the last step and judges the run at the floor.
+    const dr = new DynamicResolution({ min: 0.5, max: 0.67, requireResponse: true });
+    run(dr, TARGET * 1.5, 20);
+    expect(dr.unresponsive).toBe(true);
+    expect(dr.stoppedAtFloor).toBe(true);
+    expect(dr.scale).toBe(0.5);
+  });
+
+  it('at the floor, judges the whole run: a cost with a fixed part that fell by a quarter keeps the floor', () => {
+    // 18 ms fixed + 10 ms that follows the pixels: 28 ms at 0.85, 21.6 ms at the floor (0.51). Every verdict on the
+    // way passes (−10.5% to −11.5% over three steps); the last three steps alone lowered it by only 9.4%, but the
+    // seven steps of the run by 23%, more than a tenth per three steps (21.8%). Going back to the preset would
+    // give up all of it.
+    const dr = new DynamicResolution({ min: 0.51, max: 0.85, requireResponse: true });
+    run(dr, (s) => 18 + 10 * (s / 0.85) ** 2, 30);
+    expect(dr.unresponsive).toBe(false);
+    expect(dr.scale).toBe(0.51);
   });
 });
