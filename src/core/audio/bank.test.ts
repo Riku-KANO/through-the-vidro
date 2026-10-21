@@ -209,6 +209,31 @@ describe('stopping a load', () => {
   });
 });
 
+describe('stopping a load of recordings', () => {
+  it('hands the signal to the download, and a download stopped by it is not reported as missing', async () => {
+    const ctx = new FakeCtx();
+    const stop = new AbortController();
+    const seen: (AbortSignal | undefined)[] = [];
+    const errors: string[] = [];
+    const bank = await loadBank(
+      asCtx(ctx),
+      [recording('far', 'a.ogg', 'a.m4a'), recording('next', 'b.ogg')],
+      {
+        signal: stop.signal,
+        fetchBytes: async (_url, signal) => {
+          seen.push(signal);
+          stop.abort();
+          throw new DOMException('aborted', 'AbortError');
+        },
+        onError: (id) => errors.push(id),
+      },
+    );
+    expect(seen).toEqual([stop.signal]);
+    expect(bank).toEqual([null, null]);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe('playing a buffer (one-shot and loop)', () => {
   it('a one-shot starts at its time, at its rate and gain, and ends when the buffer has played', () => {
     const ctx = new FakeCtx();

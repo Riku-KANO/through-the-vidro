@@ -424,7 +424,6 @@ export class AmbiencePlayer {
     }
   }
 
-  /** Stops (at once) and lets go of its own nodes; the inputs are the emitters' owner's. */
   /**
    * Leaving: a quick fade (≈ 20 ms to -60 dB) and the wind stops, then its own nodes are let go of once the fade has
    * run (at once if the context is not running). The inputs are the emitters' owner's.

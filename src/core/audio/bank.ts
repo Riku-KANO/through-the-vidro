@@ -37,20 +37,23 @@ export function recording(id: string, ...urls: string[]): SoundSource {
 }
 
 export interface BankLoadOptions {
-  /** Reads a file (default: fetch). */
-  fetchBytes?: (url: string) => Promise<ArrayBuffer>;
+  /** Reads a file (default: fetch, given the signal so leaving stops a download too). */
+  fetchBytes?: (url: string, signal?: AbortSignal) => Promise<ArrayBuffer>;
   /** Awaited before each source so a long bank does not hold the main thread (default: a macrotask). */
   pause?: () => Promise<void>;
   /** Told about each source that could not be had (default: console.error, which the sensors count). */
   onError?: (id: string, error: unknown) => void;
-  /** Stops loading: the sources not yet begun are left null, and nothing more is reported. */
+  /**
+   * Stops loading: the sources not yet begun are left null, a file being read is let go of (its fetch is aborted), and
+   * nothing more is reported.
+   */
   signal?: AbortSignal;
 }
 
 const nextTask = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function fetchBytesDefault(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url);
+async function fetchBytesDefault(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.arrayBuffer();
 }
@@ -75,9 +78,13 @@ export async function loadBank(
       out.push(
         source.kind === 'synth'
           ? rendered(ctx, source.render, source.sampleRate ?? ctx.sampleRate)
-          : await decoded(ctx, source.urls, fetchBytes),
+          : await decoded(ctx, source.urls, fetchBytes, opts.signal),
       );
     } catch (e) {
+      if (opts.signal?.aborted) {
+        out.push(null);
+        continue;
+      }
       onError(source.id, e);
       out.push(null);
     }
@@ -99,12 +106,14 @@ function rendered(
 async function decoded(
   ctx: BaseAudioContext,
   urls: readonly string[],
-  fetchBytes: (url: string) => Promise<ArrayBuffer>,
+  fetchBytes: (url: string, signal?: AbortSignal) => Promise<ArrayBuffer>,
+  signal?: AbortSignal,
 ): Promise<AudioBuffer> {
   let last: unknown = new Error('no files');
   for (const url of urls) {
+    if (signal?.aborted) break;
     try {
-      return await ctx.decodeAudioData(await fetchBytes(url));
+      return await ctx.decodeAudioData(await fetchBytes(url, signal));
     } catch (e) {
       last = e;
     }

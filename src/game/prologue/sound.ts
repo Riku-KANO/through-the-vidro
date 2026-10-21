@@ -424,16 +424,17 @@ export interface FootstepEntry {
   distance: number;
 }
 
+/** The footsteps. Every footfall since `since` is answered once: count + refused + skipped + missing = footfalls - since. */
 export interface FootstepsProbe {
   /** The steps' sounds are loaded and the feet's emitter placed. */
   ready: boolean;
-  /**
-   * Footfalls answered: steps that sounded, that the engine refused, footfalls that fell in a frame that had already
-   * stepped, and steps on a floor none of whose sounds could be loaded.
-   */
+  /** Steps that sounded. */
   count: number;
+  /** Steps the engine refused (audio not running). */
   refused: number;
+  /** Footfalls folded into a step of the same frame (a long frame that held two). */
   skipped: number;
+  /** Steps on a floor none of whose sounds could be loaded (silent). */
   missing: number;
   /** The room's footfall count when the steps began to answer it (earlier footfalls are never played). */
   since: number | null;

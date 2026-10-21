@@ -677,7 +677,10 @@ for (const backend of backends) {
     await page.locator('[data-ui="loading-start"]').click();
     await waitSound(page, "s.state === 'running' && s.ambience.ready", 15_000);
     await waitHome(page, "p.screen === 'home' && p.transition === null");
-    // on the home screen the engine is running, but the workshop is not here yet
+    // on the home screen the engine is running, but the workshop is not here yet. The probe's ears are put in the first
+    // time its levels are read (src/audio/ambience.ts levels()): read once to put them in, then give them a while to
+    // hear (a window is ~43 ms) before the reading that counts
+    await sound(page);
     await page.waitForTimeout(1_500);
     let s = await sound(page);
     expect(s.ambience.playing, 'no workshop wind on the home screen').toBe(false);
