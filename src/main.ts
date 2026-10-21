@@ -16,6 +16,7 @@ import { type Backend, createRenderer } from './core/renderer';
 import type { SandboxScene, SceneModule } from './core/scene';
 import type { BackdropReport } from './dev/backdrop-risks';
 import { type StatsExtras, StatsOverlay } from './dev/stats';
+import { PassTimestampDrain } from './dev/timestamp-drain';
 import { loadScene, sceneNames } from './scenes/registry';
 
 /**
@@ -196,11 +197,19 @@ async function main(): Promise<void> {
   probe.gpuTiming = gpuTiming;
   probe.gpuSource = gpuSource;
   probe.gpuTimingTrusted = gpuTimingTrusted;
-  // three's per-pass timestamps cost a query pair per pass and a readback every 1024 passes (inside render()).
+  // three's per-pass timestamps cost a query pair per pass and a readback; left unread, three resets its full pool
+  // (1024 passes) inside render(), which passDrain below prevents by reading from out here.
   // Where the span drives decisions they are only a bench reference, so they run only while a bench records.
   // Set before the scene is created: a pass descriptor cached while they are on keeps its timestampWrites.
   const backendTiming = renderer.backend as { trackTimestamp?: boolean };
   backendTiming.trackTimestamp = gpuTiming && params.gpuPasses && gpuSource === 'passes';
+  // Which frames write them and when they are read out (S-20): on WebGL2 none are written while a readback is in
+  // flight, so three's pool cannot fill however fast the frames come (src/dev/timestamp-drain.ts).
+  const passDrain = new PassTimestampDrain({
+    pauseWhileReading: backend === 'webgl2',
+    tracking: backendTiming.trackTimestamp,
+    renderCalls: renderer.info.render.calls,
+  });
 
   const mod: SceneModule = await loadScene(params.scene);
   let overlay: HTMLDivElement | null = null;
@@ -336,7 +345,6 @@ async function main(): Promise<void> {
   const benchSpan: number[] = [];
   const benchCpu: number[] = [];
   let benchRecording = false;
-  let gpuInFlight = false;
   let gpuEpoch = 0;
   let spanEpoch = 0;
   const feedGovernor = (ms: number, epoch: number): void => {
@@ -345,13 +353,13 @@ async function main(): Promise<void> {
     governor.gpu(ms, epoch);
   };
   const onGpu = (ms: number | undefined): void => {
-    gpuInFlight = false;
+    passDrain.settled();
     if (typeof ms !== 'number' || ms <= 0) return;
     if (gpuSource === 'passes') feedGovernor(ms, gpuEpoch);
     if (benchRecording) benchGpu.push(ms);
   };
   const onGpuFailed = (): void => {
-    gpuInFlight = false;
+    passDrain.settled();
   };
   const onSpan = (ms: number | null): void => {
     if (ms === null) return;
@@ -401,7 +409,7 @@ async function main(): Promise<void> {
     const pollFrame = frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
     const sampleGpu = pollFrame && (governor.gpuReliable || stats.visible || benchRecording);
     const wantPasses = gpuTiming && params.gpuPasses && (gpuSource === 'passes' || benchRecording);
-    backendTiming.trackTimestamp = wantPasses;
+    backendTiming.trackTimestamp = passDrain.beginFrame(wantPasses, renderer.info.render.calls);
     // The span brackets only the rendering: CPU work in update() is not GPU time.
     const timingSpan = sampleGpu && (spanTimer?.begin() ?? false);
     if (timingSpan) spanEpoch = governor.epoch;
@@ -417,11 +425,13 @@ async function main(): Promise<void> {
     // Whenever three's per-pass timestamps are on, resolve them out here every few frames, also when nothing reads
     // the value (Apple WebGL2 without the overlay): three r186 resets a full pool (1024 render contexts) even inside
     // a nested render (a RenderPipeline pass, a shadow map), and the next beginQuery then warns "a query is already
-    // active" (S-06, S-11). Resolving empties the pool between frames.
-    if (pollFrame && wantPasses && !gpuInFlight) {
-      gpuInFlight = true;
+    // active" (S-06, S-11). Resolving empties the pool between frames; on WebGL2 also early when a quarter of it is
+    // in use, and no frame writes any while it is in flight (uncapped, a readback outlasted 50+ frames, S-20).
+    if (passDrain.endFrame(renderer.info.render.calls, pollFrame)) {
       gpuEpoch = governor.epoch;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
+      // After the call: three checks trackTimestamp when it is made (and warns if off), not later.
+      backendTiming.trackTimestamp = passDrain.writing;
     }
 
     counters.drawCalls = renderer.info.render.drawCalls;
