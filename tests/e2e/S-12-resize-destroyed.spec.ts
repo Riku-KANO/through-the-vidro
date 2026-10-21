@@ -8,10 +8,10 @@ import { expect, type Page, test } from '@playwright/test';
  * with "Destroyed texture [… RGBA16Float] used in a submit" (the whole submit is dropped).
  * Cause (three r186; process/slices/S-12.md, src/core/glass/backdrop.ts): a transmissive material without any node
  * property is not refreshed while nothing about its object changed (NodeMaterialObserver). The transmission
- * backdrop is recreated whenever the render size changes, so an object that was off screen while the size went
- * A → B → A comes back with bindings that still point at the destroyed backdrop. WebGL2 shows the same as
- * "bindTexture: attempt to use a deleted object". The delay is the camera path: on high the far glass comes back
- * into view after ~18 s, on mid the near glass after the camera loops (~34 s).
+ * backdrop is recreated at each new render size (by the glass still in view), so an object that was off screen
+ * while the size went A → B → A comes back with bindings that still point at the destroyed backdrop. WebGL2 shows
+ * the same as "bindTexture: attempt to use a deleted object". The delay is the camera path: on high the far glass
+ * comes back into view after ~18 s, on mid the near glass after the camera loops (~34 s).
  *
  * Each case waits long enough for those objects to come back. Console errors and warnings both count: WebGPU
  * validation errors arrive as both, and the frame is silently dropped.
@@ -77,8 +77,7 @@ const cases: Case[] = [
   },
   {
     name: 'stress high',
-    // gpuPasses=0: three's per-pass timer queries warn on WebGL2 for another reason (beginQuery, S-11's slice).
-    query: '?scene=stress&quality=high&dynres=0&debug=1&webgl=1&gpuPasses=0',
+    query: '?scene=stress&quality=high&dynres=0&debug=1&webgl=1',
     backend: 'webgl2',
     scales: [0.95, 1],
     waitMs: 27_000,

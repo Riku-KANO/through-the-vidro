@@ -4,12 +4,13 @@ import type * as THREE from 'three/webgpu';
 /**
  * Transmission and changes of the render size (three r186, S-12).
  *
- * Transmission reads a copy of what is behind the glass (the backdrop, a FramebufferTexture). three recreates that
- * texture whenever the size of the render target changes (dynamic resolution, a window resize), and an object keeps
- * pointing at the old one until three refreshes that object's bindings. For a material without any node property,
- * three r186 skips that refresh while the object's transform, material and target size are the same as when it was
- * last drawn (NodeMaterialObserver). The backdrop is not part of that comparison. So an object that was off screen
- * while the size went A → B → A is drawn with the destroyed backdrop once it is back in view:
+ * Transmission reads a copy of what is behind the glass (the backdrop, a FramebufferTexture shared by every
+ * transmissive material). three recreates that texture when a transmissive object is drawn into a render target of
+ * a new size (dynamic resolution, a window resize), and an object keeps pointing at the old one until three
+ * refreshes that object's bindings. For a material without any node property, three r186 skips that refresh while
+ * the object's transform, material and target size are the same as when it was last drawn (NodeMaterialObserver).
+ * The backdrop is not part of that comparison. So an object that was off screen while the size went A → B → A (and
+ * other glass in view recreated the backdrop) is drawn with the destroyed backdrop once it is back in view:
  *   - WebGPU: "Destroyed texture … used in a submit" every frame, and the whole submit is dropped
  *   - WebGL2: "bindTexture: attempt to use a deleted object"
  * three refreshes materials that have a node property on every frame, so every transmissive material gets one.

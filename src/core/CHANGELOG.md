@@ -3,6 +3,22 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 未リリース（S-12 描画倍率を変えた後の Destroyed texture）
+
+- `glass/backdrop.ts`（新規）: 透過の背景画像（three の FramebufferTexture）が描画の大きさの変更で作り直された後も、透過の材質の物が
+  古いテクスチャを使い続けないようにする。
+  - three r186 は、ノードを1つも持たない材質の物について、位置・材質・描画先の大きさが前回描いた時と同じなら、バインドの更新を飛ばす
+    （`NodeMaterialObserver`）。背景画像はこの比較に入っていない。そのため、大きさが A → B → A と変わる間に画面外にいた物が視界に戻ると、
+    破棄済みの背景画像のまま描かれる（WebGPU: `Destroyed texture … used in a submit` が毎フレーム出て、その submit が丸ごと捨てられる。
+    WebGL2: `bindTexture: attempt to use a deleted object`）。動的解像度が倍率を変えるので、プレイ中に起きる
+  - `followBackdropResize(material)`: ノードを持たない透過の材質に `thicknessNode = materialThickness`（three が null のときに使う値と同じ。
+    見た目は変わらない）を入れ、three が毎フレーム更新するようにする。最初に描く前に呼ぶ。ノードを持つ材質と透過でない材質には何もしない
+  - `missesBackdropResize(material)`（危ない材質の判定）、`readsBackdrop(material)`、`hasNodeProperty(material)`
+  - `createGlass()` の透過のガラスは、もともと `thicknessNode` を持つので対象外（単体テストで全種類・全品質・全配置を確かめている）。
+    手で `MeshPhysicalNodeMaterial({ transmission })` を作るときは `followBackdropResize()` を通すか、`createGlass()` を使う
+  - 代償: その材質の物は毎フレーム three のノードとバインドの更新を通る（`createGlass()` のガラスと同じ扱いになる）
+- 案2で使うときは、`glass/backdrop.ts` をコピーし、手で作った透過の材質に `followBackdropResize()` を通す
+
 ## 0.5.0 — 2026-10-21（S-11 動的解像度の止めっぱなしの解消、WebGL2 のタイムスタンプの読み出し、警告も数えるセンサー）
 
 - `perf/dynamic-resolution.ts`:

@@ -137,7 +137,7 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
   scene.add(floor);
 
   // Hand-made transmissive glass has no node, so three would skip refreshing it and keep a destroyed backdrop
-  // after a render scale change (S-12): followBackdropResize, like createGlass does for the game's glass.
+  // after a render scale change (S-12). followBackdropResize gives it one; createGlass's glass already has one.
   const nearGlass = track(
     followBackdropResize(
       new THREE.MeshPhysicalNodeMaterial({
