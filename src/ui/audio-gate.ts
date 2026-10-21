@@ -29,7 +29,10 @@ export interface AudioGateOptions {
   makeContext?: () => AudioContext;
   /** Builds the engine on that context. Default: AudioEngine.create with the game's mixer (src/audio/levels.ts). */
   makeEngine?: (context: AudioContext, room: RoomPreset) => Promise<AudioEngine>;
-  /** Where an error thrown by a `whenReady` user goes. Default: thrown again on its own (it shows as a page error). */
+  /**
+   * Where an error thrown by a `whenReady` user goes when the engine is handed over later (one handed it at once gets
+   * its own error back directly). Default: the browser's reportError (it shows as a page error).
+   */
   onError?: (err: unknown) => void;
 }
 
@@ -206,6 +209,7 @@ export class AudioGate {
           } catch (err) {
             // one failing user must not keep the engine from the others; the error still surfaces
             if (this.opts.onError) this.opts.onError(err);
+            else if (typeof reportError === 'function') reportError(err);
             else
               queueMicrotask(() => {
                 throw err;

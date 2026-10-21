@@ -119,12 +119,15 @@ function withSound(host: SandboxScene, sound: PrologueSound, audio: AudioGate): 
       sound.update();
     },
     dispose() {
-      sound.dispose();
+      // also when one of them fails to let go: the page's AudioContext must not outlive the scene
       try {
-        host.dispose();
+        sound.dispose();
       } finally {
-        // also when the host failed to let go: the page's AudioContext must not outlive the scene
-        audio.dispose();
+        try {
+          host.dispose();
+        } finally {
+          audio.dispose();
+        }
       }
     },
   };

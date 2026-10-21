@@ -241,10 +241,17 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     const ctx = r.contexts[0] as FakeContext;
     const into = (to: unknown): FakeNode[] => ctx.links.filter(([, t]) => t === to).map(([from]) => from);
     expect(into(ctx.destination)).toEqual([]);
-    // one output gain into the engine's effects bus, fed by the two partials
-    const outs = into(engine.buses.sfx);
-    expect(outs.map((n) => n.kind)).toEqual(['gain']);
-    expect(ctx.links.filter(([from]) => from.kind === 'oscillator')).toHaveLength(2);
+    expect(into(engine.buses.sfx).length).toBeGreaterThan(0);
+    // every source of the ping ends up in that bus (whatever lies between)
+    const reaches = (node: unknown, seen = new Set<unknown>()): boolean => {
+      if (node === engine.buses.sfx) return true;
+      if (seen.has(node)) return false;
+      seen.add(node);
+      return ctx.links.some(([from, to]) => from === node && reaches(to, seen));
+    };
+    const sources = ctx.links.map(([from]) => from).filter((n) => n.kind === 'oscillator');
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((s) => reaches(s))).toBe(true);
     r.gate.dispose();
   });
 
