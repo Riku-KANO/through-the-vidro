@@ -502,10 +502,12 @@ for (const backend of backends) {
     expect(prologue.maxTriangles).toBeLessThanOrEqual(BUDGET.triangles);
     expect(prologue.maxDrawCalls).toBeLessThanOrEqual(stress.maxDrawCalls);
     expect(prologue.maxTriangles).toBeLessThanOrEqual(stress.maxTriangles);
-    // GPU time within the same run: the frame span on WebGPU, three's pass sum otherwise (relative only)
-    const gpu = (b: Bench): number | null => b.gpuSpan?.p50Ms ?? b.gpu?.p50Ms ?? null;
-    const pg = gpu(prologue);
-    const sg = gpu(stress);
+    // GPU time within the same run, relative only, and only the frame span (AGENTS.md: GPU 時間は自前の span で測る).
+    // three's pass sum (WebGL2, no span) grows with the number of passes: after S-17's finishing it flipped against
+    // the stress scene on a busy machine (8.5 vs 6.9 ms; alone 5.4 vs 6.0). It stays in the JSON above, unchecked;
+    // the weight itself is judged with scripts/bench-headed.mjs (QUIET=1).
+    const pg = prologue.gpuSpan?.p50Ms ?? null;
+    const sg = stress.gpuSpan?.p50Ms ?? null;
     if (pg !== null && sg !== null) expect(pg).toBeLessThanOrEqual(sg);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
