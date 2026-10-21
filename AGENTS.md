@@ -68,7 +68,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/layers/` | 表と裏の層、実体化 | S-02 |
 | `src/game/` | 手の玉、プレイヤー、入力、ギミック、進行、セーブ | S-02, S-03 |
 | `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主） | S-04, S-18 |
-| `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）と、エンジンの作り方（`createVidroEngine`）。生成音楽は M1以降 | S-09, S-21 |
+| `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値。生成音楽は M1以降 | S-09, S-21, S-22 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/dev/` | 開発用ツール（性能表示など） | 共通 |
 | `process/` | ループの台帳（スパイン）とスライスごとの記録 | — |
@@ -136,6 +136,11 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
 - **ブルームの明るい所を取り出すパスを画面の半分より小さくするときは、1画素が代表するブロック全体を読む（S-17）。** 4点のバイリニアなど。
   1点だけだと、小さい光が視点の動きでブルームに出入りしてちらつく。
+- **音の素材は `src/core/audio/bank.ts` の `SoundSource` で持つ（S-22）。** 合成は `synth(id, render)`、録音は `recording(id, ...urls)`（形式違いを
+  使いたい順に）。どちらも `loadBank` で AudioBuffer になり、`scheduleBuffer`・`startLoop` の同じ道で鳴るので、合成の仮置きを録音に替えるのは表の
+  1行（手順は `process/slices/S-22.md`）。JS で合成する音は、読み込みで主スレッドを長く止めない（音源ごとに間を置く）。
+- **環境音はエンジンの声の割り当て（`startVoice`）を通さない（S-22）。** 持続する床は声にせず、風鈴・水滴は環境音の予定表が数を抑える。
+  環境音の系統の Emitter に入れるので、音量と部屋の残響には従う。試作部屋の音の観測口の `voicesStarted` は出来事の音の声の数、全体は `engineVoices`。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

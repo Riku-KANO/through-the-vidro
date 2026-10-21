@@ -500,7 +500,9 @@ slices:
 
   - id: S-22
     title: 工房の環境音と足音 — 風・遠くの風鈴・水滴と、床の材質ごとの足音（合成で仮置き、録音に差し替えられる形）
-    status: todo
+    status: integrated
+    branch: slice/S-22-ambient-footsteps
+    accepted: レビュー2巡で P1・P2 なし。core 0.8.0（bank.ts、dsp.ts）（2026-10-21）
     depends: [S-16, S-18, S-21]
     parallel: true
     requirements:
