@@ -1,5 +1,5 @@
 import type { QualityLevel } from '../quality';
-import { DynamicResolution } from './dynamic-resolution';
+import { DynamicResolution, type ResumeWatch } from './dynamic-resolution';
 import {
   fitsFrameBudget,
   fitsHeadroom,
@@ -27,10 +27,15 @@ import {
  * - GPU time is only trusted while it is physically plausible. Timestamp sums over many render passes overlap on
  *   some GPUs (Apple/Metal measured ~10× too high in S-05); GPU time above the real (mean) frame time means the
  *   readings are unusable, so the governor stops using them for the rest of the session.
- * - Dynamic resolution stops for the rest of the session, back at the preset scale, when the GPU time it acted on
- *   turned implausible, or when lowering the resolution did not lower it (S-08: under vsync at light load the span did
+ * - Dynamic resolution stops, back at the preset scale, when the GPU time it acted on turned implausible (for the rest
+ *   of the session), or when lowering the resolution did not lower it (S-08: under vsync at light load the span did
  *   not follow the pixel count; the GPU clocking down and work outside the GPU are both possible causes).
  *   `dynresStopReason` says which.
+ * - After the second kind of stop it watches for a new load (S-11): once the GPU time at the preset scale holds 30%
+ *   above where it stopped (dynamic-resolution.ts, ResumeWatch), a fresh controller takes over and judges the
+ *   response again. At most DYNRES_MAX_RESUMES times per session, so a load that never follows the resolution
+ *   cannot make it go back and forth; each stop also sets a new baseline, so going back to a load already judged
+ *   does not resume either.
  */
 export type GovernorAction =
   | { kind: 'scale'; scale: number }
@@ -68,6 +73,8 @@ const SETTLE_FRAMES = 4;
  */
 const IMPLAUSIBLE_FACTOR = 1.1;
 const IMPLAUSIBLE_CHECKS = 3;
+
+const ms2 = (v: number) => v.toFixed(2);
 
 /** Fixed-size rolling window with an allocation-free median. */
 class Rolling {
@@ -113,6 +120,11 @@ class Rolling {
  */
 export const DYNRES_MIN_FRACTION = 0.6;
 export const DYNRES_MIN_SCALE = 0.5;
+/**
+ * Resumes of dynamic resolution per session (S-11). The acceptance criteria give 3 as the example; the staircase in
+ * governor.test.ts shows what it bounds: a load that rises 30% at a time and never follows the resolution.
+ */
+export const DYNRES_MAX_RESUMES = 3;
 
 export class PerfGovernor {
   level: QualityLevel;
@@ -124,8 +136,13 @@ export class PerfGovernor {
   epoch = 0;
   /** False when the backend cannot time the GPU, or its readings turned out implausible. */
   gpuReliable: boolean;
-  /** Why dynamic resolution stopped during the session (null while it runs, or when it never ran). */
+  /** Why dynamic resolution is stopped (null while it runs, or when it never ran). */
   dynresStopReason: string | null = null;
+  /** Why it resumed the last time (null when it never did). */
+  dynresResumeReason: string | null = null;
+  /** How many times it stopped and resumed this session. */
+  dynresStops = 0;
+  dynresResumes = 0;
   private readonly recentFrames = new Rolling(30);
   private readonly recentGpu = new Rolling(8);
   private implausible = 0;
@@ -138,6 +155,8 @@ export class PerfGovernor {
   private steppedDown = false;
   private previousLevel: QualityLevel;
   private dynres: DynamicResolution | null;
+  /** Set while dynamic resolution is stopped and may resume on a new load. */
+  private resumeWatch: ResumeWatch | null = null;
   /** Dynamic resolution was stopped: go back to the preset scale on the next frame. */
   private restoreScale = false;
 
@@ -243,22 +262,39 @@ export class PerfGovernor {
   }
 
   private steady(dt: number): GovernorAction | null {
-    if (!this.dynres || !this.gpuReliable) return null;
+    if (!this.gpuReliable || (!this.dynres && !this.resumeWatch)) return null;
     this.gpuDt += dt;
     if (this.pendingGpu === null) return null;
-    const next = this.dynres.update(this.pendingGpu, this.gpuDt);
+    const ms = this.pendingGpu;
+    const sampleDt = this.gpuDt;
     this.pendingGpu = null;
     this.gpuDt = 0;
+    if (this.resumeWatch) {
+      if (this.resumeWatch.update(ms, sampleDt)) this.resumeDynres(this.resumeWatch);
+      return null;
+    }
+    if (!this.dynres) return null;
+    const next = this.dynres.update(ms, sampleDt);
     if (this.dynres.unresponsive) {
+      const reason = 'GPU time did not follow the resolution (three steps down lowered it by less than 10%)';
+      const watch = this.dynresResumes < DYNRES_MAX_RESUMES ? this.dynres.resumeWatch() : null;
       this.stopDynres(
-        'GPU time did not follow the resolution (three steps down lowered it by less than 10%)',
+        watch
+          ? `${reason}; resumes on a new load (GPU time held 30% above where it stopped)`
+          : `${reason}; resumed ${this.dynresResumes} times already, off for the session`,
       );
+      this.resumeWatch = watch;
       return null;
     }
     if (next === null) return null;
     this.scale = next;
     this.bump();
     return { kind: 'scale', scale: next };
+  }
+
+  /** While stopped and watching for a new load: the GPU time (ms) that would resume dynamic resolution. */
+  get dynresResumeAtMs(): number | null {
+    return this.resumeWatch?.thresholdMs ?? null;
   }
 
   /** Records a GPU reading and returns false once readings have proven implausible. */
@@ -270,7 +306,10 @@ export class PerfGovernor {
         this.gpuReliable = false;
         this.gpuSamples = [];
         this.pendingGpu = null;
-        if (this.dynres) this.stopDynres('GPU time turned implausible (above the mean frame time)');
+        if (this.dynres || this.resumeWatch) {
+          this.resumeWatch = null;
+          this.stopDynres('GPU time turned implausible (above the mean frame time), off for the session');
+        }
         return false;
       }
     } else {
@@ -279,11 +318,23 @@ export class PerfGovernor {
     return true;
   }
 
-  /** Stops dynamic resolution for the session; the next frame() returns to the preset scale if it differs. */
+  /** Stops dynamic resolution; the next frame() returns to the preset scale if it differs. */
   private stopDynres(reason: string): void {
+    if (this.dynres) this.dynresStops++;
     this.dynres = null;
     this.dynresStopReason = reason;
     this.restoreScale = true;
+  }
+
+  /** A new load after a stop: a fresh controller (at the preset scale, where the stop left it) judges it. */
+  private resumeDynres(watch: ResumeWatch): void {
+    this.resumeWatch = null;
+    this.dynres = this.makeDynres();
+    this.dynresResumes++;
+    this.dynresStopReason = null;
+    this.dynresResumeReason =
+      `GPU time rose to ${ms2(watch.smoothedMs)} ms, 30% or more above the ${ms2(watch.baselineMs)} ms it stopped at ` +
+      `(resume ${this.dynresResumes} of ${DYNRES_MAX_RESUMES})`;
   }
 
   private switchTo(level: QualityLevel, reason: string): GovernorAction {

@@ -60,8 +60,15 @@ export interface VidroProbe {
   gpuMs: number | null;
   /** Latest CPU time of render() (ms) on a frame whose GPU time was sampled; null before the first. */
   cpuRenderMs: number | null;
-  /** Why dynamic resolution stopped during the session (back at the preset scale); null while it runs. */
+  /** Why dynamic resolution is stopped (back at the preset scale); null while it runs. */
   dynresStopped: string | null;
+  /** While stopped and watching for a new load (S-11): the GPU time (ms) that would resume it; else null. */
+  dynresResumeAtMs: number | null;
+  /** Why it resumed the last time after a stop (a new load, S-11); null when it never did. */
+  dynresResumed: string | null;
+  /** How many times dynamic resolution stopped and resumed this session. */
+  dynresStops: number;
+  dynresResumes: number;
   /** Set once ?quality=auto has measured its window. */
   qualityDecision: QualityDecision | null;
   /** Whether the auto-selected preset held its headroom when re-measured (null = not verified). */
@@ -101,6 +108,10 @@ const probe: VidroProbe = {
   gpuMs: null,
   cpuRenderMs: null,
   dynresStopped: null,
+  dynresResumeAtMs: null,
+  dynresResumed: null,
+  dynresStops: 0,
+  dynresResumes: 0,
   qualityDecision: null,
   qualityVerified: null,
   errors: [],
@@ -340,8 +351,8 @@ async function main(): Promise<void> {
     if (switching || !current || probe.status === 'error') return;
 
     current.update(dt, t);
-    const sampleGpu =
-      (governor.gpuReliable || stats.visible || benchRecording) && frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
+    const pollFrame = frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
+    const sampleGpu = pollFrame && (governor.gpuReliable || stats.visible || benchRecording);
     const wantPasses = gpuTiming && params.gpuPasses && (gpuSource === 'passes' || benchRecording);
     backendTiming.trackTimestamp = wantPasses;
     // The span brackets only the rendering: CPU work in update() is not GPU time.
@@ -356,7 +367,11 @@ async function main(): Promise<void> {
     }
     if (timingSpan) spanTimer?.end()?.then(onSpan);
 
-    if (sampleGpu && wantPasses && !gpuInFlight) {
+    // Whenever three's per-pass timestamps are on, resolve them out here every few frames, also when nothing reads
+    // the value (Apple WebGL2 without the overlay): three r186 resets a full pool (1024 render contexts) even inside
+    // a nested render (a RenderPipeline pass, a shadow map), and the next beginQuery then warns "a query is already
+    // active" (S-06, S-11). Resolving empties the pool between frames.
+    if (pollFrame && wantPasses && !gpuInFlight) {
       gpuInFlight = true;
       gpuEpoch = governor.epoch;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
@@ -373,6 +388,10 @@ async function main(): Promise<void> {
     probe.qualityVerified = governor.verified;
     probe.gpuReliable = governor.gpuReliable;
     probe.dynresStopped = governor.dynresStopReason;
+    probe.dynresResumeAtMs = governor.dynresResumeAtMs;
+    probe.dynresResumed = governor.dynresResumeReason;
+    probe.dynresStops = governor.dynresStops;
+    probe.dynresResumes = governor.dynresResumes;
     if (governor.decision && !probe.qualityDecision) probe.qualityDecision = governor.decision;
     if (action?.kind === 'scale') applyScale(action.scale);
     if (action?.kind === 'quality') switchQuality(action.level);
