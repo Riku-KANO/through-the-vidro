@@ -23,6 +23,7 @@ import {
   clampPitch,
   combineModifiers,
   followEye,
+  footfallsBy,
   headBobOffset,
   type MovementModifier,
   type PlanarVelocity,
@@ -120,7 +121,7 @@ export class PlayerController {
   private groundY: number;
   private groundedValue = false;
   private eyeBase: number;
-  private walked = 0;
+  private distanceWalked = 0;
   private ledgesValue: Ledge[] = [];
   private readonly probe: GroundProbe;
 
@@ -226,6 +227,16 @@ export class PlayerController {
     return this.groundedValue;
   }
 
+  /** Metres walked on the ground so far (horizontal, only while standing; falls and teleports do not count). */
+  get walked(): number {
+    return this.distanceWalked;
+  }
+
+  /** Footfalls so far (S-22): it goes up by one the moment a foot comes down (motion.ts footfallsBy). */
+  get footfalls(): number {
+    return footfallsBy(this.distanceWalked);
+  }
+
   /** Edges currently slowing the body (for debugging and probes). */
   get ledges(): readonly Ledge[] {
     return this.ledgesValue;
@@ -235,7 +246,7 @@ export class PlayerController {
     const f = this.feet;
     const speed = Math.hypot(this.moved.x, this.moved.z);
     const bob = this.groundedValue
-      ? headBobOffset(this.walked, speed / WALK_SPEED, this.settingsValue.headBob)
+      ? headBobOffset(this.distanceWalked, speed / WALK_SPEED, this.settingsValue.headBob)
       : 0;
     return { x: f.x, y: this.eyeBase + bob, z: f.z };
   }
@@ -370,7 +381,7 @@ export class PlayerController {
     this.collider.setTranslation(next);
     const grounded = held || kccGrounded;
     if (grounded) this.vy = 0;
-    if (this.groundedValue && grounded) this.walked += Math.hypot(next.x - pos.x, next.z - pos.z);
+    if (this.groundedValue && grounded) this.distanceWalked += Math.hypot(next.x - pos.x, next.z - pos.z);
     this.groundedValue = grounded;
     // Inertia keeps the intended velocity, not the collided one: feeding collisions back makes the
     // capsule stall on every stair riser (it climbs the riser edge like a slope).

@@ -3,6 +3,22 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.8.0（案）— 2026-10-21（S-22 音の素材の口と、JS で音を合成する部品）
+
+版番号（`VERSION`）は統合のときに親が決める。足しただけで、既存の振る舞いは変えていない。
+
+- `audio/bank.ts`（新規）: **音源の口**。`SoundSource` は「合成」（`synth(id, render, { sampleRate? })`: 標本の配列を返す関数）か
+  「録音のファイル」（`recording(id, ...urls)`: 同じ音を形式違いで、使いたい順に）のどちらか。`loadBank(ctx, sources, opts)` が
+  どちらも `AudioBuffer` にする（合成は文脈の標本化周波数か、音源が求めた周波数で描く。ファイルは先頭から順に読み、最初に
+  デコードできたものを使う。どれも駄目なら null にして `onError`〈既定は console.error〉に知らせ、残りは読み続ける。音源ごとに
+  `pause`〈既定は setTimeout 0〉を挟み、主スレッドを長く止めない）。再生は `scheduleBuffer`（一度きり。ScheduledVoice を返すので
+  エンジンの `startVoice` に渡せる。`rate` と `gain`）と `startLoop`（ループ。開始位置の折り返し、フェードイン、`stop(at, fade)`）。
+  合成の仮置きを録音に替えるときは、ゲームの表の `synth(...)` を `recording(...)` に替えるだけでよい
+- `audio/dsp.ts`（新規、純粋）: JS で標本を作る部品。`Biquad`（RBJ の low/high/band-pass、1標本ずつ、鳴らしながら係数を変えられる）、
+  `decayPerSample`、`peakOf`・`normalizePeak`、`addPartials`（減衰する正弦の和。回転で Math.sin を使わない）、`crossfadeLoop`
+  （等パワーで末尾を先頭に重ね、継ぎ目のないループにする）、`fadeEnds`
+- ゲームの規則（どの材質の足音か、風鈴の音、どこに置くか）は持たない（このゲームは `src/audio/footsteps.ts`・`ambience.ts`）
+
 ## 0.7.0 — 2026-10-21（S-13 動的解像度の揺れへの強さ）
 
 版番号（`VERSION`）は統合のときに親が決める。
