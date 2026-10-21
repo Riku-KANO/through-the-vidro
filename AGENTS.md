@@ -88,7 +88,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - 数値は設計書の値をそのまま定数にし、出典の節名をコメントに書く（例: 実体化半径4m、覗く遷移0.25秒、歩行1.4m/s）。
 - 単体テストは振る舞いを書く。実装の細部を固定するテストは書かない。
 - **画面と違う大きさの RenderTarget に透過（transmission）の材質を描かない。** WebGPU 経路（r186）では、そのフレームで背景用のテクスチャが
-  途中で破棄され、「Destroyed texture used in a submit」が毎フレーム出て描画が捨てられる（WebGL2 では出ない）。覗くパスの裏の層や
+  途中で破棄され、「Destroyed texture used in a submit」が毎フレーム出て描画が捨てられる（WebGL2 では出ない。ただし S-05 当時は warning を数えていなかったので要再確認、S-12 参照）。覗くパスの裏の層や
   ホームの玉の中の縮図は、iridescence・透明度・発光など透過以外で表現し、玉の屈折は `texture(rt, screenUV + 屈折オフセット)` の自前合成で描く。
   画面と同じ大きさの描画先（`pass()` による仕上げのパスなど）に透過を描くのは問題ない。（S-05 で発見、2026-10-21）
 - **影のカメラの layers を明示する。** 影マップは1フレームに1回、最初にそれを使う描画で作られる。影のカメラが既定（layer 0 だけ）のままだと、
@@ -109,4 +109,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **Web Audio の音の経路は、鳴り終わるまで JS から参照する（S-09）。** 参照の切れた ConvolverNode とその下流の GainNode は、
   鳴っている途中でも GC で切り離され、残響の尾が切れる。AudioContext は作った直後に止め、最初のユーザー操作で再開する
   （ヘッドレスの Chromium は操作なしで running から始まる）。
+- **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
+  描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
+  「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
+  変えるので、どのシーンでも起きうる。ガラスは `createGlass()` で作るか、手で作った透過の材質を `followBackdropResize()`（`src/core/glass/backdrop.ts`）
+  に通す。ノードの有無はシェーダを組むときに決まるので、最初に描く前に通す。three を上げたら S-12 の最小の再現で確かめ、直っていれば外す。
 

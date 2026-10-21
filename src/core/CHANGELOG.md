@@ -3,7 +3,7 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
-## 未リリース（S-12 描画倍率を変えた後の Destroyed texture）
+## 0.6.0 — 2026-10-21（S-12 描画倍率を変えた後の Destroyed texture）
 
 - `glass/backdrop.ts`（新規）: 透過の背景画像（three の FramebufferTexture）が描画の大きさの変更で作り直された後も、透過の材質の物が
   古いテクスチャを使い続けないようにする。
@@ -17,7 +17,7 @@
   - `missesBackdropResize(material)`（危ない材質の判定）、`readsBackdrop(material)`（three の `useTransmission` があればそれ）、`hasNodeProperty(material)`
   - 単体テストは three の `NodeMaterialObserver.needsRefresh()` を直接呼んで、回避策を通した材質が毎フレーム `FULL` になることを確かめる。
     three を上げたらこのテストと、`process/slices/S-12.md` の最小の再現で回避策がまだ要るかを確かめる
-  - `createGlass()` の透過のガラスは、もともと `thicknessNode` を持つので対象外（単体テストで全種類・全品質・全配置を確かめている）。
+  - `createGlass()` の透過のガラスは、もともと `thicknessNode` を持つので対象外（単体テストで全種類・全品質・全配置・全役割を確かめている）。
     手で `MeshPhysicalNodeMaterial({ transmission })` を作るときは `followBackdropResize()` を通すか、`createGlass()` を使う
   - 代償: その材質の物は毎フレーム three のノードとバインドの更新を通る（`createGlass()` のガラスと同じ扱いになる）
 - 案2で使うときは、`glass/backdrop.ts` をコピーし、手で作った透過の材質に `followBackdropResize()` を通す

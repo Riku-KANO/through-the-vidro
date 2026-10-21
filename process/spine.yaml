@@ -285,7 +285,8 @@ slices:
 
   - id: S-12
     title: 高品質で描画倍率を変えた後に出る Destroyed texture の調査と修正
-    status: todo
+    status: integrated
+    branch: slice/S-12-resize-destroyed
     depends: [S-05]
     requirements:
       - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
@@ -319,4 +320,22 @@ slices:
       - 再開の閾値に揺れ幅を入れる（例 max(1.3×基準, 止めた直後の90パーセンタイル×1.1, 目標の8割)）。上限に数えるのは「無駄だった再開」（再開した制御が手応えの検査に一度も通らずに再び止まった）だけにする
       - 揺れのシミュレーション（対数正規 AR(1) など）を scripts/sim/ にコードとして残し、誤停止・誤再開・止めっぱなしの割合を記録する。単体テストに、種ごとの割合で「比例する負荷は止めない」「比例しない負荷は止める」「下限での判定」「揺れでは再開しない」を足す
       - センサー（scenes.spec.ts）の既知の一覧を error と warning で1つにまとめ、正規表現の g/y フラグを禁じ、各項目の当たった回数を json に出す
+
+  - id: S-14
+    title: ノードのない透過の材質を見つけるセンサーと、残るシーンの修正
+    status: todo
+    depends: [S-12]
+    requirements:
+      - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
+    paths:
+      - src/main.ts（?debug=1 の __vidroDebug に判定の関数を出すだけ）
+      - tests/e2e/scenes.spec.ts
+      - src/scenes/hello.scene.ts
+      - src/scenes/audio-lab.scene.ts
+      - src/scenes/home-dive.scene.ts
+      - process/slices/S-14.md
+    acceptance:
+      - ?debug=1 の __vidroDebug に、今のシーンの全材質を core の missesBackdropResize で調べる関数（例 backdropRisks()）を出す（判定を二重に持たない）
+      - ブラウザセンサー（scenes.spec.ts）が、起動から約1秒後と窓の終わりに全シーンでこの関数を呼び、危ない材質があれば落ちる。限界（描いた後にノードを足した材質は見逃す）を記録する
+      - センサーを先に入れて hello・audio-lab・home-dive の器が赤になることを確かめてから、各シーンで followBackdropResize() を通して緑にする（赤の証跡を残す）
 

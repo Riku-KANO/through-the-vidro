@@ -11,7 +11,7 @@ import { expect, type Page, test } from '@playwright/test';
  * backdrop is recreated at each new render size (by the glass still in view), so an object that was off screen
  * while the size went A → B → A comes back with bindings that still point at the destroyed backdrop. WebGL2 shows
  * the same as "bindTexture: attempt to use a deleted object". The delay is the camera path: on high the far glass
- * comes back into view after ~18 s, on mid the near glass after the camera loops (~34 s).
+ * comes back into view after ~18 s, on mid the near glass after the camera loops (~36 s: 50 m / 1.4 m/s).
  *
  * Each case waits long enough for those objects to come back. Console errors and warnings both count: WebGPU
  * validation errors arrive as both, and the frame is silently dropped.
@@ -85,7 +85,7 @@ const cases: Case[] = [
     waitMs: 27_000,
   },
   {
-    // Not only high: the near glass is transmissive on every preset and comes back when the camera loops (~34 s).
+    // Not only high: the near glass is transmissive on every preset and comes back when the camera loops (~36 s).
     name: 'stress mid',
     query: '?scene=stress&quality=mid&dynres=0&debug=1',
     backend: 'webgpu',
@@ -108,6 +108,7 @@ for (const c of cases) {
     // Let every object of the starting view be drawn once at the starting size (bind groups created).
     await page.waitForTimeout(2_000);
     // Back to the very scale it started at, whatever the preset's scale is: A → B → C would not reproduce the bug.
+    // Relies on dynres=0: the governor does not know about setScale and would re-apply its own scale ± 0.05.
     const start = await page.evaluate(() => window.__vidro.renderScale);
     const scales = [Math.round((start - STEP_DOWN) * 100) / 100, start];
     for (const scale of scales) {
@@ -119,6 +120,9 @@ for (const c of cases) {
     }
     expect(await page.evaluate(() => window.__vidro.renderScale), `back at ${start}`).toBe(start);
     await page.waitForTimeout(c.waitMs);
+    expect(await page.evaluate(() => window.__vidro.renderScale), 'stayed at start while waiting').toBe(
+      start,
+    );
     expect(await page.evaluate(() => window.__vidro.status)).toBe('running');
     const destroyed = seen.filter((m) => DESTROYED.test(m.text));
     expect(summarize(destroyed), `destroyed textures used after ${scales.join(' → ')}`).toEqual([]);
