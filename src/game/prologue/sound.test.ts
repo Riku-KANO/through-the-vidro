@@ -5,7 +5,7 @@ import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
 import { EventBus, eventName, type PrologueEvent } from './events';
-import { BENCH_ORB, DROP, PEDESTAL_ORB } from './layout';
+import { BENCH_ORB, DROP, GATE, PEDESTAL_ORB, SPAWNS, WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
 import {
   answer,
   CueLog,
@@ -13,7 +13,10 @@ import {
   createPrologueSound,
   cueFor,
   cueName,
+  PROLOGUE_AMBIENCE,
+  type SoundBanks,
   type SoundCue,
+  type SoundOptions,
   type SoundRoom,
   sourcePoint,
 } from './sound';
@@ -175,10 +178,93 @@ class FakeContext {
   }
 }
 
+/** Just enough of a running AudioContext for the footsteps and the ambience to build their nodes on. */
+class FakeNode {
+  readonly outputs: unknown[] = [];
+  disconnected = 0;
+  connect(to: unknown): unknown {
+    this.outputs.push(to);
+    return to;
+  }
+  disconnect(): void {
+    this.disconnected++;
+  }
+}
+class FakeParam {
+  value = 1;
+  setValueAtTime(v: number): this {
+    this.value = v;
+    return this;
+  }
+  setTargetAtTime(): this {
+    return this;
+  }
+  cancelScheduledValues(): this {
+    return this;
+  }
+  linearRampToValueAtTime(): this {
+    return this;
+  }
+}
+class FakeSource extends FakeNode {
+  buffer: { tag: string; duration: number } | null = null;
+  loop = false;
+  readonly playbackRate = new FakeParam();
+  started: number[] | null = null;
+  stopped: number | null = null;
+  onended: (() => void) | null = null;
+  start(when: number, offset?: number): void {
+    this.started = offset === undefined ? [when] : [when, offset];
+  }
+  stop(when: number): void {
+    this.stopped = when;
+  }
+}
+class FakeAudioCtx {
+  readonly sampleRate = 48000;
+  state = 'running';
+  currentTime = 0;
+  readonly sources: FakeSource[] = [];
+  createGain(): object {
+    return Object.assign(new FakeNode(), { gain: new FakeParam() });
+  }
+  createBufferSource(): FakeSource {
+    const src = new FakeSource();
+    this.sources.push(src);
+    return src;
+  }
+  createAnalyser(): object {
+    return Object.assign(new FakeNode(), {
+      fftSize: 2048,
+      getFloatTimeDomainData: (out: Float32Array) => out.fill(0),
+    });
+  }
+  // what the po-pens and the glass build their voices from (src/core/audio/pop.ts, glass.ts)
+  createOscillator(): object {
+    return Object.assign(new FakeSource(), { frequency: new FakeParam() });
+  }
+  createBiquadFilter(): object {
+    return Object.assign(new FakeNode(), { type: 'lowpass', frequency: new FakeParam(), Q: new FakeParam() });
+  }
+  createBuffer(_channels: number, length: number): object {
+    const data = new Float32Array(length);
+    return { duration: length / this.sampleRate, getChannelData: () => data };
+  }
+}
+
+interface FakeEmitter {
+  bus: string;
+  position: { x: number; y: number; z: number };
+  disposed: boolean;
+  input: object;
+}
+
 class FakeEngine {
-  readonly ctx = { sampleRate: 48000, state: 'running' };
+  readonly ctx = new FakeAudioCtx();
   readonly started: number[] = [];
-  readonly emitters: { disposed: boolean }[] = [];
+  readonly emitters: FakeEmitter[] = [];
+  /** The emitter each started voice played on (null = a bus). */
+  readonly voiceEmitters: (FakeEmitter | null)[] = [];
   listener: { x: number; y: number; z: number } | null = null;
   disposed = 0;
   unlocks = 0;
@@ -190,12 +276,15 @@ class FakeEngine {
   setRoom(preset: { id: string }): void {
     this.roomId = preset.id;
   }
-  createEmitter(): Emitter {
-    const rec = { disposed: false };
+  createEmitter(bus = 'sfx', position = { x: 0, y: 0, z: 0 }): Emitter {
+    const input = { panningModel: 'HRTF' };
+    const rec: FakeEmitter = { bus, position: { ...position }, disposed: false, input };
     this.emitters.push(rec);
     return {
-      input: { panningModel: 'HRTF' } as unknown as AudioNode,
-      setPosition: () => {},
+      input: input as unknown as AudioNode,
+      setPosition: (p) => {
+        rec.position = { x: p.x, y: p.y, z: p.z };
+      },
       dispose: () => {
         rec.disposed = true;
       },
@@ -211,10 +300,23 @@ class FakeEngine {
     this.unlocks++;
     return Promise.resolve();
   }
+  now(): number {
+    return this.ctx.currentTime + 0.005;
+  }
   /** Voices the engine starts per request (a stand-in for a cue that would start more than one). */
   perCall = 1;
-  startVoice(): object {
+  startVoice(
+    spec?: { emitter?: Emitter },
+    schedule?: (ctx: BaseAudioContext, destination: AudioNode, when: number) => object,
+  ): object {
     for (let i = 0; i < this.perCall; i++) this.started.push(this.started.length);
+    const rec = this.emitters.find((e) => e.input === (spec?.emitter?.input as unknown)) ?? null;
+    this.voiceEmitters.push(rec);
+    schedule?.(
+      this.ctx as unknown as BaseAudioContext,
+      (spec?.emitter?.input ?? {}) as AudioNode,
+      this.now(),
+    );
     return { end: 1, fadeOut: () => {} };
   }
   snapshot(): object {
@@ -227,16 +329,30 @@ class FakeEngine {
 }
 
 /** A room with an event bus and a camera at the player's eye (1.6 m) looking down -z, the vidro in hand. */
-function fakeRoom(): SoundRoom & { events: EventBus<PrologueEvent> } {
+type FakeRoomProbe = SoundRoom['probe'];
+
+function fakeRoom(): SoundRoom & { events: EventBus<PrologueEvent>; probe: FakeRoomProbe } {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, 0);
   camera.updateMatrixWorld();
   return {
     events: new EventBus<PrologueEvent>(),
     camera,
-    probe: { orb: 'hand', peekAmount: 0, handPresence: 1, time: 0 },
+    probe: {
+      orb: 'hand',
+      peekAmount: 0,
+      handPresence: 1,
+      time: 0,
+      playing: true,
+      position: { x: 0, y: 0, z: 0 },
+      speed: 0,
+      footfalls: 0,
+    },
   };
 }
+
+/** Banks that never arrive: the S-16 / S-18 tests see only the cue emitters. */
+const noBanks: SoundOptions['loadBanks'] = () => new Promise<SoundBanks>(() => {});
 
 /** The wiring with stand-ins; `activation.isActive` plays the browser's user activation. */
 function rig() {
@@ -248,6 +364,7 @@ function rig() {
   const room = fakeRoom();
   const sound = createPrologueSound(room, {
     target,
+    loadBanks: noBanks,
     makeContext: () => {
       const c = new FakeContext();
       contexts.push(c);
@@ -381,6 +498,7 @@ function sharedRig() {
   const sound = createPrologueSound(room, {
     target,
     shared,
+    loadBanks: noBanks,
     makeContext: () => {
       const c = new FakeContext();
       contexts.push(c);
@@ -453,15 +571,16 @@ describe('the prologue sound on a shared engine (ホーム経由, S-18: one Audi
     r.sound.dispose();
   });
 
-  it('on its own engine, reports everything that engine started (only it plays there)', async () => {
+  it('on its own engine too, counts the voices for its cues; the engine’s whole count is engineVoices (S-22: the steps play there as well)', async () => {
     const r = rig();
     r.gesture();
     await r.settle();
     const engine = r.engines[0] as FakeEngine;
     engine.startVoice();
     r.room.events.emit({ type: 'peekStart' });
-    expect(r.sound.probe.voicesStarted).toBe(2);
+    expect(r.sound.probe.voicesStarted).toBe(1);
     expect(r.sound.probe.playedCount).toBe(1);
+    expect(r.sound.probe.engineVoices).toBe(2);
     r.sound.dispose();
   });
 
@@ -496,5 +615,275 @@ describe('the prologue sound on a shared engine (ホーム経由, S-18: one Audi
     late?.(early.engine as unknown as AudioEngine);
     expect(early.engine.emitters).toHaveLength(0);
     expect(early.sound.probe.state).toBe('closed');
+  });
+});
+
+/* ---------- S-22: footsteps and the workshop's ambience ---------- */
+
+const fakeBuffer = (tag: string, duration: number) => ({ tag, duration }) as unknown as AudioBuffer;
+const fakeBanks = (): SoundBanks => ({
+  footsteps: {
+    stone: Array.from({ length: 8 }, (_, v) => fakeBuffer(`stone${v}`, 0.3)),
+    frosted: Array.from({ length: 8 }, (_, v) => fakeBuffer(`frosted${v}`, 0.4)),
+    brass: Array.from({ length: 8 }, (_, v) => fakeBuffer(`brass${v}`, 0.4)),
+  },
+  ambience: {
+    wind: fakeBuffer('wind', 8),
+    chimes: Array.from({ length: 5 }, (_, v) => fakeBuffer(`chime${v}`, 2.8)),
+    drops: Array.from({ length: 8 }, (_, v) => fakeBuffer(`drop${v}`, 0.25)),
+  },
+});
+
+/** The room's sound with banks that arrive at once; `shared` plays it on an engine handed over (S-18). */
+function soundscapeRig(shared = false, banks: () => SoundBanks = fakeBanks) {
+  vi.stubGlobal('navigator', { userActivation: { isActive: true } });
+  const target = new EventTarget();
+  const room = fakeRoom();
+  room.probe.position = { x: SPAWNS.bench.feet[0], y: 0, z: SPAWNS.bench.feet[2] };
+  const engine = new FakeEngine();
+  const waiting = new Set<(e: AudioEngine) => void>();
+  const loads: (AbortSignal | undefined)[] = [];
+  const sound = createPrologueSound(room, {
+    target,
+    loadBanks: async (_ctx, signal) => {
+      loads.push(signal);
+      return banks();
+    },
+    makeContext: () => new FakeContext() as unknown as AudioContext,
+    makeEngine: async () => engine as unknown as AudioEngine,
+    ...(shared
+      ? {
+          shared: {
+            whenReady(ready: (e: AudioEngine) => void): () => void {
+              waiting.add(ready);
+              return () => waiting.delete(ready);
+            },
+          },
+        }
+      : {}),
+  });
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+  const begin = async (): Promise<void> => {
+    if (shared) for (const ready of [...waiting]) ready(engine as unknown as AudioEngine);
+    else target.dispatchEvent(new Event('pointerdown'));
+    await settle();
+    await settle();
+  };
+  /** One frame: the room moved the body (and counted its footfalls), then the sound follows. */
+  const frame = (dt = 1 / 60): void => {
+    room.probe.time += dt;
+    engine.ctx.currentTime += dt;
+    sound.update();
+  };
+  const stepTo = (x: number, z: number): void => {
+    room.probe.position = { x, y: 0, z };
+    room.probe.speed = 1.4;
+    room.probe.footfalls++;
+    frame();
+  };
+  return { room, engine, sound, begin, frame, stepTo, settle, loads };
+}
+
+const loops = (e: FakeEngine) => e.ctx.sources.filter((s) => s.loop);
+const tagOf = (src: FakeSource | undefined): string => src?.buffer?.tag ?? '';
+
+describe('footsteps in the room (S-22: 歩くと歩幅に合わせて足元から、床の材質ごとに)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('a footfall plays one step, from the feet, chosen for the floor under them', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    expect(r.sound.probe.footsteps.count).toBe(0);
+    const before = r.engine.started.length;
+
+    // in the workshop: frosted glass
+    r.stepTo(-1.4, -1.5);
+    expect(r.engine.started.length).toBe(before + 1);
+    const feet = r.engine.voiceEmitters.at(-1);
+    expect(feet?.bus, 'footsteps are ambience (設計書: 環境音の節)').toBe('ambience');
+    expect(feet?.position).toEqual({ x: -1.4, y: 0, z: -1.5 });
+    expect(tagOf(r.engine.ctx.sources.at(-1)).startsWith('frosted')).toBe(true);
+    // out on the way: stone
+    r.stepTo(0, -8);
+    expect(tagOf(r.engine.ctx.sources.at(-1)).startsWith('stone')).toBe(true);
+
+    const log = r.sound.probe.footsteps.log;
+    expect(log.map((e) => [e.material, e.zone])).toEqual([
+      ['frosted', 'workshop'],
+      ['stone', 'path'],
+    ]);
+    expect(log[0]?.x).toBe(-1.4);
+    expect(log[0]?.z).toBe(-1.5);
+    // the listener is the camera at 1.6 m, the feet below it
+    expect(log[0]?.distance).toBeGreaterThan(1.5);
+    expect(r.sound.probe.footsteps.count).toBe(2);
+    r.sound.dispose();
+  });
+
+  it('never plays the same step twice running on one floor', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    for (let i = 0; i < 60; i++) r.stepTo(0, -6 - i * 0.05);
+    const tags = r.engine.ctx.sources.filter((s) => !s.loop && tagOf(s).startsWith('stone')).map(tagOf);
+    expect(tags).toHaveLength(60);
+    for (let i = 1; i < tags.length; i++) expect(tags[i]).not.toBe(tags[i - 1]);
+    expect(new Set(tags).size).toBe(8);
+    r.sound.dispose();
+  });
+
+  it('footfalls from before the sound started are not played when it starts (溜めて後から鳴らさない)', async () => {
+    const r = soundscapeRig();
+    r.room.probe.footfalls = 5;
+    r.frame();
+    await r.begin();
+    r.frame();
+    r.frame();
+    expect(r.sound.probe.footsteps.count).toBe(0);
+    r.stepTo(-1.4, -1.5);
+    expect(r.sound.probe.footsteps.count).toBe(1);
+    r.sound.dispose();
+  });
+
+  it('a long frame that held two footfalls plays one step and counts the other as skipped', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    r.room.probe.footfalls += 2;
+    r.room.probe.position = { x: 0, y: 0, z: -8 };
+    r.frame();
+    const f = r.sound.probe.footsteps;
+    expect(f.count).toBe(1);
+    expect(f.skipped).toBe(1);
+    expect(f.count + f.refused + f.skipped + f.missing).toBe(r.room.probe.footfalls - (f.since ?? 0));
+    r.sound.dispose();
+  });
+
+  it('a floor none of whose sounds could be loaded stays silent, counted as missing (not as refused by the engine)', async () => {
+    const r = soundscapeRig(false, () => {
+      const b = fakeBanks();
+      return { ...b, footsteps: { ...b.footsteps, stone: b.footsteps.stone.map(() => null) } };
+    });
+    await r.begin();
+    r.frame();
+    const before = r.engine.started.length;
+    r.stepTo(0, -8);
+    expect(r.engine.started.length).toBe(before);
+    expect(r.sound.probe.footsteps.missing).toBe(1);
+    expect(r.sound.probe.footsteps.refused).toBe(0);
+    // the glass floor still sounds
+    r.stepTo(-1.4, -1.5);
+    expect(r.sound.probe.footsteps.count).toBe(1);
+    r.sound.dispose();
+  });
+
+  it('left while its sounds are still being made, it stops making them', async () => {
+    const r = soundscapeRig();
+    r.room.events.emit({ type: 'peekStart' });
+    r.sound.dispose();
+    expect(r.loads).toHaveLength(0);
+    const s = soundscapeRig();
+    await s.begin();
+    expect(s.loads).toHaveLength(1);
+    expect(s.loads[0]?.aborted).toBe(false);
+    s.sound.dispose();
+    expect(s.loads[0]?.aborted).toBe(true);
+  });
+
+  it('counts its steps on their own: the cue count stays the cues’ (S-16 / S-18 probes unchanged)', async () => {
+    const r = soundscapeRig(true);
+    await r.begin();
+    r.frame();
+    r.stepTo(-1.4, -1.5);
+    r.stepTo(-1.4, -2.2);
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.sound.probe.voicesStarted).toBe(1);
+    expect(r.sound.probe.playedCount).toBe(1);
+    expect(r.sound.probe.footsteps.voicesStarted).toBe(2);
+    expect(r.sound.probe.engineVoices).toBe(3);
+    r.sound.dispose();
+  });
+});
+
+describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立体的に)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('is placed in the room: wind at the dome’s gaps, the chimes far off beyond the gate, drops in a few places', () => {
+    const kinds = PROLOGUE_AMBIENCE.map((p) => p.kind);
+    expect(kinds.filter((k) => k === 'wind').length).toBeGreaterThanOrEqual(2);
+    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(1);
+    expect(kinds.filter((k) => k === 'drops').length).toBeGreaterThanOrEqual(3);
+    const top = WORKSHOP.sphereCenterY + WORKSHOP.radius;
+    const skylight = PROLOGUE_AMBIENCE.find((p) => p.id === 'wind:skylight');
+    const door = PROLOGUE_AMBIENCE.find((p) => p.id === 'wind:door');
+    expect(Math.hypot(skylight?.position[0] ?? 9, skylight?.position[2] ?? 9)).toBeLessThan(WORKSHOP.oculus);
+    expect(skylight?.position[1]).toBeGreaterThan(top - 0.5);
+    expect(Math.abs((door?.position[2] ?? 0) + WORKSHOP_FLOOR_RADIUS)).toBeLessThan(0.3);
+    const chimes = PROLOGUE_AMBIENCE.find((p) => p.kind === 'chimes');
+    expect(chimes?.position[2]).toBeLessThan(GATE.z - 3);
+    // 遠く: from the bench where the dive lands, the chimes are far away
+    const [bx, , bz] = SPAWNS.bench.feet;
+    expect(Math.hypot((chimes?.position[0] ?? 0) - bx, (chimes?.position[2] ?? 0) - bz)).toBeGreaterThan(20);
+    for (const p of PROLOGUE_AMBIENCE.filter((q) => q.kind === 'drops'))
+      expect(p.notes?.length).toBeGreaterThan(0);
+  });
+
+  it('waits for the room to be played, then starts: the wind’s loops on the ambience bus, from where they are placed', async () => {
+    const r = soundscapeRig(true);
+    r.room.probe.playing = false;
+    await r.begin();
+    r.frame();
+    // the home screen and the dive: the engine is there, the workshop is not yet
+    expect(r.sound.probe.ambience.ready).toBe(true);
+    expect(r.sound.probe.ambience.playing).toBe(false);
+    expect(loops(r.engine)).toHaveLength(0);
+    r.room.probe.playing = true;
+    r.frame();
+    expect(r.sound.probe.ambience.playing).toBe(true);
+    expect(loops(r.engine)).toHaveLength(PROLOGUE_AMBIENCE.filter((p) => p.kind === 'wind').length);
+    const ambient = r.engine.emitters.filter((e) => e.bus === 'ambience');
+    for (const place of PROLOGUE_AMBIENCE) {
+      const [x, y, z] = place.position;
+      expect(
+        ambient.some((e) => e.position.x === x && e.position.y === y && e.position.z === z),
+        place.id,
+      ).toBe(true);
+    }
+    // chimes and drops come in time; the cue probe does not count them
+    for (let i = 0; i < 60 * 30; i++) r.frame();
+    const plays = r.sound.probe.ambience.sources;
+    expect(plays.find((s) => s.kind === 'chimes')?.plays).toBeGreaterThan(0);
+    expect(plays.filter((s) => s.kind === 'drops').reduce((n, s) => n + s.plays, 0)).toBeGreaterThan(0);
+    expect(r.sound.probe.voicesStarted).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('nothing at all before the first gesture: no engine, no banks, no ambience', () => {
+    const r = soundscapeRig();
+    r.frame();
+    expect(r.sound.probe.ambience.ready).toBe(false);
+    expect(r.sound.probe.ambience.playing).toBe(false);
+    expect(r.engine.emitters).toHaveLength(0);
+    r.sound.dispose();
+  });
+
+  it('leaving stops the loops and lets go of every emitter it placed', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    expect(r.sound.probe.ambience.playing).toBe(true);
+    // the cue emitters (3), the feet (1) and the ambience's places
+    expect(r.sound.probe.emitters).toBe(4 + PROLOGUE_AMBIENCE.length);
+    r.sound.dispose();
+    await r.settle();
+    for (const l of loops(r.engine)) expect(l.stopped).not.toBeNull();
+    expect(r.engine.emitters.every((e) => e.disposed)).toBe(true);
+    expect(r.sound.probe.emitters).toBe(0);
+    expect(r.sound.probe.ambience.playing).toBe(false);
   });
 });

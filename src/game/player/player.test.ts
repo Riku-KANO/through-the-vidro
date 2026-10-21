@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { EYE_HEIGHT, PEEK_MODIFIER, SPRINT_SPEED, WALK_SPEED } from './constants';
+import { EYE_HEIGHT, FOOTSTEP_LENGTH, PEEK_MODIFIER, SPRINT_SPEED, WALK_SPEED } from './constants';
 import { LEDGE_DEFAULTS } from './ledge';
 import { createWorld, initPhysics } from './physics';
 import { PlayerController, type PlayerIntent } from './player';
@@ -372,5 +372,48 @@ describe('head bob setting (3D酔い対策)', () => {
       ys.push(player.eye.y);
     }
     expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(1e-3);
+  });
+});
+
+describe('footfalls (S-22: 足音は歩幅に合わせて)', () => {
+  it('counts the distance walked on the ground and a footfall at every stride of it', () => {
+    const world = floorWorld();
+    const player = new PlayerController(world, { feet: { x: 0, y: 0, z: 0 } });
+    run(player, world, still, 0.5);
+    expect(player.walked).toBe(0);
+    expect(player.footfalls).toBe(0);
+    run(player, world, forward, 3);
+    expect(player.walked).toBeGreaterThan(3.5);
+    expect(player.walked).toBeCloseTo(-player.feet.z, 1);
+    expect(player.footfalls).toBe(Math.floor(player.walked / FOOTSTEP_LENGTH + 0.5));
+    // standing still adds none
+    run(player, world, still, 1);
+    const resting = player.footfalls;
+    run(player, world, still, 1);
+    expect(player.footfalls).toBe(resting);
+  });
+
+  it('comes down half as often while peeking (移動50%)', () => {
+    const count = (peek: boolean): number => {
+      const world = floorWorld();
+      const player = new PlayerController(world, { feet: { x: 0, y: 0, z: 0 } });
+      if (peek) player.modifiers.set('peek', { ...PEEK_MODIFIER, weight: 1 });
+      run(player, world, forward, 6);
+      return player.footfalls;
+    };
+    const walking = count(false);
+    const peeking = count(true);
+    expect(walking).toBeGreaterThanOrEqual(11);
+    expect(peeking / walking).toBeGreaterThan(0.4);
+    expect(peeking / walking).toBeLessThan(0.6);
+  });
+
+  it('does not count a fall as walking', () => {
+    const world = floorWorld();
+    const player = new PlayerController(world, { feet: { x: 0, y: 3, z: 0 } });
+    run(player, world, still, 1.5);
+    expect(player.grounded).toBe(true);
+    expect(player.walked).toBeLessThan(0.01);
+    expect(player.footfalls).toBe(0);
   });
 });

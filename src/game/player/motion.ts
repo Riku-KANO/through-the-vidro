@@ -101,6 +101,19 @@ export function headBobOffset(distance: number, speedRatio: number, strength: nu
 }
 
 /**
+ * Footfalls by `distance` walked on the ground (S-22: 足音は歩幅に合わせて): one per stride, the first half a stride in —
+ * at every dip of the walking bob above, so the step heard and the step felt agree. Pure; the moment a foot comes down
+ * is when this count goes up.
+ * Stride: the design doc gives none. FOOTSTEP_LENGTH (0.7 m) is the walking speed 1.4 m/s (操作とカメラ > カメラ) at
+ * 2 steps a second, an ordinary cadence at that speed; peeking halves the speed (移動50%), so the steps come half as
+ * often, and Shift (2.2 m/s) makes them about 3 a second.
+ */
+export function footfallsBy(distance: number, stride: number = FOOTSTEP_LENGTH): number {
+  if (!(distance > 0) || !(stride > 0)) return 0;
+  return Math.floor(distance / stride + 0.5);
+}
+
+/**
  * Eye height follows the body with a short ease so automatic steps do not jolt the view,
  * but never trails further than EYE_MAX_LAG behind.
  */

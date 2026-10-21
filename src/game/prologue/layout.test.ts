@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FLOOR_MATERIALS } from '../../audio/footsteps';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
@@ -16,6 +17,8 @@ import {
   EDGE_Z,
   FACING_DEG,
   FAR,
+  FLOOR_ZONES,
+  floorAt,
   GATE,
   LIGHTHOUSE,
   lookDirection,
@@ -25,6 +28,7 @@ import {
   PEDESTAL_RADIUS,
   REACH,
   SPAWNS,
+  WORKSHOP_FLOOR_RADIUS,
 } from './layout';
 
 /** Level-design invariants of the prologue (パズル設計 > 原則, 空間の可読性と導線). */
@@ -140,3 +144,46 @@ describe('the bridge seen through the orb (体験の核 2: 行き止まりに見
     }
   });
 });
+
+describe('what each floor is made of (S-22: 足音は床の材質ごとに変える, as S-06 drew it)', () => {
+  it('the workshop floor is frosted glass, up to the edge of the drawn disc and through the door', () => {
+    expect(floorAt(...xz(SPAWNS.bench.feet))).toEqual({ zone: 'workshop', material: 'frosted' });
+    expect(floorAt(0, 0).material).toBe('frosted');
+    expect(floorAt(2.4, 1.5).material).toBe('frosted');
+    // the disc lies over the start of the way: inside the door it is still glass
+    expect(floorAt(0, -(WORKSHOP_FLOOR_RADIUS - 0.05)).material).toBe('frosted');
+  });
+
+  it('the one way and the far shore are 石畳; the bridge over the gap is frosted glass', () => {
+    expect(floorAt(0, -(WORKSHOP_FLOOR_RADIUS + 0.2))).toEqual({ zone: 'path', material: 'stone' });
+    expect(floorAt(...xz(SPAWNS.path.feet)).material).toBe('stone');
+    expect(floorAt(...xz(SPAWNS['dead-end'].feet)).material).toBe('stone');
+    expect(floorAt(...xz(PEDESTAL_BASE)).material).toBe('stone');
+    const mid = (EDGE_Z + FAR.maxZ) / 2;
+    expect(floorAt(0, mid)).toEqual({ zone: 'bridge', material: 'frosted' });
+    expect(floorAt(0.25, EDGE_Z - 0.2).material).toBe('frosted');
+    expect(floorAt(0, FAR.maxZ - 0.2)).toEqual({ zone: 'far', material: 'stone' });
+    expect(floorAt(...xz(SPAWNS.far.feet)).material).toBe('stone');
+  });
+
+  it('every spawn and every footing segment of the bridge stands on a named floor', () => {
+    for (const s of Object.values(SPAWNS)) expect(floorAt(...xz(s.feet)).zone).not.toBe('none');
+    for (const seg of bridgeFooting()) {
+      const z = (seg.min[2] + seg.max[2]) / 2;
+      expect(floorAt(0, z).zone).toBe('bridge');
+    }
+  });
+
+  it('names only materials that have footsteps, and never one that is not drawn underfoot (brass is not)', () => {
+    for (const z of FLOOR_ZONES) expect(FLOOR_MATERIALS).toContain(z.material);
+    expect(FLOOR_ZONES.map((z) => z.material)).not.toContain('brass');
+  });
+
+  it('somewhere it does not know (off every floor) still answers, with 石畳 — the town’s ground', () => {
+    expect(floorAt(30, 30)).toEqual({ zone: 'none', material: 'stone' });
+  });
+});
+
+function xz(p: Vec3): [number, number] {
+  return [p[0], p[2]];
+}

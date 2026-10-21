@@ -68,6 +68,9 @@ export interface RoomProbe {
   position: { x: number; y: number; z: number };
   grounded: boolean;
   speed: number;
+  /** Metres walked on the ground, and the footfalls in them (S-22: a footstep sounds when this goes up). */
+  walked: number;
+  footfalls: number;
   eyeHeight: number;
   yaw: number;
   pitch: number;
@@ -187,6 +190,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     position: { x: s.feet[0], y: s.feet[1], z: s.feet[2] },
     grounded: false,
     speed: 0,
+    walked: 0,
+    footfalls: 0,
     eyeHeight: EYE_HEIGHT,
     yaw: s.yaw,
     pitch: s.pitch,
@@ -515,6 +520,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     probe.position.z = body.fz;
     probe.grounded = player.grounded;
     probe.speed = Math.hypot(body.vx, body.vz);
+    probe.walked = player.walked;
+    probe.footfalls = player.footfalls;
     probe.eyeHeight = body.ey - body.fy;
     probe.yaw = player.yaw;
     probe.pitch = player.pitch;

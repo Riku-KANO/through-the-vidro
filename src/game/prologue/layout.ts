@@ -1,3 +1,4 @@
+import type { FloorMaterial } from '../../audio/footsteps';
 import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
 
 /**
@@ -119,6 +120,53 @@ export const LAMP_POST_RADIUS = 0.035;
 
 /** The town and the lighthouse across the valley (ルール5: 灯塔は街のどこからでも見える). */
 export const LIGHTHOUSE: Vec3 = [3, 0, -82];
+
+/**
+ * 床の材質 (S-22: 足音は床の材質ごとに変える — 石畳・曇りガラス・真鍮の格子), as S-06 drew and built the floors:
+ *  - the workshop's floor disc is frosted glass (room-art.ts createFrostedFloorMaterial; its walk collider has the same
+ *    radius). It lies over the start of the way, so inside the door it is still glass.
+ *  - the one way and the far shore are 石畳 (room-art.ts stoneMaterial; S-06: 一本道は縁の真鍮の線と石畳で読める).
+ *  - the back layer's bridge deck is frosted glass (room-art.ts deckMaterial: 歩く床は曇り、手すりだけ透明).
+ *  - 真鍮の格子 is drawn nowhere underfoot here (brass is only the frames, the lips, the gate and the lamp posts), so no
+ *    floor of this room is brass: what you hear is what you see (空間の可読性 4). A brass floor drawn later (S-24) adds
+ *    a line here.
+ * The first zone that holds a point decides; off every floor the answer is 石畳, the town's ground.
+ */
+export interface FloorZone {
+  readonly name: string;
+  readonly material: FloorMaterial;
+  /** A disc around the origin (the workshop) or a box on x and z. */
+  readonly radius?: number;
+  readonly box?: {
+    readonly minX: number;
+    readonly maxX: number;
+    readonly minZ: number;
+    readonly maxZ: number;
+  };
+}
+
+export const FLOOR_ZONES: readonly FloorZone[] = [
+  { name: 'workshop', material: 'frosted', radius: WORKSHOP_FLOOR_RADIUS + 0.05 },
+  { name: 'path', material: 'stone', box: PATH },
+  {
+    name: 'bridge',
+    material: 'frosted',
+    box: { minX: BRIDGE.min[0], maxX: BRIDGE.max[0], minZ: BRIDGE.min[2], maxZ: BRIDGE.max[2] },
+  },
+  { name: 'far', material: 'stone', box: FAR },
+];
+
+/** The floor under a point of the ground: its zone ('none' off every floor) and material. */
+export function floorAt(x: number, z: number): { zone: string; material: FloorMaterial } {
+  for (const f of FLOOR_ZONES) {
+    const inside =
+      f.radius !== undefined
+        ? Math.hypot(x, z) <= f.radius
+        : !!f.box && x >= f.box.minX && x <= f.box.maxX && z >= f.box.minZ && z <= f.box.maxZ;
+    if (inside) return { zone: f.name, material: f.material };
+  }
+  return { zone: 'none', material: 'stone' };
+}
 
 /** 仮: reach of 置く・拾う・調べる (S-02 used 2.5 m). */
 export const REACH = 2.5;

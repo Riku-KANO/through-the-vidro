@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EYE_HEIGHT,
+  FOOTSTEP_LENGTH,
   FOV_DEFAULT,
   FOV_MAX,
   FOV_MIN,
@@ -14,6 +15,7 @@ import {
   clampPitch,
   combineModifiers,
   followEye,
+  footfallsBy,
   headBobOffset,
   wishVelocity,
 } from './motion';
@@ -154,5 +156,43 @@ describe('followEye (段差で視点が跳ねない)', () => {
     for (let i = 0; i < 30; i++) eye = followEye(eye, 0.2, 1 / 60);
     expect(eye).toBeCloseTo(0.2, 2);
     expect(followEye(0, 2, 1 / 60)).toBeGreaterThan(2 - 0.36);
+  });
+});
+
+describe('footfallsBy (S-22: the moment a foot comes down, from the distance walked)', () => {
+  it('puts the first footfall half a stride in, then one every stride', () => {
+    const L = FOOTSTEP_LENGTH;
+    expect(footfallsBy(0)).toBe(0);
+    expect(footfallsBy(0.49 * L)).toBe(0);
+    expect(footfallsBy(0.51 * L)).toBe(1);
+    expect(footfallsBy(1.49 * L)).toBe(1);
+    expect(footfallsBy(1.51 * L)).toBe(2);
+    expect(footfallsBy(10.51 * L)).toBe(11);
+    // never counts backwards or from nothing
+    expect(footfallsBy(-1)).toBe(0);
+    expect(footfallsBy(Number.NaN)).toBe(0);
+  });
+
+  it('lands each footfall on a dip of the walking bob, so what is seen and what is heard agree', () => {
+    for (let n = 0; n < 6; n++) {
+      const at = (n + 0.5) * FOOTSTEP_LENGTH;
+      expect(footfallsBy(at + 1e-6) - footfallsBy(at - 1e-6)).toBe(1);
+      // the bob is at its lowest exactly there
+      expect(headBobOffset(at, 1, 1)).toBeCloseTo(headBobOffset(0.5 * FOOTSTEP_LENGTH, 1, 1), 9);
+      expect(headBobOffset(at, 1, 1)).toBeLessThan(headBobOffset(at - 0.1, 1, 1));
+      expect(headBobOffset(at, 1, 1)).toBeLessThan(headBobOffset(at + 0.1, 1, 1));
+    }
+  });
+
+  it('walks at 2 steps a second at 1.4 m/s, and at half that while peeking (移動50%)', () => {
+    const steps = (speed: number, seconds: number): number =>
+      footfallsBy(speed * seconds + 0.5 * FOOTSTEP_LENGTH - 1e-9);
+    expect(steps(WALK_SPEED, 10)).toBe(20);
+    expect(steps(WALK_SPEED * PEEK_MODIFIER.speedMultiplier, 10)).toBe(10);
+  });
+
+  it('takes the stride it is given', () => {
+    expect(footfallsBy(5, 1)).toBe(5);
+    expect(footfallsBy(5, 0)).toBe(0);
   });
 });
