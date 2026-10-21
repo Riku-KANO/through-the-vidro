@@ -13,8 +13,8 @@ import { expect, type Page, test } from '@playwright/test';
  *     next to a bright source. The drop seen from the dead end (5 m, not the target) is recorded, not checked: it is
  *     drawn about as bright as the dawn sky there and hardly bleeds (process/slices/S-17.md 判断待ち1)
  *   - while peeking, the image inside the orb keeps its contrast (bloom does not wash it out)
- *   - anti-aliasing touches only a small share of the pixels and lowers the frame's total variation (edges);
- *     mid (SMAA) runs more passes than low (FXAA)
+ *   - anti-aliasing touches only a small share of the pixels and lowers the frame's total variation (edges), at mid
+ *     (SMAA) and at low (FXAA)
  *   - layers-lab runs the same pipeline without errors, and its orb image keeps its contrast too
  * Screens → artifacts/screens/S-17/<backend>/<view>-<before|aa|after>.png (before/after the finishing, rest/peek),
  * numbers → artifacts/S-17/finishing-<backend>.json.
@@ -344,8 +344,9 @@ for (const backend of backends) {
       aa: probes[v].aa.drawCalls,
       after: probes[v].after.drawCalls,
     });
-    // low quality runs FXAA: fewer passes than SMAA
+    // low quality: FXAA instead of SMAA, the same view without and with it
     const lowDraws: Record<'before' | 'aa', number> = { before: 0, aa: 0 };
+    const lowShots = {} as Record<'before' | 'aa', Buffer>;
     for (const mode of ['before', 'aa'] as const) {
       await page.goto(`/?scene=prologue-proto&${VIEWS.rest}&dynres=0&quality=low${MODES[mode]}${webgl}`);
       await page.waitForFunction(
@@ -355,9 +356,10 @@ for (const backend of backends) {
         { timeout: 60_000 },
       );
       await page.waitForTimeout(500);
-      await page.screenshot({ path: join(shotDir, `rest-low-${mode}.png`) });
+      lowShots[mode] = await page.screenshot({ path: join(shotDir, `rest-low-${mode}.png`) });
       lowDraws[mode] = (await roomProbe(page)).drawCalls;
     }
+    const aaLow = await compare(page, lowShots.before, lowShots.aa, null);
     const report = {
       vidro,
       dropNear,
@@ -368,6 +370,7 @@ for (const backend of backends) {
       bloomPeek,
       aaRest,
       aaGrown,
+      aaLow,
       draws: {
         rest: draws('rest'),
         peek: draws('peek'),
@@ -407,16 +410,17 @@ for (const backend of backends) {
     for (const [name, c] of [
       ['rest', aaRest],
       ['grown', aaGrown],
+      ['rest, low (FXAA)', aaLow],
     ] as const) {
       expect(c.changed, `share of pixels the AA touches (${name})`).toBeGreaterThan(0.002);
       expect(c.changed, `share of pixels the AA touches (${name})`).toBeLessThan(0.2);
       expect(c.tvB, `total variation after AA (${name})`).toBeLessThan(c.tvA * 0.99);
     }
-    // the chain per preset: bloom adds passes, SMAA (mid) more than FXAA (low)
+    // wiring: the bloom and the anti-aliasing each add passes (the pass counts themselves are three's business)
     const d = draws('rest');
     expect(d.after).toBeGreaterThan(d.aa);
     expect(d.aa).toBeGreaterThan(d.before);
-    expect(lowDraws.aa - lowDraws.before).toBeLessThan(d.aa - d.before);
+    expect(lowDraws.aa).toBeGreaterThan(lowDraws.before);
 
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);

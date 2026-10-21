@@ -32,6 +32,13 @@ export function finishModeFrom(params: URLSearchParams): FinishMode {
 const BLOOM_STRENGTH = 0.25;
 const BLOOM_RADIUS = 0.3;
 const BLOOM_THRESHOLD = 0.9;
+/**
+ * Size of the bloom's bright pass and mips relative to the render size (three's default, and the stress scene, use
+ * 0.5). At 0.5 the prologue's heaviest view at mid quality outweighed the stress scene at 1080p (1.15 vs 1.10 ms per
+ * frame, vsync off); at 0.25 it is level with it (1.09 vs 1.10). The halos come out a little wider and as smooth, and
+ * the glow around the orb's sun glint is as steady frame to frame (process/slices/S-17.md).
+ */
+const BLOOM_RESOLUTION = 0.25;
 
 export interface PeekPipelineOptions {
   renderer: THREE.WebGPURenderer;
@@ -109,15 +116,16 @@ export class PeekPipeline {
 
   /**
    * 6. 仕上げ behind the composite. The bloom reads the composite itself (its bright pass evaluates the composite
-   * again at half size, instead of the chain storing one more full-size image), so bright things glow where they are
-   * drawn, through the orb too; at this threshold the image inside the orb keeps its contrast
-   * (tests/e2e/S-17-finishing.spec.ts).
+   * again at BLOOM_RESOLUTION, instead of the chain storing one more full-size image: storing it measured ~0.03 ms
+   * heavier at 1080p), so bright things glow where they are drawn, through the orb too; at this threshold the image
+   * inside the orb keeps its contrast (tests/e2e/S-17-finishing.spec.ts).
    */
   private finish(mode: FinishMode): THREE.Node {
     const linear = this.composite.node;
     let hdr = linear;
     if (mode === 'full') {
       const glow = bloom(linear, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+      glow.setResolutionScale(BLOOM_RESOLUTION);
       this.finishing.push(glow);
       hdr = vec4(linear.rgb.add(glow.rgb), 1);
     }
