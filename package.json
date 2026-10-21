@@ -13,7 +13,10 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "check": "bash scripts/check.sh",
-    "check:full": "bash scripts/check.sh --full"
+    "check:full": "bash scripts/check.sh --full",
+    "assets": "node scripts/assets/pipeline.mjs",
+    "assets:sample": "node scripts/assets/sample.mjs",
+    "assets:test": "node scripts/assets/test.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@gltf-transform/cli": "^4.5.1",
     "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",

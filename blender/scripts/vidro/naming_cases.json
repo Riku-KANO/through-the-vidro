@@ -1,0 +1,119 @@
+{
+  "about": "Shared cases of the naming rules (設計書 Blenderアセットパイプライン > 命名規則とゲーム情報). Read by blender/scripts/tests/test_vidro_naming.py (the lint in Blender) and src/game/assets/naming.test.ts (the game), so both sides agree. `expect` is the parse, `error` the error code.",
+  "glassKinds": ["clear", "frosted", "amber", "lapis", "jade", "bubble", "iridescent", "milky"],
+  "glassRoles": ["scenery", "orb", "drop", "showcase"],
+  "names": [
+    { "name": "A1_bld_dome03_front", "expect": { "area": "A1", "kind": "bld", "id": "dome03", "role": "front", "lod": null, "base": "A1_bld_dome03", "group": "a1" } },
+    { "name": "A1_brg_bridge02_back", "expect": { "area": "A1", "kind": "brg", "id": "bridge02", "role": "back", "lod": null, "base": "A1_brg_bridge02", "group": "a1" } },
+    { "name": "A1_bld_dome03_col", "expect": { "area": "A1", "kind": "bld", "id": "dome03", "role": "col", "lod": null, "base": "A1_bld_dome03", "group": "a1" } },
+    { "name": "A1_sock_02", "expect": { "area": "A1", "kind": "sock", "id": "02", "role": null, "lod": null, "base": "A1_sock_02", "group": "a1" } },
+    { "name": "A3_bell_D4", "expect": { "area": "A3", "kind": "bell", "id": "D4", "role": null, "lod": null, "base": "A3_bell_D4", "group": "a3" } },
+    { "name": "A1_bld_dome03_front_LOD1", "expect": { "area": "A1", "kind": "bld", "id": "dome03", "role": "front", "lod": 1, "base": "A1_bld_dome03", "group": "a1" } },
+    { "name": "A1_bld_dome03_LOD0", "expect": { "area": "A1", "kind": "bld", "id": "dome03", "role": null, "lod": 0, "base": "A1_bld_dome03", "group": "a1" } },
+    { "name": "CM_lmp_lamp01_LOD2", "expect": { "area": "CM", "kind": "lmp", "id": "lamp01", "role": null, "lod": 2, "base": "CM_lmp_lamp01", "group": "common" } },
+    { "name": "A0_flr_floor01", "expect": { "area": "A0", "kind": "flr", "id": "floor01", "role": null, "lod": null, "base": "A0_flr_floor01", "group": "a0" } },
+    { "name": "A1_bld_dome03_front.001", "error": "blender-duplicate" },
+    { "name": "Cube.001", "error": "blender-duplicate" },
+    { "name": "Cube", "error": "format" },
+    { "name": "A1_bld", "error": "format" },
+    { "name": "A1__dome03", "error": "format" },
+    { "name": "A1 bld dome03", "error": "format" },
+    { "name": "", "error": "format" },
+    { "name": "B1_bld_dome03", "error": "area" },
+    { "name": "A10_bld_dome03", "error": "area" },
+    { "name": "a1_bld_dome03", "error": "area" },
+    { "name": "cm_lmp_lamp01", "error": "area" },
+    { "name": "A1_Bld_dome03", "error": "kind" },
+    { "name": "A1_b_dome03", "error": "kind" },
+    { "name": "A1_bl2_dome03", "error": "kind" },
+    { "name": "A1_bld_dome-03", "error": "id" },
+    { "name": "A1_bld_dome 03", "error": "id" },
+    { "name": "A1_bld_dome03_left", "error": "suffix" },
+    { "name": "A1_bld_dome03_front_back", "error": "suffix" },
+    { "name": "A1_bld_dome03_LOD1_front", "error": "suffix" },
+    { "name": "A1_bld_dome03_front_LOD1_x", "error": "suffix" },
+    { "name": "A1_bld_dome03_lod1", "error": "suffix" },
+    { "name": "A1_bld_dome03_LOD3", "error": "lod" },
+    { "name": "A1_bld_dome03_col_LOD1", "error": "collider-lod" }
+  ],
+  "glass": [
+    { "name": "glass_clear", "expect": { "kind": "clear", "role": "scenery" } },
+    { "name": "glass_frosted", "expect": { "kind": "frosted", "role": "scenery" } },
+    { "name": "glass_milky", "expect": { "kind": "milky", "role": "scenery" } },
+    { "name": "glass_iridescent_drop", "expect": { "kind": "iridescent", "role": "drop" } },
+    { "name": "glass_bubble_orb", "expect": { "kind": "bubble", "role": "orb" } },
+    { "name": "glass_clear_showcase", "expect": { "kind": "clear", "role": "showcase" } },
+    { "name": "glass_amber_scenery", "expect": { "kind": "amber", "role": "scenery" } },
+    { "name": "brass", "expect": null },
+    { "name": "glassware", "expect": null },
+    { "name": "", "expect": null },
+    { "name": "glass", "error": "glass-kind" },
+    { "name": "glass_ruby", "error": "glass-kind" },
+    { "name": "glass_clear_big", "error": "glass-role" },
+    { "name": "glass_clear_drop_x", "error": "glass-format" },
+    { "name": "Glass_clear", "error": "glass-format" },
+    { "name": "glass_clear.001", "error": "blender-duplicate" }
+  ],
+  "extras": [
+    { "name": "A1_sock_02", "extras": { "materialize_radius": 4 }, "problems": [] },
+    { "name": "A1_sock_02", "extras": {}, "problems": ["socket-radius"] },
+    { "name": "A1_sock_02", "extras": { "materialize_radius": 0 }, "problems": ["socket-radius"] },
+    { "name": "A1_sock_02", "extras": { "materialize_radius": "4" }, "problems": ["socket-radius"] },
+    { "name": "A1_sock_02_col", "extras": {}, "problems": [] },
+    { "name": "A3_bell_D4", "extras": { "pitch": "D4" }, "problems": [] },
+    { "name": "A3_bell_Fs5", "extras": { "pitch": "F#5" }, "problems": [] },
+    { "name": "A3_bell_D4", "extras": {}, "problems": ["bell-pitch"] },
+    { "name": "A3_bell_D4", "extras": { "pitch": "H4" }, "problems": ["bell-pitch"] },
+    { "name": "A1_bld_dome03_front", "extras": { "placement": "far" }, "problems": [] },
+    { "name": "A1_bld_dome03_front", "extras": { "placement": "behind-glass" }, "problems": [] },
+    { "name": "A1_bld_dome03_front", "extras": { "placement": "distant" }, "problems": ["placement"] },
+    { "name": "A1_bld_dome03_col", "extras": { "layer": "back" }, "problems": [] },
+    { "name": "A1_bld_dome03_col", "extras": { "layer": "side" }, "problems": ["collider-layer"] },
+    { "name": "A1_sock_02", "extras": { "materialize_radius": 2, "origin": [1, 2, 3] }, "problems": [] },
+    { "name": "A1_sock_02", "extras": { "materialize_radius": 2, "origin": [1, 2] }, "problems": ["origin"] }
+  ],
+  "unmarked": [
+    { "material": "A0_vase_glass", "transmissive": true, "placement": "near", "level": "warning" },
+    { "material": "A0_vase_glass", "transmissive": true, "placement": "far", "level": "problem" },
+    { "material": "A0_vase_glass", "transmissive": true, "placement": "behind-glass", "level": "problem" },
+    { "material": "A0_vase_glass", "transmissive": false, "placement": "far", "level": null },
+    { "material": "glass_clear", "transmissive": true, "placement": "far", "level": null },
+    { "material": "glass_ruby", "transmissive": true, "placement": "far", "level": null }
+  ],
+  "sets": [
+    {
+      "about": "LOD1/LOD2 without LOD0",
+      "objects": [{ "name": "A1_bld_dome03_front_LOD1" }, { "name": "A1_bld_dome03_front_LOD2" }],
+      "problems": [{ "object": "A1_bld_dome03_front", "code": "lod0-missing" }]
+    },
+    {
+      "about": "a LOD chain and an object without LOD under the same name",
+      "objects": [{ "name": "A1_bld_dome03_front" }, { "name": "A1_bld_dome03_front_LOD0" }],
+      "problems": [{ "object": "A1_bld_dome03_front", "code": "lod-mixed" }]
+    },
+    {
+      "about": "a complete LOD chain",
+      "objects": [{ "name": "CM_lmp_lamp01_LOD0" }, { "name": "CM_lmp_lamp01_LOD1" }],
+      "problems": []
+    },
+    {
+      "about": "a collider whose base has visuals on both layers needs `layer`",
+      "objects": [{ "name": "A1_wal_wall01_front" }, { "name": "A1_wal_wall01_back" }, { "name": "A1_wal_wall01_col" }],
+      "problems": [{ "object": "A1_wal_wall01_col", "code": "collider-layer" }]
+    },
+    {
+      "about": "the same with `layer` given",
+      "objects": [
+        { "name": "A1_wal_wall01_front" },
+        { "name": "A1_wal_wall01_back" },
+        { "name": "A1_wal_wall01_col", "extras": { "layer": "surface" } }
+      ],
+      "problems": []
+    },
+    {
+      "about": "a collider follows its only visual; an invisible wall has none",
+      "objects": [{ "name": "A1_brg_bridge02_back" }, { "name": "A1_brg_bridge02_col" }, { "name": "A1_fen_edge01_col" }],
+      "problems": []
+    }
+  ]
+}
