@@ -527,7 +527,9 @@ slices:
 
   - id: S-23
     title: Blender パイプラインの土台 — 命名検査・ポリゴン数・2つ目のUV・書き出し・圧縮と、ゲームでの読み込み
-    status: todo
+    status: integrated
+    branch: slice/S-23-blender-pipeline
+    accepted: レビュー2巡で P1・P2 なし。core 0.9.0（assets/）、blender/scripts/common 0.2.2（2026-10-22）
     depends: [S-01, S-02]
     parallel: true
     requirements:

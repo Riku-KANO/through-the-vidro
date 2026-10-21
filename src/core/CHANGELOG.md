@@ -3,6 +3,28 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.9.0 — 2026-10-22（S-23 glb の読み込み）
+
+追加だけで、既存の部品は変えていない。
+
+- `assets/`（新規）: Blender のパイプラインが書き出した glb を読む（技術設計 > アセット圧縮: glTF ＋ meshopt ＋ KTX2）。
+  - `loader.ts` の `createGltfLoader(renderer)`: three の GLTFLoader ＋ MeshoptDecoder（`three/addons/libs/meshopt_decoder.module.js`、
+    wasm を内に持つのでバンドルされる）＋ KTX2Loader。WebGPU と WebGL2 の両方で読む（KTX2Loader の `detectSupport` は
+    `renderer.init()` の後）。`load(url, { material })` は、読み込んだ材質をすべてノードの材質にして返す（`LoadedAsset`: scene・
+    extensionsUsed・gltf・dispose）。`material` は材質の差し替えの口（ゲームが印のついたガラスを自分のガラスにする、など）。
+    `loadTranscoder()` は Basis の変換器を今読む（確かめるため。普段は最初の KTX2 のテクスチャで読まれる）
+  - Basis の変換器（`basis_transcoder.js`・`.wasm`）は three 自身の写しを使う。three r186 の KTX2Loader は
+    `new URL('../libs/basis/…', import.meta.url)` で指していて、Vite は開発サーバーでそのまま配り、ビルドでは `dist/assets/` に
+    書き出す（three の版と必ず合う。手で写さない）。別の場所から配るときは `createGltfLoader(renderer, { transcoderPath })`
+  - `materials.ts`: `toNodeMaterial`（GLTFLoader が作る従来の材質 → 同じ値のノードの材質。three の `NodeLibrary.fromMaterial` と
+    同じく列挙できる値をすべて写し、物理の材質は `followBackdropResize` に通す。S-12 の決まり）、`convertMaterials(root, hook)`
+    （同じ材質を共有していた物は変換後も共有する）、`disposeObject(root)`（形・材質・テクスチャを1回ずつ解放）
+  - `glb.ts`: `readGlbJson`（.glb の JSON の部分だけを読む。検査や道具のため）
+- 注意: gltf-transform の量子化（KHR_mesh_quantization）は、メッシュを [-1, 1] に詰めて大きさを節点の拡大率に入れる。
+  そのため物の位置は形の中心へ動き、拡大率は 1 でなくなる。glTF の厚み（KHR_materials_volume）は gltf-transform が拡大率で割って
+  あり、three は透過の厚みに拡大率を掛けるので、glTF の値のままなら正しい。メートルで厚みを決める材質を自分で作るときは、
+  拡大率で割る（案1の `src/game/assets/glass.ts`）
+
 ## 0.8.0 — 2026-10-21（S-22 音の素材の口と、JS で音を合成する部品）
 
 足しただけで、既存の振る舞いは変えていない。

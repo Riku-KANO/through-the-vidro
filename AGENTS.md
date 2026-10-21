@@ -30,6 +30,8 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | URL を指定して1回測る | `node scripts/bench-probe.mjs '?scene=stress&bench=3'`（`HEADED=1`、`UNCAPPED=1`、`FPS=<n>` はその速さの画面のようにフレームを出す） |
 | 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
 | 整形 | `pnpm format` |
+| アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ |
+| 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
@@ -70,6 +72,11 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主） | S-04, S-18 |
 | `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値。生成音楽は M1以降 | S-09, S-21, S-22 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
+| `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）。案2と共有 | 変更は CHANGELOG に記録 |
+| `src/game/assets/` | 命名規則と extras から層・当たり判定・台座を組み立てる、印のついたガラス | S-23 |
+| `blender/` | `scenes/`（.blend）、`scripts/common/`（案2と共有。VERSION と CHANGELOG）、`scripts/vidro/`（案1だけの規則）、`scripts/tests/` | S-23 ほか |
+| `public/assets/` | `pnpm assets` が書いた glb。**コミットする**（check.sh とセンサーはこれを読む。.blend を直したら glb も書き出してコミット） | S-23 ほか |
+| `scripts/assets/` | パイプラインの入口（Node） | S-23 |
 | `src/dev/` | 開発用ツール（性能表示など） | 共通 |
 | `process/` | ループの台帳（スパイン）とスライスごとの記録 | — |
 
@@ -141,6 +148,12 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   1行（手順は `process/slices/S-22.md`）。JS で合成する音は、読み込みで主スレッドを長く止めない（音源ごとに間を置く）。
 - **環境音はエンジンの声の割り当て（`startVoice`）を通さない（S-22）。** 持続する床は声にせず、風鈴・水滴は環境音の予定表が数を抑える。
   環境音の系統の Emitter に入れるので、音量と部屋の残響には従う。試作部屋の音の観測口の `voicesStarted` は出来事の音の声の数、全体は `engineVoices`。
+- **glTF の物の名前は `userData.name` から読む（S-23）。** three の GLTFLoader は `name` を重ならないように書き換える（メッシュと節点が同じ名前なら
+  節点が勝ち、メッシュに `_1`）。
+- **量子化した glb では、節点の位置と拡大率は形の大きさ（S-23）。** gltf-transform の meshopt はメッシュを [-1, 1] に詰める。位置が要る物（台座、
+  共鳴器）は、パイプラインが書き出しの前に原点を extras の `origin` に書く。メートルで厚みを決めるガラスは拡大率で割る。
+- **層を使うシーンのカメラは `camera.layers.mask = viewMask('main')`（S-23）。** PeekPipeline を使うシーンはそれが設定する。使わないシーンで既定
+  （channel 0 だけ）のままだと、表だけ・裏だけの物と透過のガラスが描かれない。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
