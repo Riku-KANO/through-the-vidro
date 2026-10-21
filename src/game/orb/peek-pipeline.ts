@@ -1,7 +1,7 @@
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
-import { pass, renderOutput, rtt, vec4 } from 'three/tsl';
+import { pass, renderOutput, rtt, uniform, uv, vec2, vec4 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
@@ -35,8 +35,8 @@ const BLOOM_THRESHOLD = 0.9;
 /**
  * Size of the bloom's bright pass and mips relative to the render size (three's default, and the stress scene, use
  * 0.5). At 0.5 the prologue's heaviest view at mid quality outweighed the stress scene at 1080p (1.15 vs 1.10 ms per
- * frame, vsync off); at 0.25 it is level with it (1.09 vs 1.10). The halos come out a little wider and as smooth, and
- * the glow around the orb's sun glint is as steady frame to frame (process/slices/S-17.md).
+ * frame, vsync off); at 0.25 it stays at or under it (process/slices/S-17.md 計測値). The halos come out a little wider
+ * and as smooth.
  */
 const BLOOM_RESOLUTION = 0.25;
 
@@ -64,7 +64,7 @@ export type PeekFrame = Omit<OrbFrame, 'camera' | 'width' | 'height'>;
  *        through the orb is part of the composite)
  *   6    finishing, in the stress scene's order: restrained bloom on the linear composite → AgX (renderOutput) →
  *        the preset's FXAA or SMAA on the display image
- * Every target of the chain is a full-screen quad (bloom's half-size mips included); no transmissive material is
+ * Every target of the chain is a full-screen quad (the bloom's smaller mips included); no transmissive material is
  * drawn outside the scene pass, which has the canvas size (AGENTS.md).
  */
 export class PeekPipeline {
@@ -77,6 +77,8 @@ export class PeekPipeline {
   private readonly composite: OrbComposite;
   /** Finishing nodes that own render targets. */
   private readonly finishing: { dispose(): void }[] = [];
+  /** One pixel of the drawing buffer in UV units, for the bloom's prefilter. */
+  private readonly uTexel = uniform(new THREE.Vector2(1, 1));
   /** Layers the peek image draws; a dev switch can narrow it (e.g. hide the back layer). */
   peekMask = viewMask('peek');
 
@@ -115,19 +117,25 @@ export class PeekPipeline {
   }
 
   /**
-   * 6. 仕上げ behind the composite. The bloom reads the composite itself (its bright pass evaluates the composite
-   * again at BLOOM_RESOLUTION, instead of the chain storing one more full-size image: storing it measured ~0.03 ms
-   * heavier at 1080p), so bright things glow where they are drawn, through the orb too; at this threshold the image
-   * inside the orb keeps its contrast (tests/e2e/S-17-finishing.spec.ts).
+   * 6. 仕上げ behind the composite. The composite is stored once at the drawing-buffer size; the bloom reads that
+   * image, so bright things glow where they are drawn, through the orb too (at this threshold the image inside the
+   * orb keeps its contrast, tests/e2e/S-17-finishing.spec.ts). The bloom's bright pass runs at a quarter of the size,
+   * so one of its pixels stands for a 4×4 block: it reads four bilinear taps at ±1 pixel, which cover the whole block.
+   * Reading the block once (its middle 2×2) let small highlights drop in and out of the bloom as the view turned
+   * (S-17 review: about 2.7× the frame-to-frame jitter of half size; with the four taps it is back at that level).
    */
   private finish(mode: FinishMode): THREE.Node {
     const linear = this.composite.node;
     let hdr = linear;
     if (mode === 'full') {
-      const glow = bloom(linear, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
+      const stored = rtt(linear);
+      const at = (x: number, y: number) =>
+        stored.sample(uv().add(this.uTexel.mul(vec2(x, y)))) as unknown as THREE.Node<'vec4'>;
+      const block = at(-1, -1).add(at(1, -1)).add(at(-1, 1)).add(at(1, 1)).mul(0.25);
+      const glow = bloom(block, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
       glow.setResolutionScale(BLOOM_RESOLUTION);
-      this.finishing.push(glow);
-      hdr = vec4(linear.rgb.add(glow.rgb), 1);
+      this.finishing.push(stored, glow);
+      hdr = vec4(stored.rgb.add(glow.rgb), 1);
     }
     const graded = renderOutput(hdr);
     if (mode === 'none') return graded;
@@ -194,6 +202,7 @@ export class PeekPipeline {
     f.sunDirection = frame.sunDirection;
     f.width = this.size.x;
     f.height = this.size.y;
+    this.uTexel.value.set(1 / Math.max(1, this.size.x), 1 / Math.max(1, this.size.y));
     this.composite.update(f);
     this.pipeline.render();
   }

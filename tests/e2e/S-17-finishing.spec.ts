@@ -16,6 +16,8 @@ import { expect, type Page, test } from '@playwright/test';
  *   - anti-aliasing touches only a small share of the pixels and lowers the frame's total variation (edges), at mid
  *     (SMAA) and at low (FXAA)
  *   - layers-lab runs the same pipeline without errors, and its orb image keeps its contrast too
+ *   - the bloom stays steady while the view turns: small highlights do not drop in and out of it (the bloom's bright
+ *     pass runs at a quarter of the size; S-17 review round 2)
  * Screens → artifacts/screens/S-17/<backend>/<view>-<before|aa|after>.png (before/after the finishing, rest/peek),
  * numbers → artifacts/S-17/finishing-<backend>.json.
  */
@@ -465,6 +467,83 @@ for (const backend of backends) {
     // the peek blurs most of this view, so the AA finds few edges: it changes something and only smooths
     expect(aa.changed).toBeGreaterThan(0.0005);
     expect(aa.tvB).toBeLessThan(aa.tvA);
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-17 the bloom stays steady while the view turns [${backend}]`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = collectErrors(page);
+    // per mode: turn the view by one mouse pixel per step (S-03: 0.0022 rad, about 1.1 px on screen), 20 steps, and
+    // follow the mean luminance of 8 × 4 boxes. Turning moves the picture smoothly, so the second difference of a box
+    // stays small; a highlight that drops in and out of the bloom makes it jump.
+    const jitter: Record<'aa' | 'after', number> = { aa: 0, after: 0 };
+    for (const mode of ['aa', 'after'] as const) {
+      await page.goto(`/?scene=prologue-proto&${VIEWS.rest}&dynres=0${MODES[mode]}${webgl}`);
+      await page.waitForFunction(
+        () =>
+          (window.__vidro?.sceneProbe as { room?: { ready?: boolean } } | undefined)?.room?.ready === true,
+        undefined,
+        { timeout: 60_000 },
+      );
+      await page.mouse.move(640, 360);
+      await page.mouse.down();
+      await page.mouse.up();
+      await page.waitForFunction(
+        () =>
+          (window.__vidro?.sceneProbe as { room?: { locked?: boolean } } | undefined)?.room?.locked === true,
+        undefined,
+        { timeout: 10_000 },
+      );
+      await page.waitForTimeout(600);
+      const series: number[][] = [];
+      for (let k = 1; k <= 20; k++) {
+        await page.mouse.move(640 + k, 360);
+        await page.waitForTimeout(120);
+        const png = await page.screenshot();
+        series.push(
+          await page.evaluate(async (b64) => {
+            const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+            const bmp = await createImageBitmap(blob);
+            const c = new OffscreenCanvas(bmp.width, bmp.height);
+            const g = c.getContext('2d');
+            if (!g) throw new Error('no 2d context');
+            g.drawImage(bmp, 0, 0);
+            const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+            const bw = bmp.width / 8;
+            const bh = bmp.height / 4;
+            const out: number[] = [];
+            for (let by = 0; by < 4; by++)
+              for (let bx = 0; bx < 8; bx++) {
+                let sum = 0;
+                let n = 0;
+                for (let y = Math.floor(by * bh); y < (by + 1) * bh; y += 2)
+                  for (let x = Math.floor(bx * bw); x < (bx + 1) * bw; x += 2) {
+                    const j = (y * bmp.width + x) * 4;
+                    sum += 0.2126 * (d[j] ?? 0) + 0.7152 * (d[j + 1] ?? 0) + 0.0722 * (d[j + 2] ?? 0);
+                    n++;
+                  }
+                out.push(sum / n);
+              }
+            return out;
+          }, png.toString('base64')),
+        );
+      }
+      let total = 0;
+      let count = 0;
+      for (let b = 0; b < 32; b++)
+        for (let k = 1; k < series.length - 1; k++) {
+          const at = (i: number) => series[i]?.[b] ?? 0;
+          total += Math.abs(at(k + 1) - 2 * at(k) + at(k - 1));
+          count++;
+        }
+      jitter[mode] = total / count;
+    }
+    mkdirSync(join(root, 'artifacts/S-17'), { recursive: true });
+    writeFileSync(join(root, `artifacts/S-17/turning-${backend}.json`), JSON.stringify(jitter, null, 2));
+    // measured (/255 per box and step): no bloom 0.06, the bloom at half size 0.09, at a quarter read once per 4×4
+    // block 0.25, at a quarter with the four taps 0.10
+    expect(jitter.after - jitter.aa, 'jitter the bloom adds while the view turns (/255)').toBeLessThan(0.1);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
