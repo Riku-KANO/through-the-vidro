@@ -441,7 +441,9 @@ for (const backend of backends) {
     expect(await page.evaluate(() => window.__vidro.sceneInstances), 'played before the switch').toBe(1);
 
     await page.waitForFunction(() => window.__vidro.sceneInstances >= 2, undefined, { timeout: 40_000 });
-    await expect.poll(async () => (await readFirst()).state, { timeout: 5_000 }).toBe('closed');
+    // generous: the new instance's first frames compile the finishing (S-17) on the main thread, which on WebGL2 under
+    // a busy machine (parallel worktrees) held the close past 5 s once in each of S-16 and S-17's full checks
+    await expect.poll(async () => (await readFirst()).state, { timeout: 20_000 }).toBe('closed');
     const first = await readFirst();
     expect(first.disposed).toBe(true);
     expect(first.subscribed).toBe(false);
