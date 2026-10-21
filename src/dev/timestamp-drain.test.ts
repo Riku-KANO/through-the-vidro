@@ -14,6 +14,29 @@ interface Run {
   overflows: number;
 }
 
+type Drain = Pick<PassTimestampDrain, 'beginFrame' | 'endFrame' | 'settled' | 'writing'>;
+
+/** main.ts before S-20, for comparison: timestamps on whenever wanted, a readback every 8th frame unless one is out. */
+class MainBeforeS20 implements Drain {
+  private want = true;
+  private reading = false;
+  get writing(): boolean {
+    return this.want;
+  }
+  beginFrame(want: boolean): boolean {
+    this.want = want;
+    return want;
+  }
+  endFrame(_renderCalls: number, pollFrame: boolean): boolean {
+    if (!pollFrame || !this.want || this.reading) return false;
+    this.reading = true;
+    return true;
+  }
+  settled(): void {
+    this.reading = false;
+  }
+}
+
 /**
  * main.ts's loop against a model of three r186's WebGL2 pool: `contexts(frame)` render contexts a frame, a readback
  * settles `latency` frames after the frame it started in (0: before the next frame) and empties the pool.
@@ -27,8 +50,12 @@ function run(o: {
   /** Render contexts begun between frame f - 1 and frame f (outside the animation frame). */
   outside?: (frame: number) => number;
   firstPoll?: number;
+  /** Drive the pool with main's policy before S-20 instead (`pause` is then ignored). */
+  before?: boolean;
 }): Run {
-  const drain = new PassTimestampDrain({ pauseWhileReading: o.pause, tracking: true, renderCalls: 0 });
+  const drain: Drain = o.before
+    ? new MainBeforeS20()
+    : new PassTimestampDrain({ pauseWhileReading: o.pause, tracking: true, renderCalls: 0 });
   const result: Run = { tracked: [], reads: [], maxPooled: 0, overflows: 0 };
   let calls = 0;
   let pooled = 0;
@@ -121,7 +148,9 @@ describe('PassTimestampDrain: when three writes per-pass timestamps and main.ts 
     const CONTEXTS = 20;
     /**
      * Readback times measured on WebGL2 (Apple M5 Pro, S-20, before and after the change): the longest seen at each
-     * frame rate. 'paced': FPS=<n> scripts/bench-probe.mjs's frame clock; 'uncapped': no vsync, no frame limit.
+     * frame rate. 'paced': FPS=<n> scripts/bench-probe.mjs's frame clock; 'uncapped': no vsync, no frame limit. The
+     * last is the longest seen at all (main's code at the home view, 822 fps, its pool full and readbacks stalled),
+     * run here as a harder case with the workshop's 20 contexts a frame.
      */
     const MEASURED = [
       { fps: 60, ms: 28, how: 'vsync' },
@@ -129,7 +158,7 @@ describe('PassTimestampDrain: when three writes per-pass timestamps and main.ts 
       { fps: 240, ms: 12.5, how: 'paced' },
       { fps: 480, ms: 17.7, how: 'paced' },
       { fps: 554, ms: 220, how: 'uncapped' },
-      { fps: 600, ms: 1745, how: 'uncapped' },
+      { fps: 822, ms: 1745, how: 'uncapped, stalled' },
     ];
     const frames = (ms: number, fps: number) => Math.ceil((ms * fps) / 1000);
 
@@ -141,18 +170,16 @@ describe('PassTimestampDrain: when three writes per-pass timestamps and main.ts 
       });
     }
 
-    it('without the pause (main before S-20) it filled only when uncapped', () => {
-      const old = (fps: number, ms: number) =>
-        run({ pause: false, frames: 4000, contexts: CONTEXTS, latency: frames(ms, fps) }).overflows;
-      expect(old(144, 14.1)).toBe(0);
-      expect(old(240, 12.5)).toBe(0);
-      expect(old(554, 220)).toBeGreaterThan(0);
+    it('main before S-20 filled it only when uncapped', () => {
+      const overflowsBefore = (latency: number) =>
+        run({ before: true, pause: false, frames: 4000, contexts: CONTEXTS, latency }).overflows;
+      expect(overflowsBefore(frames(14.1, 144))).toBe(0);
+      expect(overflowsBefore(frames(12.5, 240))).toBe(0);
+      expect(overflowsBefore(frames(220, 554))).toBeGreaterThan(0);
       // The pool collected every frame from one readback settling to the next one settling, 8 × ⌈(L + 1) / 8⌉ frames
       // for a readback of L frames; past 1024 / 20 contexts that needs L ≥ 48: 333 ms at 144 fps, 200 ms at 240 fps.
-      expect(run({ pause: false, frames: 4000, contexts: CONTEXTS, latency: 47 }).overflows).toBe(0);
-      expect(run({ pause: false, frames: 4000, contexts: CONTEXTS, latency: 48 }).overflows).toBeGreaterThan(
-        0,
-      );
+      expect(overflowsBefore(47)).toBe(0);
+      expect(overflowsBefore(48)).toBeGreaterThan(0);
     });
 
     it('with the pause no readback time or number of passes up to ~770 a frame fills it', () => {

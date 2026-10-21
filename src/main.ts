@@ -197,7 +197,8 @@ async function main(): Promise<void> {
   probe.gpuTiming = gpuTiming;
   probe.gpuSource = gpuSource;
   probe.gpuTimingTrusted = gpuTimingTrusted;
-  // three's per-pass timestamps cost a query pair per pass and a readback every 1024 passes (inside render()).
+  // three's per-pass timestamps cost a query pair per pass and a readback; left unread, three resets its full pool
+  // (1024 passes) inside render(), which passDrain below prevents by reading from out here.
   // Where the span drives decisions they are only a bench reference, so they run only while a bench records.
   // Set before the scene is created: a pass descriptor cached while they are on keeps its timestampWrites.
   const backendTiming = renderer.backend as { trackTimestamp?: boolean };

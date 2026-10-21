@@ -69,7 +69,11 @@ for (const c of CASES) {
       const resolve = renderer.resolveTimestampsAsync.bind(renderer);
       renderer.resolveTimestampsAsync = (type) => {
         const p = resolve(type);
-        p.then(() => reads++);
+        // A failed readback is main.ts's to report (onGpuFailed), not an unhandled rejection of this counter.
+        p.then(
+          () => reads++,
+          () => {},
+        );
         return p;
       };
       const frame0 = renderer.info.frame;
@@ -96,14 +100,21 @@ for (const c of CASES) {
     console.log(`S-20 ${c.name}: ${JSON.stringify(trace)}`);
 
     // Main's code warned here at 530 to 610 fps (Apple M5 Pro). A machine that cannot render well above a 60 Hz display
-    // cannot show what this test is about (the unit tests' pool model covers the logic at any rate).
+    // cannot show what this test is about (the unit tests' pool model covers the logic at any rate). It only tells
+    // main's code from S-20's where a readback outlasts ~50 frames (here: uncapped); slower, both pass.
     test.skip(trace.fps <= 75, `renders at ${trace.fps} fps here: vsync not lifted, or the GPU too slow`);
     const probe = await page.evaluate(() => window.__vidro);
     expect(probe.backend).toBe('webgl2');
     expect(probe.status).toBe('running');
-    expect(warnings.filter((w) => /beginQuery|query is already active/i.test(w))).toEqual([]);
+    // Also three's warnings, should the timestamps be switched off before it looked at them (main.ts relies on
+    // resolveTimestampsAsync checking trackTimestamp when it is called).
+    const timestampWarnings =
+      /beginQuery|query is already active|Timestamp tracking is disabled|TimestampQueryPool/i;
+    expect(warnings.filter((w) => timestampWarnings.test(w))).toEqual([]);
     expect(trace.maxFill, 'the pool is emptied long before it is full').toBeLessThan(POOL_QUERIES / 2);
-    expect(trace.reads, 'the pass sums keep coming').toBeGreaterThanOrEqual(SECONDS * 2);
+    // Main's code finished 2 or 3 in the workshop (its readbacks stalled); S-20's about 30, uncapped readbacks taking
+    // ~200 ms each. One a second leaves room for a slower machine or a busier GPU.
+    expect(trace.reads, 'the pass sums keep coming').toBeGreaterThanOrEqual(SECONDS);
     expect(probe.errors).toEqual([]);
     expect(errors).toEqual([]);
   });

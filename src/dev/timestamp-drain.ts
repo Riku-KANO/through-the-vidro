@@ -17,6 +17,12 @@
  * WebGPU keeps the earlier behaviour (no pause, no early readback): its pool empties itself when a readback starts and
  * has no active query to collide with, and a pass descriptor cached while the timestamps were on keeps its
  * timestampWrites (main.ts), so they are not switched off and on there.
+ *
+ * Only main.ts, through this class, may write backend.trackTimestamp (and only it may call resolveTimestampsAsync,
+ * S-11): the count of pooled render contexts assumes three writes timestamps exactly while `writing` says so.
+ * Recheck on a three upgrade: the WebGL2 pool's size (2048 queries, two per render context), that
+ * resolveTimestampsAsync looks at trackTimestamp when it is called, not after an await, and that the pool is emptied
+ * when a readback settles. tests/e2e/S-20-timestamp-drain.spec.ts watches the outcome uncapped.
  */
 
 /** Render contexts three r186's WebGL2 pool holds: new WebGLTimestampQueryPool(gl, type, 2048), two queries each. */
@@ -82,7 +88,11 @@ export class PassTimestampDrain {
     return true;
   }
 
-  /** The readback settled (or failed): three emptied its pool. */
+  /**
+   * The readback settled (or failed): three should have emptied its pool. r186 does not when one of its own readbacks
+   * (started by a full pool) is still pending or when no query had ended; neither happens while the pool cannot fill,
+   * and three's own reset bounds them anyway.
+   */
   settled(): void {
     this.inFlight = false;
     this.pooled = 0;
