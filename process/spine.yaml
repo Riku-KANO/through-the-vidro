@@ -262,7 +262,9 @@ slices:
 
   - id: S-11
     title: 動的解像度の止めっぱなしの解消と、センサーの警告の数え上げ
-    status: todo
+    status: integrated
+    branch: slice/S-11-dynres-resume
+    accepted: 発案者がレビュー1巡目の後に受け入れ（試行の上限、2026-10-21）。揺れへの強さは S-13
     depends: [S-08]
     requirements:
       - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
@@ -280,4 +282,41 @@ slices:
       - 手応えの検査で止めた後も、GPU 時間が止めた時点の水準から3割以上上がったら（新しい重さ）、検査を数え直して動的解像度を再開する。再開の回数には上限を置き、行き来を防ぐ。止まった・再開したの理由を probe に出す。単体テスト（途中から重くなる、垂直同期の下で軽い負荷が揺れる、一定の重さ）
       - 静かな実機の閉ループ（scripts/bench-dynres.mjs、垂直同期あり、GROW_AT で途中から重くする）で、軽い負荷で止まった後に重くなったら再開して下げることを確かめる
       - ブラウザセンサー（scenes.spec.ts）が console の warning も数え、既知の警告だけを許す一覧で管理する。WebGL2 の three r186 のタイムスタンプのプールの警告（beginQuery: a query is already active）がまだ出るなら main.ts 側で直し、S-06 のシーン側の回避策を消せるようにする
+
+  - id: S-12
+    title: 高品質で描画倍率を変えた後に出る Destroyed texture の調査と修正
+    status: todo
+    depends: [S-05]
+    requirements:
+      - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
+    paths:
+      - src/scenes/stress.scene.ts
+      - src/core/glass/**
+      - src/core/renderer.ts
+      - tests/e2e/S-12-*.spec.ts
+      - process/slices/S-12.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - 再現（stress を high で開き、倍率を変えて25秒待つと WebGPU で毎フレーム Destroyed texture）を e2e にし、直す前に赤を確かめる。prologue-proto と glass-gallery の high でも確かめる
+      - 原因を切り分けて記録し、three の非公開の内部に頼らない方法で直す（three の不具合なら回避策と最小の再現を残す）
+      - scripts/check.sh --full が ALL OK（警告も数えるセンサーを含む）
+
+  - id: S-13
+    title: 動的解像度の揺れへの強さ（手応えの検査と再開）
+    status: todo
+    depends: [S-11]
+    requirements:
+      - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
+    paths:
+      - src/core/perf/**
+      - scripts/sim/**
+      - tests/e2e/scenes.spec.ts
+      - tests/e2e/S-13-*.spec.ts
+      - process/slices/S-13.md
+      - src/core/CHANGELOG.md
+    acceptance:
+      - 手応えの検査は、手応えなしが2回続いてから止める。下限に着いたときにも1回判定する
+      - 再開の閾値に揺れ幅を入れる（例 max(1.3×基準, 止めた直後の90パーセンタイル×1.1, 目標の8割)）。上限に数えるのは「無駄だった再開」（再開した制御が手応えの検査に一度も通らずに再び止まった）だけにする
+      - 揺れのシミュレーション（対数正規 AR(1) など）を scripts/sim/ にコードとして残し、誤停止・誤再開・止めっぱなしの割合を記録する。単体テストに、種ごとの割合で「比例する負荷は止めない」「比例しない負荷は止める」「下限での判定」「揺れでは再開しない」を足す
+      - センサー（scenes.spec.ts）の既知の一覧を error と warning で1つにまとめ、正規表現の g/y フラグを禁じ、各項目の当たった回数を json に出す
 

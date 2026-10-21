@@ -14,6 +14,18 @@
  *   `unresponsive` and stops, and the governor goes back to the preset scale. The yardstick is the median of the
  *   last 5 samples right before each step, not the EMA: after the cooldown the window holds samples at the current
  *   scale only, while the EMA still lags behind a load that rose mid-session (S-08 review round 2).
+ * - resumeWatch (S-11): a stopped controller is not dead for the session. `ResumeWatch` follows the GPU time at the
+ *   preset scale and tells when it rose RESUME_RISE above the level the controller stopped at and stayed there for
+ *   RESUME_HOLD_SEC, in both the recent median and the smoothed value. That is a new load, so the governor starts a
+ *   fresh controller, which judges the response again. Under vsync a light load's span swings (S-08: 3.6–6.7 ms
+ *   that did not follow the resolution) and a hitch lasts a moment; neither holds a 30% rise for 2 s.
+ *   The level it stopped at is the smoothed GPU time (EMA) at the stop, lowered once to the median of the first
+ *   RESUME_BASELINE_SAMPLES samples after it if that is lower. On hardware (S-11) both single readings misled: the
+ *   recent median caught a peak (7.15 ms on a 6.2–6.8 ms load), and the EMA of a stop 5 s after loading still carried
+ *   the start-up (6.8–7.0 ms on a ~5 ms load); either put the threshold on the grown load itself. Taking the lower
+ *   of the two never raises the bar, so a new load right after the stop is still seen against the EMA. If the EMA
+ *   lags behind a load that rose just before the stop, the watch may resume once too early; the fresh controller
+ *   then stops again with a baseline taken at the new level.
  *
  * Frame time is deliberately not supported: under vsync it cannot tell a frame-rate cap from overload and hides
  * moderate overload completely (S-05 review). Without trustworthy GPU time the governor keeps the preset scale.
@@ -44,23 +56,66 @@ const RESPONSE_STEPS = 3;
 const RESPONSE_MIN = 0.1;
 /** Steps down further apart than this (or a step up in between) start a new run. */
 const RESPONSE_GAP_SEC = 2.5;
+/** resumeWatch: a new load is this much above the level the controller stopped at (発案者の判断, S-11). */
+const RESUME_RISE = 1.3;
+/**
+ * ...for this long, in the recent median and the smoothed value. Chosen equal to UP_DELAY_SEC (a level has to hold
+ * as long to raise the scale): in simulation it rejects 1 s bursts of any height and swings of the S-08 light load
+ * with a period up to 8 s, and resumes 2.2–3.8 s after a load 1.55× or more above the light one (S-11.md).
+ */
+const RESUME_HOLD_SEC = 2;
+/** resumeWatch: samples right after the stop that measure the level at the preset scale (~2 s at 60 fps). */
+const RESUME_BASELINE_SAMPLES = 15;
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** The last few samples, with an allocation-free median (insertion sort on ≤ MEDIAN_WINDOW values). */
+class MedianWindow {
+  private readonly values: Float64Array;
+  private readonly scratch: Float64Array;
+  private len = 0;
+  private idx = 0;
+  constructor(size: number) {
+    this.values = new Float64Array(size);
+    this.scratch = new Float64Array(size);
+  }
+  get full(): boolean {
+    return this.len === this.values.length;
+  }
+  push(v: number): void {
+    this.values[this.idx] = v;
+    this.idx = (this.idx + 1) % this.values.length;
+    this.len = Math.min(this.len + 1, this.values.length);
+  }
+  median(): number {
+    const n = this.len;
+    for (let i = 0; i < n; i++) this.scratch[i] = this.values[i] ?? 0;
+    for (let i = 1; i < n; i++) {
+      const v = this.scratch[i] ?? 0;
+      let j = i - 1;
+      while (j >= 0 && (this.scratch[j] ?? 0) > v) {
+        this.scratch[j + 1] = this.scratch[j] ?? 0;
+        j--;
+      }
+      this.scratch[j + 1] = v;
+    }
+    return this.scratch[n >> 1] ?? 0;
+  }
+}
 
 export class DynamicResolution {
   scale: number;
   /** requireResponse only: set once steps down stopped lowering the GPU time; the controller then does nothing. */
   unresponsive = false;
+  /** requireResponse only: the smoothed GPU time (ms) when it gave up, the baseline a resumeWatch compares against. */
+  stoppedAtMs: number | null = null;
   private readonly min: number;
   private readonly max: number;
   private readonly step: number;
   private readonly targetMs: number;
   private readonly cooldownSec: number;
   private readonly alpha: number;
-  private readonly window = new Float64Array(MEDIAN_WINDOW);
-  private readonly scratch = new Float64Array(MEDIAN_WINDOW);
-  private windowLen = 0;
-  private windowIdx = 0;
+  private readonly window = new MedianWindow(MEDIAN_WINDOW);
   private ema: number | null = null;
   private time = 0;
   private sinceChange = 0;
@@ -102,8 +157,8 @@ export class DynamicResolution {
 
     // Raw samples in the window, the clamp on what feeds the EMA: the same EMA as clamping each sample (the median
     // commutes with min), while the response check still sees an overload above the clamp go down.
-    this.push(gpuMs);
-    const median = this.median();
+    this.window.push(gpuMs);
+    const median = this.window.median();
     const smoothed = Math.min(median, this.targetMs * SPIKE_CLAMP);
     this.ema = this.ema === null ? smoothed : this.ema + this.alpha * (smoothed - this.ema);
 
@@ -112,6 +167,7 @@ export class DynamicResolution {
       if (this.sinceChange < this.cooldownSec || this.scale <= this.min) return null;
       if (this.requireResponse && !this.respondsToSteps(median)) {
         this.unresponsive = true;
+        this.stoppedAtMs = this.ema;
         return null;
       }
       if (this.time - this.lastUpAt < PREMATURE_UP_SEC) {
@@ -153,31 +209,79 @@ export class DynamicResolution {
     return true;
   }
 
+  /** After `unresponsive`: a watch for a new load to resume on (S-11). Null while the controller runs. */
+  resumeWatch(): ResumeWatch | null {
+    if (this.stoppedAtMs === null) return null;
+    return new ResumeWatch(this.stoppedAtMs, this.targetMs, this.alpha);
+  }
+
   private set(scale: number): number {
     this.scale = scale;
     this.sinceChange = 0;
     return scale;
   }
+}
 
-  private push(v: number): void {
-    this.window[this.windowIdx] = v;
-    this.windowIdx = (this.windowIdx + 1) % MEDIAN_WINDOW;
-    this.windowLen = Math.min(this.windowLen + 1, MEDIAN_WINDOW);
+/**
+ * Watches a stopped controller's GPU time at the preset scale for a new load (S-11; see the header). Feed it the same
+ * samples the controller would get; `update` returns true once the governor should start a fresh controller.
+ */
+export class ResumeWatch {
+  /** The level the controller stopped at (ms); see the header for how it is taken. */
+  baselineMs: number;
+  /** Resume above this (ms): RESUME_RISE over the baseline, and an overload the controller would act on. */
+  thresholdMs: number;
+  private readonly window = new MedianWindow(MEDIAN_WINDOW);
+  private readonly first = new MedianWindow(RESUME_BASELINE_SAMPLES);
+  private rebased = false;
+  private readonly overloadMs: number;
+  private readonly clampMs: number;
+  /** Starts at the baseline: the first samples nudge it instead of setting it. */
+  private ema: number;
+  private heldFor = 0;
+
+  constructor(
+    baselineMs: number,
+    targetMs: number,
+    private readonly alpha: number,
+  ) {
+    this.overloadMs = targetMs * DOWN;
+    this.baselineMs = baselineMs;
+    this.thresholdMs = Math.max(baselineMs * RESUME_RISE, this.overloadMs);
+    this.clampMs = Math.max(baselineMs, targetMs) * SPIKE_CLAMP;
+    this.ema = baselineMs;
   }
 
-  private median(): number {
-    const n = this.windowLen;
-    for (let i = 0; i < n; i++) this.scratch[i] = this.window[i] ?? 0;
-    // Insertion sort on ≤ 5 values: no allocation in the frame loop.
-    for (let i = 1; i < n; i++) {
-      const v = this.scratch[i] ?? 0;
-      let j = i - 1;
-      while (j >= 0 && (this.scratch[j] ?? 0) > v) {
-        this.scratch[j + 1] = this.scratch[j] ?? 0;
-        j--;
+  /** Smoothed GPU time since the stop (ms). */
+  get smoothedMs(): number {
+    return this.ema;
+  }
+
+  /**
+   * @param gpuMs GPU time of the latest sample.
+   * @param dt seconds since the previous call.
+   * @returns true once the rise has held for RESUME_HOLD_SEC.
+   */
+  update(gpuMs: number, dt: number): boolean {
+    if (!Number.isFinite(gpuMs) || gpuMs <= 0) return false;
+    if (!this.rebased) {
+      this.first.push(gpuMs);
+      if (this.first.full) {
+        this.rebased = true;
+        this.baselineMs = Math.min(this.baselineMs, this.first.median());
+        this.thresholdMs = Math.max(this.baselineMs * RESUME_RISE, this.overloadMs);
       }
-      this.scratch[j + 1] = v;
     }
-    return this.scratch[n >> 1] ?? 0;
+    this.window.push(gpuMs);
+    // Judge on full windows only: a median of one or two samples is a spike.
+    if (!this.window.full) return false;
+    const median = this.window.median();
+    this.ema += this.alpha * (Math.min(median, this.clampMs) - this.ema);
+    if (median < this.thresholdMs || this.ema < this.thresholdMs) {
+      this.heldFor = 0;
+      return false;
+    }
+    this.heldFor += dt;
+    return this.heldFor >= RESUME_HOLD_SEC;
   }
 }
