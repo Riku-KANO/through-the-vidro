@@ -19,6 +19,9 @@ import type { RoomProbe } from './room';
  *  - サウンドデザイン > 環境音: in 3D with HRTF, in the workshop's short reverb (src/audio/rooms.ts).
  *  - UI/UX設計 > 画面ごとの設計 (読み込み): no sound before the first gesture. The AudioContext is only made inside
  *    that gesture (so the browser never warns about autoplay); events before it are refused, never queued.
+ *  - One AudioContext per page (S-18): through the home, the loading screen's 「はじめる」 starts the engine and the
+ *    room plays through it (`shared`), so the UI and the room follow the same four volumes. Alone (direct mode), the
+ *    room makes its own on the first gesture.
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
 
@@ -144,14 +147,24 @@ export interface SoundRoom {
 
 /** window.__vidro.sceneProbe.sound (tests/e2e/S-16-*.spec.ts). Getters read the live state. */
 export interface SoundProbe {
-  /** 'locked' before the first gesture, then the AudioContext's state ('closed' once disposed). */
+  /**
+   * 'locked' before the audio starts, then the AudioContext's state. Its own context is closed when this sound is
+   * disposed ('closed'); a shared one when its owner is (S-18), and 'locked' stays while the owner has none
+   * (not pressed yet, the autoplay script, or no Web Audio: the owner's probe tells which).
+   */
   readonly state: string;
-  /** The first gesture has started the audio. */
+  /** The audio has started: the first gesture made its own engine, or the shared one was handed over. */
   readonly unlocked: boolean;
+  /** Playing on an engine someone else owns (the home's, S-18), not its own. */
+  readonly shared: boolean;
   /** The reverb's room. */
   readonly room: string;
   /** Panning model of each live emitter. */
   readonly panning: string[];
+  /**
+   * Voices the engine started / refused: on its own engine, all of them (only this sound plays there); on a shared
+   * one, those started while answering this sound's cues (the engine also counts the UI's).
+   */
   readonly voicesStarted: number;
   readonly voicesDropped: number;
   readonly played: readonly PlayedCue[];
@@ -168,15 +181,29 @@ export interface PrologueSound {
   readonly probe: SoundProbe;
   /** Every frame, after the camera moved: the listener and the hand follow. */
   update(): void;
-  /** Stops listening, fades out, disconnects the graph and closes the AudioContext. */
+  /**
+   * Stops listening and lets go of its emitters. Its own engine fades out and its AudioContext is closed; a shared
+   * engine is left to its owner.
+   */
   dispose(): void;
+}
+
+/**
+ * An engine started and owned elsewhere: the loading screen's 「はじめる」 (src/ui/audio-gate.ts AudioGate, S-18).
+ * Its owner starts it inside the press, resumes it after interruptions and closes it.
+ */
+export interface SharedEngine {
+  /** Hands the engine to `ready` once it has started (at once if it has). Returns a function that stops waiting. */
+  whenReady(ready: (engine: AudioEngine) => void): () => void;
 }
 
 /** Activation-triggering input (as in src/core/audio/engine.ts). */
 const GESTURES = ['pointerdown', 'pointerup', 'click', 'keydown', 'touchend'] as const;
 
 export interface SoundOptions {
-  /** Where the first gesture is listened for. Default: window. */
+  /** Play on this engine instead of making one: no AudioContext of its own, no gesture listening (S-18). */
+  shared?: SharedEngine;
+  /** Where the first gesture is listened for (own engine only). Default: window. */
   target?: EventTarget;
   /** Makes the AudioContext inside the first gesture. Default: `new AudioContext()` (unit tests pass a stand-in). */
   makeContext?: () => AudioContext;
@@ -193,23 +220,28 @@ const vidroEngine = (context: AudioContext): Promise<AudioEngine> =>
   });
 
 /**
- * The prologue's sound. Nothing is made until the first gesture on `target`; from then on the room's events play
- * through an AudioEngine in the workshop's reverb, each from its place in the room (HRTF), the camera listening.
+ * The prologue's sound. Nothing sounds until the audio has started: on its own engine, made inside the first gesture
+ * on `target`; on a `shared` one, once its owner has started it. From then on the room's events play through the
+ * engine in the workshop's reverb, each from its place in the room (HRTF), the camera listening.
  */
 export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): PrologueSound {
+  const shared = opts.shared ?? null;
   const target = opts.target ?? window;
   const makeContext = opts.makeContext ?? (() => new AudioContext({ latencyHint: 'interactive' }));
   const makeEngine = opts.makeEngine ?? vidroEngine;
   const log = new CueLog();
   const { camera, probe: roomProbe } = room;
   const roomId = VIDRO_ROOMS.workshop.id;
-  let context: AudioContext | null = null;
+  /** The engine's context: its own (made in the gesture), or the shared engine's. */
+  let context: BaseAudioContext | null = null;
   let engine: AudioEngine | null = null;
   let emitters: { hand: Emitter; orb: Emitter; drop: Emitter } | null = null;
   const live: Emitter[] = [];
   let failed = false;
   let subscribed = true;
   let disposed = false;
+  let voicesStarted = 0;
+  let voicesDropped = 0;
 
   const ear = new THREE.Vector3();
   const forward = new THREE.Vector3();
@@ -248,10 +280,15 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         at.z = point[2];
         emitter.setPosition(at);
       }
+      // what the engine itself started / refused for this cue (a shared engine also counts the UI's voices)
+      const before = engine.snapshot();
       const started =
         cue.kind === 'popen'
           ? playPopen(engine, cue.popen, { emitter }) !== null
           : strikeGlass(engine, cue.size, cue.strength, { emitter }) !== null;
+      const after = engine.snapshot();
+      voicesStarted += after.voicesStarted - before.voicesStarted;
+      voicesDropped += after.voicesDropped - before.voicesDropped;
       if (!started) return null;
       return { distance: Math.hypot(point[0] - ear.x, point[1] - ear.y, point[2] - ear.z) };
     },
@@ -259,23 +296,39 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
 
   const off = room.events.on((e) => answer(e, player, log));
 
+  /** The engine is there (its own, or handed over): place the emitters in the room. */
+  const attach = (e: AudioEngine): void => {
+    engine = e;
+    context ??= e.ctx;
+    // the room's space is the game's to decide (S-16: the workshop), also on an engine started elsewhere
+    if (e.room.id !== roomId) e.setRoom(VIDRO_ROOMS.workshop);
+    emitters = {
+      hand: e.createEmitter('sfx'),
+      orb: e.createEmitter('sfx', { x: PEDESTAL_ORB[0], y: PEDESTAL_ORB[1], z: PEDESTAL_ORB[2] }),
+      drop: e.createEmitter('sfx', { x: DROP[0], y: DROP[1], z: DROP[2] }),
+    };
+    live.push(emitters.hand, emitters.orb, emitters.drop);
+    follow();
+  };
+
   const stopListening = (): void => {
     for (const type of GESTURES) target.removeEventListener(type, onGesture, { capture: true });
   };
 
-  /** The first gesture: make the AudioContext inside it (it starts at once), then the engine. */
+  /** Own engine: the first gesture makes the AudioContext inside it (it starts at once), then the engine. */
   function onGesture(): void {
     if (context || failed || disposed) return;
     // Esc and the like do not count as activation: making the context then would leave it suspended
     if (navigator.userActivation && !navigator.userActivation.isActive) return;
     stopListening();
+    let ctx: AudioContext;
     try {
-      context = makeContext();
+      ctx = makeContext();
     } catch {
       failed = true;
       return;
     }
-    const ctx = context;
+    context = ctx;
     void makeEngine(ctx).then(
       (e) => {
         // left before the engine was ready: dispose() has already closed the context
@@ -283,14 +336,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
           void e.dispose();
           return;
         }
-        engine = e;
-        emitters = {
-          hand: e.createEmitter('sfx'),
-          orb: e.createEmitter('sfx', { x: PEDESTAL_ORB[0], y: PEDESTAL_ORB[1], z: PEDESTAL_ORB[2] }),
-          drop: e.createEmitter('sfx', { x: DROP[0], y: DROP[1], z: DROP[2] }),
-        };
-        live.push(emitters.hand, emitters.orb, emitters.drop);
-        follow();
+        attach(e);
         // later interruptions (a backgrounded tab, a device change) resume on the next gesture
         e.bindUnlockGestures(target);
         // still inside the gesture's activation: start it if the browser made it suspended
@@ -303,7 +349,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       },
     );
   }
-  for (const type of GESTURES) target.addEventListener(type, onGesture, { capture: true });
+
+  // a shared engine is started (and resumed, and closed) by its owner; otherwise wait for the first gesture
+  const stopWaiting = shared
+    ? shared.whenReady((e) => {
+        if (!disposed && !engine) attach(e);
+      })
+    : null;
+  if (!shared) for (const type of GESTURES) target.addEventListener(type, onGesture, { capture: true });
 
   const probe: SoundProbe = {
     get state() {
@@ -314,17 +367,21 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     get unlocked() {
       return context !== null;
     },
+    get shared() {
+      return shared !== null;
+    },
     get room() {
       return engine?.snapshot().room ?? roomId;
     },
     get panning() {
       return live.map((e) => (e.input as PannerNode).panningModel);
     },
+    // its own engine: everything the engine did (nothing else plays on it); shared: what it did for this sound
     get voicesStarted() {
-      return engine?.snapshot().voicesStarted ?? 0;
+      return shared ? voicesStarted : (engine?.snapshot().voicesStarted ?? 0);
     },
     get voicesDropped() {
-      return engine?.snapshot().voicesDropped ?? 0;
+      return shared ? voicesDropped : (engine?.snapshot().voicesDropped ?? 0);
     },
     get played() {
       return log.played;
@@ -358,10 +415,13 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       off();
       subscribed = false;
       stopListening();
+      stopWaiting?.();
       for (const e of live) e.dispose();
       live.length = 0;
+      // a shared engine and its context are its owner's to fade out and close
+      if (shared) return;
       const e = engine;
-      const ctx = context;
+      const ctx = context as AudioContext | null;
       if (!ctx) return;
       const close = (): Promise<void> => ctx.close().catch(() => undefined);
       // the engine fades the mix out (~20 ms) and disconnects; the context is ours to close

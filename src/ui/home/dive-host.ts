@@ -33,6 +33,11 @@ export interface HomeDiveOptions {
   rewindFromGame: boolean;
   /** Published on the probe next to the home/dive state (e.g. `{ room: worldProbe }`). */
   probeExtras?: Record<string, unknown>;
+  /**
+   * The page's audio, when the caller shares it with the world (S-18: one AudioContext). 「はじめる」 still starts it;
+   * the caller disposes it after the world's sound let go of it. Default: the host makes and disposes its own.
+   */
+  audio?: AudioGate;
 }
 
 const TILT_SMOOTH_SECONDS = 0.4;
@@ -78,7 +83,8 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   const pmrem = new THREE.PMREMGenerator(renderer);
   let homeEnv: THREE.RenderTarget | null = null;
   const ui = createUiRoot(overlay, lang);
-  const gate = new AudioGate();
+  const gate = opts.audio ?? new AudioGate();
+  const ownsGate = !opts.audio;
   if (autoplay !== 'off') gate.skip();
   const flow = new ScreenFlow();
 
@@ -88,6 +94,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     transition: null,
     load: { progress: 0, fill: 0, ready: false, seconds: 0, steps: [] },
     audio: gate.state,
+    audioGate: gate.probe,
     focused: null,
     hovered: null,
     selected: null,
@@ -534,7 +541,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       loading.dispose();
       menu.dispose();
       ui.dispose();
-      gate.dispose();
+      if (ownsGate) gate.dispose();
       orb.dispose();
       membrane.dispose();
       mist.dispose();

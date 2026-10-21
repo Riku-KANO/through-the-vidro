@@ -3,6 +3,7 @@ import { Autopilot } from '../game/prologue/autopilot';
 import { isSpawnName, type SpawnName } from '../game/prologue/layout';
 import { createPrologueRoom } from '../game/prologue/room';
 import { createPrologueSound, type PrologueSound } from '../game/prologue/sound';
+import { AudioGate } from '../ui/audio-gate';
 import { createHomeDive } from '../ui/home/dive-host';
 import { pickLang } from '../ui/lang';
 
@@ -23,7 +24,8 @@ export const title =
  *   peekHold=<0..1>, growHold=<0..1>   freeze the peek / a placed orb's growth (exact screenshots)
  * Publishes window.__vidro.sceneProbe.room (game/prologue/room.ts RoomProbe) next to the home/dive probe, and
  * .sound (game/prologue/sound.ts SoundProbe): the room's events answered with po-pens and glass (S-16), silent until
- * the first gesture.
+ * the audio starts: through the home, the press of 「はじめる」 starts the page's one engine, shared by the home's drops
+ * and the room (.audioGate, S-18); in direct mode, the room's own on the first gesture.
  */
 const unit = (v: string | null): number | null => {
   if (v === null || v.trim() === '') return null;
@@ -50,15 +52,19 @@ const create: SceneFactory = async (ctx) => {
     lang: pickLang(navigator.languages),
   });
 
-  const sound = createPrologueSound(room);
+  // One AudioContext (S-18): through the home, 「はじめる」 starts the page's engine and the room plays on it;
+  // alone (direct), the room makes its own on the first gesture (S-16).
+  const audio = direct ? null : new AudioGate();
+  const sound = createPrologueSound(room, audio ? { shared: audio } : {});
 
   // The WebGL2 timestamp-pool workaround that lived here is gone: main.ts drains the pool outside any render (S-11).
-  if (!direct) {
+  if (audio) {
     const host = createHomeDive(ctx, room, {
       rewindFromGame: false,
+      audio,
       probeExtras: { room: room.probe, sound: sound.probe },
     });
-    return withSound(host, sound);
+    return withSound(host, sound, audio);
   }
 
   window.__vidro.sceneProbe = { screen: 'game', room: room.probe, sound: sound.probe };
@@ -96,8 +102,11 @@ const create: SceneFactory = async (ctx) => {
   return sandbox;
 };
 
-/** The home → dive host with the room's sound: the listener follows the camera after the host moved it. */
-function withSound(host: SandboxScene, sound: PrologueSound): SandboxScene {
+/**
+ * The home → dive host with the room's sound: the listener follows the camera after the host moved it. On leaving,
+ * the room's sound lets go of the shared engine first, then the page's audio is closed.
+ */
+function withSound(host: SandboxScene, sound: PrologueSound, audio: AudioGate): SandboxScene {
   const wrapped: SandboxScene = {
     get scene() {
       return host.scene;
@@ -110,8 +119,16 @@ function withSound(host: SandboxScene, sound: PrologueSound): SandboxScene {
       sound.update();
     },
     dispose() {
-      sound.dispose();
-      host.dispose();
+      // also when one of them fails to let go: the page's AudioContext must not outlive the scene
+      try {
+        sound.dispose();
+      } finally {
+        try {
+          host.dispose();
+        } finally {
+          audio.dispose();
+        }
+      }
     },
   };
   if (host.render) wrapped.render = () => host.render?.();

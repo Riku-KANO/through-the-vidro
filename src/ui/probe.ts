@@ -1,4 +1,4 @@
-import type { AudioState } from './audio-gate';
+import type { AudioGateProbe, AudioState } from './audio-gate';
 import type { Screen } from './flow';
 import type { HomeItem } from './home/menu-logic';
 
@@ -38,6 +38,8 @@ export interface HomeDiveProbe {
     steps: { name: string; seconds: number; maxFrameMs: number }[];
   };
   audio: AudioState;
+  /** The page's one AudioContext and engine (S-18): what the UI and the game started on it. */
+  audioGate: AudioGateProbe;
   focused: HomeItem | null;
   hovered: HomeItem | null;
   selected: HomeItem | null;
