@@ -32,7 +32,8 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
 `gpuTrust=1`（信用していない GPU でもタイムスタンプで判断する） `gpuSpan=0`（自前の span を測らない） `gpuPasses=0`（three のパスごとのタイムスタンプを使わない）
-`dynresResponse=0`（手応えの検査を切る。配線だけを確かめる試験用） `debug=1`（`window.__vidroDebug` に renderer と setScale を出す）。
+`dynresResponse=0`（手応えの検査を切る。配線だけを確かめる試験用） `debug=1`（`window.__vidroDebug` に renderer・setScale・backdropRisks を出し、描いた根を記録するため `renderer.render` と `compileAsync` を
+インスタンスの上で包む。`status` が `running` になってから使う。さらに包むコードは元の関数を `apply(renderer, args)` で呼ぶ）。
 `quality=auto` と `bench` を一緒に使うと計測の途中でプリセットが変わるので、計測は固定のプリセットで行う。
 シーン固有のスイッチ（例: stress の `peek=0`）は各シーンの先頭のコメントに書く。
 
@@ -48,6 +49,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
 - **警告もセンサーの対象（S-11、S-13）**: `tests/e2e/scenes.spec.ts` は console の error と warning を集め、`KNOWN_CONSOLE`（パターン、理由、担当スライス、シーン、経路、例文。
   正規表現の g/y フラグは禁止）にないものが1つでもあれば落ちる。警告を許すときは、理由と担当スライスを書いて一覧に足す。センサーが見るのは各シーンの約5秒だけなので、時間がたってから出る警告は見逃しうる。
+- **ノードのない透過の材質のセンサー（S-14）**: `tests/e2e/backdrop-risks.spec.ts` が全シーンを `?debug=1` で開き、起動の約1秒後と5秒後に
+  `window.__vidroDebug.backdropRisks()`（`src/dev/backdrop-risks.ts`、判定は core の `missesBackdropResize`）を呼んで、シーンと、シーンが描いた・
+  コンパイルした根の全材質を調べる。1つでもあれば落ちる。既定は WebGPU だけ（`BACKENDS` で WebGL2 も）。限界: 描いた後にノードを足した材質は安全と
+  判定する（見逃す）、5秒までに描きもコンパイルもしない世界は見えない、既定のスイッチで開いたときに玉の中の世界を見ていることは確かめていない（S-15）。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲

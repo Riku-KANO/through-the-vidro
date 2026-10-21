@@ -38,8 +38,10 @@ const backends = (process.env.BACKENDS ?? 'webgpu').split(',');
 /** Seconds after the scene starts running. */
 const CHECK_AT = [1, 5];
 /**
- * Scenes whose world is drawn outside sandbox.scene (the home screen's orb shows it, S-04/S-06): by the last check
- * the sensor must be looking at more than one root, or it would miss that world silently.
+ * Scenes whose world is drawn outside sandbox.scene (the home screen's orb shows it, S-04/S-06). The check below only
+ * asks for two or more roots, which is weak: PMREM's helper scenes and the groups passed to compileAsync count too, so
+ * it does not prove the world itself was seen when the scene opens with its default switches (review round 2 of S-14).
+ * The positive control proves it for autoplay only; S-15 strengthens this with per-root counts of backdrop readers.
  */
 const WORLD_OUTSIDE_SCENE = ['home-dive', 'prologue-proto'];
 
@@ -106,7 +108,7 @@ test('positive control: a risky material in a world drawn outside sandbox.scene 
     const drawn = new Set<THREE.Object3D>();
     renderer.render = (...args: Parameters<THREE.WebGPURenderer['render']>) => {
       drawn.add(args[0]);
-      return sensorRender(...args);
+      return sensorRender.apply(renderer, args);
     };
     await new Promise<void>((resolve) => {
       let left = 10;
@@ -120,10 +122,13 @@ test('positive control: a risky material in a world drawn outside sandbox.scene 
     const found: { glass?: THREE.Material; mesh?: THREE.Mesh } = {};
     world.traverse((o) => {
       const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      found.mesh ??= mesh;
+      if (!mesh.isMesh || found.glass) return;
       const m = mesh.material as THREE.Material;
-      if (!found.glass && m.type === 'MeshPhysicalNodeMaterial') found.glass = m;
+      // Take the mesh class from the same mesh as the material (not an InstancedMesh or another kind found first).
+      if (m.type === 'MeshPhysicalNodeMaterial') {
+        found.glass = m;
+        found.mesh = mesh;
+      }
     });
     if (!found.glass || !found.mesh) return { error: 'no MeshPhysicalNodeMaterial in the world' };
     type Make<T, A extends unknown[]> = new (...args: A) => T;

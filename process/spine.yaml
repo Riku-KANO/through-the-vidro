@@ -326,19 +326,36 @@ slices:
 
   - id: S-14
     title: ノードのない透過の材質を見つけるセンサーと、残るシーンの修正
-    status: todo
+    status: integrated
+    branch: slice/S-14-backdrop-sensor
+    accepted: レビュー2巡で P1 なし、P2 は最小の直し方（主張の訂正と限界の記録）で統合時に親が解消。本筋は S-15（2026-10-21）
     depends: [S-12]
     requirements:
       - 技術設計 > 品質プリセット（プレイ中も負荷に応じて描画解像度を動的に調整）
     paths:
-      - src/main.ts（?debug=1 の __vidroDebug に判定の関数を出すだけ）
-      - tests/e2e/scenes.spec.ts
+      - src/main.ts（判定の関数と、描いた根を記録するための render/compileAsync の包み。?debug=1 のときだけ）
+      - src/dev/backdrop-risks.ts
+      - src/dev/backdrop-risks.test.ts
+      - tests/e2e/backdrop-risks.spec.ts
       - src/scenes/hello.scene.ts
       - src/scenes/audio-lab.scene.ts
       - src/scenes/home-dive.scene.ts
       - process/slices/S-14.md
     acceptance:
-      - ?debug=1 の __vidroDebug に、今のシーンの全材質を core の missesBackdropResize で調べる関数（例 backdropRisks()）を出す（判定を二重に持たない）
-      - ブラウザセンサー（scenes.spec.ts）が、起動から約1秒後と窓の終わりに全シーンでこの関数を呼び、危ない材質があれば落ちる。限界（描いた後にノードを足した材質は見逃す）を記録する
-      - センサーを先に入れて hello・audio-lab・home-dive の器が赤になることを確かめてから、各シーンで followBackdropResize() を通して緑にする（赤の証跡を残す）
+      - ?debug=1 の __vidroDebug.backdropRisks() が、シーンと、シーンが描いた・コンパイルした根の全材質を core の missesBackdropResize で調べ、{ roots, risks } を返す（判定を二重に持たない）
+      - tests/e2e/backdrop-risks.spec.ts が全シーンで起動の約1秒後と5秒後にこれを呼び、危ない材質があれば落ちる。センサー自身を単体テスト（変異で赤）と陽性の対照で確かめる。限界を記録する
+      - センサーを先に入れて hello・audio-lab・home-dive の器が赤になることを確かめてから、各シーンで followBackdropResize() を通して緑にする
 
+  - id: S-15
+    title: 透過の材質のセンサーで、玉の中の世界を見ていることを確かめる
+    status: todo
+    depends: [S-14]
+    paths:
+      - src/dev/backdrop-risks.ts
+      - src/dev/backdrop-risks.test.ts
+      - tests/e2e/backdrop-risks.spec.ts
+      - process/slices/S-15.md
+    acceptance:
+      - backdropRisks() のレポートに、根ごとの「透過を読む材質の数」（core の readsBackdrop() で数える。安全なものも含める）を足す（例 roots: { label, backdropReaders }[]）
+      - e2e で、home-dive と prologue-proto を既定のスイッチで開いたとき、先頭以外の根に透過を読む材質が1つ以上あることを確かめる（根が2つ以上、の確認を置き換える）
+      - 単体テストを1件足し、「isScene で sandbox.scene でない根だけ記録しない」変異で赤になることを確かめる

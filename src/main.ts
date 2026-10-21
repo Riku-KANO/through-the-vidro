@@ -84,7 +84,12 @@ export interface VidroProbe {
   sceneProbe: Record<string, unknown>;
 }
 
-/** ?debug=1 only: internals for page scripts (Playwright, DevTools). */
+/**
+ * ?debug=1 only: internals for page scripts (Playwright, DevTools).
+ * Exists from before the first scene is created: use it only once window.__vidro.status is 'running'
+ * (a setScale() before that is overwritten when the scene applies its preset). Code that wraps renderer.render again
+ * must call the previous function with apply(renderer, args): the sensor replaced it on the instance.
+ */
 export interface VidroDebug {
   renderer: THREE.WebGPURenderer;
   /** Sets the render scale directly, past the governor. */
