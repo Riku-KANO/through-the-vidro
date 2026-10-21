@@ -27,7 +27,6 @@ import { createHomeOrb } from './orb';
  * The world is a DiveWorld (src/game/dive-world.ts): the prologue room (S-06) or S-04's placeholder city
  * (src/scenes/home-dive.scene.ts). Made pluggable from the S-04 home-dive scene in S-06.
  */
-export type { DiveWorld };
 
 export interface HomeDiveOptions {
   /** Sandbox only: Esc in the game plays the dive back to home (the real game opens the pause screen). */

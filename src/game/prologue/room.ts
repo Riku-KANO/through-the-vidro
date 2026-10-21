@@ -5,7 +5,6 @@ import { LayerField } from '../../layers/field';
 import { segmentsUnder, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
 import { glassEase } from '../../layers/tween';
-import { pickLang } from '../../ui/lang';
 import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
@@ -54,6 +53,8 @@ export interface RoomOptions {
   growHold: number | null;
   /** Scripted play (?autoplay=1). */
   autopilot: Autopilot | null;
+  /** Language of the prompts (the scene picks it from the browser: 英語版 > 言語の初期値). */
+  lang: 'ja' | 'en';
 }
 
 export type TargetKind = 'bench' | 'pedestal' | 'drop';
@@ -96,6 +97,8 @@ export interface RoomProbe {
   backPassFrames: number;
   /** Render counters of the last frame (all passes). */
   drawCalls: number;
+  /** Times the fall guard had to put the body back (must stay 0: 落下死はない should hold without it). */
+  fallRescues: number;
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   autoplay: { step: string; done: boolean } | null;
@@ -209,6 +212,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     backPassFrames: 0,
     drawCalls: 0,
     triangles: 0,
+    fallRescues: 0,
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     autoplay: opts.autopilot ? { step: '', done: false } : null,
     layout: { edgeZ: EDGE_Z, farZ: FAR.maxZ, pedestalOrb: PEDESTAL_ORB, drop: DROP },
@@ -310,8 +314,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const queue: InputEvent['type'][] = [];
   const offInput = input.on((e) => queue.push(e.type));
 
-  const lang = pickLang(navigator.languages);
-  const text = STRINGS[lang];
+  const text = STRINGS[opts.lang];
   const prompt = createPrompt(overlay);
 
   // dev holds (screenshots): a placed orb frozen mid-growth
@@ -337,8 +340,6 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   let target: TargetKind | null = null;
   let promptText = '';
   let mainRadius = 0;
-  let heldFor: readonly unknown[] | null = null;
-  let held: readonly { center: Vec3; radius: number }[] = [];
   let onBackFooting = false;
   const guard = new FallGuard();
   const idle: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
@@ -367,6 +368,29 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     sunDirection: art.sunDirection,
   };
   const candidates: TargetCandidate<TargetKind>[] = [];
+  const benchTarget: TargetCandidate<TargetKind> = { target: 'bench', point: BENCH_ORB, reach: REACH };
+  const pedestalTarget: TargetCandidate<TargetKind> = {
+    target: 'pedestal',
+    point: PEDESTAL_ORB,
+    reach: REACH,
+  };
+  const dropTarget: TargetCandidate<TargetKind> = { target: 'drop', point: DROP, reach: DROP_REACH };
+  /** The body as read once per frame (S-03's getters return new objects each time). */
+  const body = { fx: 0, fy: 0, fz: 0, ey: 0, vx: 0, vy: 0, vz: 0 };
+  const readBody = (): void => {
+    const f = player.feet;
+    const v = player.velocity;
+    body.fx = f.x;
+    body.fy = f.y;
+    body.fz = f.z;
+    body.ey = player.eye.y;
+    body.vx = v.x;
+    body.vy = v.y;
+    body.vz = v.z;
+  };
+  /** Moves an eased 0..1 toward 0 or 1 by at most `k`. */
+  const ease = (now: number, on: boolean, k: number): number =>
+    on ? Math.min(1, now + k) : Math.max(0, now - k);
   const dropFrom = new THREE.Vector3(...DROP);
   const feetAt: [number, number, number] = [0, 0, 0];
   const dropTo = new THREE.Vector3();
@@ -375,8 +399,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     target === 'pedestal' ? { kind: 'pedestal', id: PEDESTAL_ID } : target ? { kind: target } : null;
 
   const handle = (type: InputEvent['type']): void => {
-    const f = player.feet;
-    if (type === 'interact') probe.lastAction = session.interact(interactTarget(), [f.x, f.y, f.z]);
+    feetAt[0] = body.fx;
+    feetAt[1] = body.fy;
+    feetAt[2] = body.fz;
+    if (type === 'interact') probe.lastAction = session.interact(interactTarget(), feetAt);
     else if (type === 'peekDenied') {
       session.refusePeek();
       probe.lastAction = 'peek-denied';
@@ -389,14 +415,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const chooseTarget = (): void => {
     candidates.length = 0;
     const place = session.orbPlace;
-    if (place === 'bench') candidates.push({ target: 'bench', point: BENCH_ORB, reach: REACH });
-    else candidates.push({ target: 'pedestal', point: PEDESTAL_ORB, reach: REACH });
-    if (session.dropState === 'waiting' && dropDrawn())
-      candidates.push({ target: 'drop', point: DROP, reach: DROP_REACH });
-    const e = player.eye;
-    eye[0] = e.x;
-    eye[1] = e.y;
-    eye[2] = e.z;
+    candidates.push(place === 'bench' ? benchTarget : pedestalTarget);
+    if (session.dropState === 'waiting' && dropDrawn()) candidates.push(dropTarget);
+    eye[0] = body.fx;
+    eye[1] = body.ey;
+    eye[2] = body.fz;
     target = pickTarget(eye, lookDirection(player.yaw, player.pitch, forward), candidates, FACING_DEG);
   };
 
@@ -429,10 +452,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       const sp = spheres[i];
       const f = fieldSpheres[i];
       if (!sp || !f) continue;
-      const held = opts.growHold !== null && sp.kind === 'main';
-      const m = held ? { progress: opts.growHold ?? 1, target: 1 as const } : sp.materialize;
+      const frozen = opts.growHold !== null && sp.kind === 'main';
+      const m = frozen ? { progress: opts.growHold ?? 1, target: 1 as const } : sp.materialize;
       f.center = sp.center;
-      f.radius = held ? materializedRadius(m, MAIN_ORB_RADIUS) : sp.radius;
+      f.radius = frozen ? materializedRadius(m, MAIN_ORB_RADIUS) : sp.radius;
       f.glow = boundaryGlow(m) + (sp.kind === 'main' ? flash : 0);
       if (sp.kind === 'main') {
         mainGlow = f.glow;
@@ -452,20 +475,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       }
     }
     field.setSpheres(fieldList);
-    // colliders follow the session's spheres (the same array until the orbs change); the dev hold its own
-    // Colliders follow every sphere; the fence only the spheres of orbs on a pedestal (a sphere shrinking
-    // after a pickup is no ground to step onto). Both arrays change only when the orbs do; the dev hold
-    // uses what it draws.
-    if (opts.growHold !== null) {
-      const drawn = fieldList.map((s) => ({ center: s.center, radius: s.radius }));
-      footing.sync(drawn, drawn);
-    } else {
-      if (spheres !== heldFor) {
-        heldFor = spheres;
-        held = spheres.filter((sp) => sp.materialize.target === 1);
-      }
-      footing.sync(spheres, held);
-    }
+    // The footing takes the session's spheres as they are (the same array until the orbs change) and decides
+    // the fence itself (physics.holdsGround). The dev hold uses what it draws.
+    footing.sync(
+      opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius })),
+    );
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;
@@ -493,17 +507,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   };
 
   const publish = (): void => {
-    const f = player.feet;
-    const v = player.velocity;
-    const e = player.eye;
     probe.time = time;
     probe.playing = playing;
-    probe.position.x = f.x;
-    probe.position.y = f.y;
-    probe.position.z = f.z;
+    probe.position.x = body.fx;
+    probe.position.y = body.fy;
+    probe.position.z = body.fz;
     probe.grounded = player.grounded;
-    probe.speed = Math.hypot(v.x, v.z);
-    probe.eyeHeight = e.y - f.y;
+    probe.speed = Math.hypot(body.vx, body.vz);
+    probe.eyeHeight = body.ey - body.fy;
     probe.yaw = player.yaw;
     probe.pitch = player.pitch;
     probe.fov = camera.fov;
@@ -570,12 +581,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         wantPeek = input.peeking || opts.forcePeek;
         const pilot = opts.autopilot;
         if (pilot) {
-          const f = player.feet;
           const order = pilot.step(dt, {
-            feet: [f.x, f.y, f.z],
+            feet: [body.fx, body.fy, body.fz],
             yaw: player.yaw,
             pitch: player.pitch,
-            speed: Math.hypot(player.velocity.x, player.velocity.z),
+            speed: Math.hypot(body.vx, body.vz),
             target,
             orb: session.orbPlace,
             sphereRadius: session.spheres().find((s) => s.kind === 'main')?.radius ?? 0,
@@ -604,38 +614,46 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       world.step();
       if (playing) {
         player.update(dt, intent);
-        const f = player.feet;
-        feetAt[0] = f.x;
-        feetAt[1] = f.y;
-        feetAt[2] = f.z;
+        readBody();
+        feetAt[0] = body.fx;
+        feetAt[1] = body.fy;
+        feetAt[2] = body.fz;
         // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now;
         // only looked up near the bridge, so most frames allocate nothing
         onBackFooting =
-          f.z < BRIDGE.max[2] + 0.5 &&
-          f.z > BRIDGE.min[2] - 0.5 &&
+          body.fz < BRIDGE.max[2] + 0.5 &&
+          body.fz > BRIDGE.min[2] - 0.5 &&
           segmentsUnder(feetAt, footing.segments).some((seg) => footing.activeIds.includes(seg.id));
-        // 落下死はない: the last line of defence if the body ever drops below the walkways
+        // 落下死はない: the last line of defence if the body ever drops below the walkways. It should never
+        // act; when it does it says so (the e2e counts console warnings) and counts on the probe.
         guard.observe(feetAt, player.grounded, onBackFooting);
         const back = guard.rescue(feetAt);
-        if (back) player.teleport({ x: back[0], y: back[1], z: back[2] });
+        if (back) {
+          probe.fallRescues++;
+          console.warn(
+            `S-06: the body fell below the walkways at (${body.fx.toFixed(2)}, ${body.fy.toFixed(2)}, ${body.fz.toFixed(2)}); put back at (${back.join(', ')})`,
+          );
+          player.teleport({ x: back[0], y: back[1], z: back[2] });
+          readBody();
+        }
         player.applyToCamera(camera);
         camera.updateMatrixWorld();
-      }
+      } else readBody();
       chooseTarget();
       updatePrompt();
       // 調べられる物に近づくと縁が淡く光る: 0.2 s in and out, like the prompt
       const k = Math.min(1, dt / FOCUS_SECONDS);
-      const place = session.orbPlace;
-      const want = {
-        orb: playing && (target === 'bench' || (target === 'pedestal' && place === 'pedestal')) ? 1 : 0,
-        pedestal: playing && target === 'pedestal' ? 1 : 0,
-        drop: playing && target === 'drop' ? 1 : 0,
-      };
-      for (const key of ['orb', 'pedestal', 'drop'] as const) {
-        focusNow[key] +=
-          Math.sign(want[key] - focusNow[key]) * Math.min(k, Math.abs(want[key] - focusNow[key]));
-        art.focus[key].value = focusNow[key];
-      }
+      const onPedestal = session.orbPlace === 'pedestal';
+      focusNow.orb = ease(
+        focusNow.orb,
+        playing && (target === 'bench' || (target === 'pedestal' && onPedestal)),
+        k,
+      );
+      focusNow.pedestal = ease(focusNow.pedestal, playing && target === 'pedestal', k);
+      focusNow.drop = ease(focusNow.drop, playing && target === 'drop', k);
+      art.focus.orb.value = focusNow.orb;
+      art.focus.pedestal.value = focusNow.pedestal;
+      art.focus.drop.value = focusNow.drop;
       handOrbCenter(amount, session.handPresence, time, orbCenter);
       frame.peek = amount;
       frame.visible = session.handPresence > 0.001;

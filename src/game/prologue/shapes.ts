@@ -94,9 +94,9 @@ function deckSlope(z: number): number {
 
 /**
  * The arched deck from z0 to z1 (z0 > z1 or z0 < z1, either way): a box section of the bridge's width and
- * `thickness` swept along deckHeight(z), closed at both ends. The same triangles are drawn and collided with
- * (each footing segment is one such piece). `lift` moves it up or down (the drawn deck sits 3 mm under the
- * shores where it overlaps them).
+ * `thickness` swept along deckHeight(z), closed at both ends. The drawn deck and the colliders (one such piece
+ * per footing segment) are swept from this same curve. `lift` moves it up or down (the drawn deck sits 3 mm
+ * under the shores where it overlaps them).
  */
 export function deckMesh(z0: number, z1: number, steps: number, thickness = 0.14, lift = 0): MeshData {
   const x0 = BRIDGE.min[0];

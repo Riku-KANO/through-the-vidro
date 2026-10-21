@@ -85,6 +85,31 @@ describe('back-layer footing as Rapier colliders (技術設計 > 裏の層の実
     expect(r.footing.activeCount).toBe(0);
   });
 
+  it('a sphere shrinking after a pickup keeps its colliders but is no ground to step onto (the fence)', () => {
+    const r = room();
+    const mid = (BRIDGE.min[2] + BRIDGE.max[2]) / 2;
+    const deck = r.footing.segments.find((seg) => seg.min[2] <= mid && seg.max[2] > mid);
+    if (!deck) throw new Error('no segment under the middle of the bridge');
+    const probeAt = (): boolean => {
+      // a ray straight down onto the middle of the deck, asking the fence like the body does
+      r.world.step(); // queries see enabled colliders after a step
+      const hit = r.world.castRay(new R.Ray({ x: 0, y: 2, z: mid }, { x: 0, y: -1, z: 0 }), 4, true);
+      return !!hit && r.footing.allowGround(0, 2 - hit.timeOfImpact, mid, hit.collider);
+    };
+    const placed = {
+      center: PEDESTAL_ORB,
+      radius: MAIN_ORB_RADIUS,
+      materialize: { progress: 1, target: 1 as const },
+    };
+    r.footing.sync([placed]);
+    expect(r.footing.activeIds).toContain(deck.id);
+    expect(probeAt()).toBe(true);
+    const shrinking = { ...placed, materialize: { progress: 0.9, target: 0 as const } };
+    r.footing.sync([shrinking]);
+    expect(r.footing.activeIds).toContain(deck.id); // the colliders stay until the sphere is gone
+    expect(probeAt()).toBe(false); // but nobody new may step onto them
+  });
+
   it('inside a sphere means inside the sphere, boundary included', () => {
     expect(insideAnySphere(0, 1, 0, [{ center: [0, 0, 0], radius: 1 }])).toBe(true);
     expect(insideAnySphere(0, 1.01, 0, [{ center: [0, 0, 0], radius: 1 }])).toBe(false);
@@ -174,14 +199,10 @@ describe('picking the vidro up never drops you into the valley (罰がない、�
           footing: r.footing.segments,
           drop: DROP,
         });
-        // what the room does every frame: colliders for every sphere, the fence only for orbs on a pedestal
+        // exactly what the room does every frame: hand the session's spheres over as they are
         const tick = () => {
           session.step(DT, { wantPeek: false });
-          const spheres = session.spheres();
-          r.footing.sync(
-            spheres,
-            spheres.filter((sp) => sp.materialize.target === 1),
-          );
+          r.footing.sync(session.spheres());
         };
         const feet: Vec3 = [start[0], start[1], start[2]];
         expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, feet)).toBe('place');

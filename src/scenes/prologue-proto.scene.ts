@@ -3,6 +3,7 @@ import { Autopilot } from '../game/prologue/autopilot';
 import { isSpawnName, type SpawnName } from '../game/prologue/layout';
 import { createPrologueRoom } from '../game/prologue/room';
 import { createHomeDive } from '../ui/home/dive-host';
+import { pickLang } from '../ui/lang';
 
 export const title =
   'S-06 prologue prototype: dive in, take the vidro, walk, peek, place, cross, touch the light drop (?autoplay=1)';
@@ -66,6 +67,7 @@ const create: SceneFactory = async (ctx) => {
     peekHold: direct ? unit(params.get('peekHold')) : null,
     growHold,
     autopilot: params.get('autoplay') === '1' ? new Autopilot() : null,
+    lang: pickLang(navigator.languages),
   });
 
   if (!direct)

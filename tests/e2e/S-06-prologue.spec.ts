@@ -45,6 +45,7 @@ interface RoomProbe {
   backPassFrames: number;
   drawCalls: number;
   triangles: number;
+  fallRescues: number;
   autoplay: { step: string; done: boolean } | null;
   layout: {
     edgeZ: number;
@@ -393,6 +394,7 @@ for (const backend of backends) {
       join(root, `artifacts/S-06/run-${backend}.json`),
       JSON.stringify({ backend, loadingShownMs, shots, final: await room(page), errors }, null, 2),
     );
+    expect((await room(page)).fallRescues, 'the fall guard never had to act').toBe(0);
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
       expect(l.mean, `mean luminance in ${name}`).toBeGreaterThan(0.12);
@@ -468,6 +470,7 @@ for (const backend of backends) {
     expect(push.every((r) => r.grounded && r.position.y > -0.03 && r.position.y < 0.45)).toBe(true);
     expect(push.filter((r) => r.onBackFooting).every(inside)).toBe(true);
     expect(end.speed).toBeLessThan(0.05);
+    expect((await room(page)).fallRescues, 'the fall guard never had to act').toBe(0);
 
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
@@ -483,6 +486,7 @@ for (const backend of backends) {
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
     );
     expect(done.position.z).toBeLessThan(done.layout.farZ);
+    expect(done.fallRescues, 'the fall guard never had to act').toBe(0);
     // every phase in budget (the frame's all passes), and no compile stall in a transition or in play
     const phases = await page.evaluate(
       () =>

@@ -108,6 +108,20 @@ export function addRoomColliders(R: typeof RAPIER, world: RAPIER.World): RAPIER.
 }
 
 /**
+ * A sphere as the footing sees it. With `materialize` (S-02's orb spheres, orbSpheres()), only a sphere whose
+ * orb stands on its pedestal (target 1: growing or grown) holds ground; one shrinking after a pickup (target 0)
+ * keeps its colliders until it is gone but is no ground to step onto. A sphere without it is fixed (held).
+ */
+export interface FootingSphere extends Sphere {
+  materialize?: { target: 0 | 1 };
+}
+
+/** The fence's rule in one place: does this sphere hold ground to step onto? */
+export function holdsGround(sphere: FootingSphere): boolean {
+  return sphere.materialize === undefined || sphere.materialize.target === 1;
+}
+
+/**
  * S-02's back-layer footing as Rapier colliders (技術設計 > 裏の層の実装 > 当たり判定): one per segment,
  * enabled only while a materialized sphere overlaps it (activeSegmentIds). `allowGround` is the
  * invisible fence for the player (球の縁には見えない柵): a segment that pokes out of a sphere is ground
@@ -117,12 +131,12 @@ export class BackFooting {
   private readonly colliders = new Map<string, RAPIER.Collider>();
   private readonly handles = new Set<number>();
   private active: string[] = [];
-  private spheres: readonly Sphere[] = [];
-  private held: readonly Sphere[] = [];
+  private spheres: readonly FootingSphere[] = [];
+  private held: readonly FootingSphere[] = [];
 
   /**
    * @param shape the collision shape of one segment: by default its box; the prologue's arched deck passes
-   *   the drawn deck's own piece (当たり判定は見た目に正直に)
+   *   a piece swept from the same curve as the drawn deck (当たり判定は見た目に正直に)
    */
   constructor(
     R: typeof RAPIER,
@@ -155,15 +169,15 @@ export class BackFooting {
   }
 
   /**
-   * Switches the colliders for the current spheres (`activeSegmentIds`). The fence counts only `held`: the
-   * spheres of orbs standing on a pedestal. A sphere shrinking after a pickup keeps its colliders until it is
-   * gone (nobody stands on them: canPickUp refuses that), but is no longer ground to step onto.
-   * Returns whether the colliders changed.
+   * Switches the colliders for the current spheres (`activeSegmentIds`) and the fence for the spheres that
+   * hold ground (`holdsGround`). A sphere shrinking after a pickup keeps its colliders until it is gone (nobody
+   * stands on them: canPickUp refuses that), but is no longer ground to step onto (S-06 P1).
+   * Pass the same array while nothing changed (session.spheres() does). Returns whether the colliders changed.
    */
-  sync(spheres: readonly Sphere[], held: readonly Sphere[] = spheres): boolean {
-    this.held = held;
+  sync(spheres: readonly FootingSphere[]): boolean {
     if (spheres === this.spheres) return false;
     this.spheres = spheres;
+    this.held = spheres.every(holdsGround) ? spheres : spheres.filter(holdsGround);
     const next = activeSegmentIds(this.segments, spheres);
     if (next.length === this.active.length && next.every((id, i) => id === this.active[i])) return false;
     const on = new Set(next);
@@ -211,7 +225,10 @@ export class FallGuard {
   }
 }
 
-/** One footing segment of the arched deck, exactly as drawn (4 steps per 0.4 m). */
+/**
+ * One footing segment of the arched deck, swept from the same curve as the drawn deck (4 steps per 0.4 m; the
+ * drawn deck samples the curve at other points, so the two differ by about a millimetre between samples).
+ */
 export function deckSegmentShape(segment: FootingSegment): MeshData {
   return deckMesh(segment.max[2], segment.min[2], 4);
 }

@@ -166,10 +166,7 @@ function meshDataGeometry(data: MeshData): THREE.BufferGeometry {
   return g;
 }
 
-/**
- * A strip along z between two edges given as (x or first coordinate, y) per z: vertical panels pass
- * x-fixed edges with different heights, a horizontal veil passes two x positions at one height.
- */
+/** A strip along z between two edges given as (x, y) per z (the bridge's glass panels). */
 function ribbon(
   z0: number,
   z1: number,
@@ -177,7 +174,6 @@ function ribbon(
   a: (z: number) => [number, number],
   b: (z: number) => [number, number],
   normal: [number, number, number],
-  flat = false,
 ): THREE.BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
@@ -187,7 +183,6 @@ function ribbon(
     const z = z0 + ((z1 - z0) * i) / steps;
     const [ax, ay] = a(z);
     const [bx, by] = b(z);
-    // vertical panels: (x, y) pairs at the same x; flat veils: (x, y) pairs across
     positions.push(ax, ay, z, bx, by, z);
     normals.push(...normal, ...normal);
     uvs.push(0, i / steps, 1, i / steps);
@@ -196,7 +191,6 @@ function ribbon(
       indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
     }
   }
-  void flat;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
@@ -681,7 +675,8 @@ export function buildRoomArt(
     const len = BRIDGE.max[2] - BRIDGE.min[2];
     const fromZ = BRIDGE.max[2] + 0.15;
     const toZ = BRIDGE.min[2] - 0.15;
-    // the same sweep its colliders use (shapes.deckMesh), 3 mm under the shores where it overlaps them
+    // swept from the same curve as its colliders (shapes.deckMesh, sampled more finely), 3 mm under the shores
+    // where it overlaps them
     const deck = mesh(meshDataGeometry(deckMesh(fromZ, toZ, 48, 0.14, -0.003)), keep(deckMaterial()));
     deck.receiveShadow = true;
     put(deck, 'back');
@@ -710,6 +705,8 @@ export function buildRoomArt(
     put(mesh(merged(rails), brass), 'back');
     // 橋は透明ガラス (アートディレクション > ガラスの種類), but only as the balustrade: the deck you walk on is frosted
     panelGlass.side = THREE.DoubleSide;
+    // one pass for both faces (three would draw a double-sided transparent material twice)
+    panelGlass.forceSinglePass = true;
     const panels: THREE.BufferGeometry[] = [];
     for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02])
       panels.push(
@@ -736,48 +733,13 @@ export function buildRoomArt(
     );
     put(mesh(merged(lanterns), lanternMilk), 'back');
   }
-  // 行き止まりの理由: 裏の層の気配 (空間の可読性と導線 9). A faint veil of light that ripples where the bridge
-  // will be, seen straight ahead from the dead end. It is surface layer: the real bridge replaces it inside
-  // the sphere, and the peek image (the back layer) does not show it.
-  const veilTime = uniform(0);
+  // 行き止まりの理由: 裏の層の気配 (空間の可読性と導線 9, 光の揺らぎ). Faint, broken lines of light that drift
+  // along where the bridge's handrails will be: from the dead end the outline of something spanning the gap,
+  // never brighter than the gate. Surface layer: the real bridge replaces them inside the sphere, and the
+  // peek image (the back layer) does not show them — through the orb the bridge itself is there.
+  // (A flat veil at deck height was tried and dropped: from the dead end it lies below the view.)
+  const ghostTime = uniform(0);
   {
-    const veilMat = keep(
-      new THREE.MeshBasicNodeMaterial({
-        transparent: true,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        side: THREE.DoubleSide,
-      }),
-    );
-    veilMat.fog = false;
-    const across = sin(uv().x.mul(Math.PI)).pow(1.5);
-    const waves = sin(uv().y.mul(24).sub(veilTime.mul(1.6)))
-      .mul(0.5)
-      .add(0.5);
-    const drift = sin(uv().y.mul(8).add(uv().x.mul(5)).add(veilTime.mul(0.7)))
-      .mul(0.5)
-      .add(0.5);
-    const fadeEnds = smoothstep(0, 0.12, uv().y).mul(smoothstep(1, 0.88, uv().y));
-    const glow = across
-      .mul(waves.mul(0.6).add(drift.mul(0.4)))
-      .mul(fadeEnds)
-      .mul(0.4);
-    veilMat.colorNode = vec4(vec3(1.0, 0.78, 0.5).mul(glow), 1);
-    const veil = mesh(
-      ribbon(
-        EDGE_Z + 0.05,
-        FAR.maxZ - 0.05,
-        40,
-        (z) => [-0.58, deckHeight(z) + 0.03],
-        (z) => [0.58, deckHeight(z) + 0.03],
-        [0, 1, 0],
-        true,
-      ),
-      veilMat,
-    );
-    veil.renderOrder = 4;
-    put(veil, 'surface');
-    // and faint shimmering lines where its handrails will be: the outline of a bridge over the gap
     const ghostMat = keep(
       new THREE.MeshBasicNodeMaterial({
         transparent: true,
@@ -786,18 +748,21 @@ export function buildRoomArt(
       }),
     );
     ghostMat.fog = false;
-    const flow = sin(uv().x.mul(36).sub(veilTime.mul(2.2)))
+    // gaps between the glints (pow), no floor, and gone near the eye like the motes
+    const flow = sin(uv().x.mul(30).sub(ghostTime.mul(2.2)))
       .mul(0.5)
-      .add(0.5);
-    const ends = smoothstep(0, 0.1, uv().x).mul(smoothstep(1, 0.9, uv().x));
-    ghostMat.colorNode = vec4(vec3(1.0, 0.8, 0.52).mul(flow.mul(0.55).add(0.2).mul(ends).mul(0.9)), 1);
+      .add(0.5)
+      .pow(3);
+    const ends = smoothstep(0, 0.12, uv().x).mul(smoothstep(1, 0.88, uv().x));
+    const near = smoothstep(0.8, 2.6, positionView.length());
+    ghostMat.colorNode = vec4(vec3(1.0, 0.8, 0.52).mul(flow.mul(ends).mul(near).mul(0.3)), 1);
     const ghosts: THREE.BufferGeometry[] = [];
     for (const x of [BRIDGE.min[0] - 0.02, BRIDGE.max[0] + 0.02]) {
       const pts = Array.from({ length: 25 }, (_, i) => {
         const z = EDGE_Z - 0.05 + ((FAR.maxZ - EDGE_Z + 0.1) * i) / 24;
         return new THREE.Vector3(x, deckHeight(z) + 0.88, z);
       });
-      ghosts.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.012, 6, false));
+      ghosts.push(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.008, 6, false));
     }
     const ghostRails = mesh(merged(ghosts), ghostMat);
     ghostRails.renderOrder = 4;
@@ -982,7 +947,7 @@ export function buildRoomArt(
     drop,
     fogRange: { near: fogNear, far: fogFar },
     animate(t) {
-      veilTime.value = t;
+      ghostTime.value = t;
       for (let i = 0; i < MOTES; i++) {
         const s = moteSeeds[i];
         if (!s) continue;
