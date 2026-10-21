@@ -17,6 +17,7 @@ import {
   viewportSharedTexture,
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import { followBackdropResize } from '../core/glass';
 import type { SceneFactory } from '../core/scene';
 
 export const title =
@@ -135,20 +136,26 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
   floor.receiveShadow = true;
   scene.add(floor);
 
+  // Hand-made transmissive glass has no node, so three would skip refreshing it and keep a destroyed backdrop
+  // after a render scale change (S-12). followBackdropResize gives it one; createGlass's glass already has one.
   const nearGlass = track(
-    new THREE.MeshPhysicalNodeMaterial({
-      roughness: 0.02,
-      transmission: 1,
-      ior: 1.5,
-      thickness: 0.5,
-      attenuationColor: new THREE.Color(0xeefaf2),
-      attenuationDistance: 3,
-      dispersion: quality.dispersion === 'showcase' ? 0.25 : 0,
-    }),
+    followBackdropResize(
+      new THREE.MeshPhysicalNodeMaterial({
+        roughness: 0.02,
+        transmission: 1,
+        ior: 1.5,
+        thickness: 0.5,
+        attenuationColor: new THREE.Color(0xeefaf2),
+        attenuationDistance: 3,
+        dispersion: quality.dispersion === 'showcase' ? 0.25 : 0,
+      }),
+    ),
   );
   const farGlass = track(
     quality.farGlassTransmission
-      ? new THREE.MeshPhysicalNodeMaterial({ roughness: 0.05, transmission: 1, ior: 1.5, thickness: 0.3 })
+      ? followBackdropResize(
+          new THREE.MeshPhysicalNodeMaterial({ roughness: 0.05, transmission: 1, ior: 1.5, thickness: 0.3 }),
+        )
       : new THREE.MeshStandardNodeMaterial({
           color: 0xf2f7fa,
           roughness: 0.05,
@@ -281,6 +288,7 @@ const create: SceneFactory = async ({ renderer, quality, params, canvas }) => {
     scene,
     camera,
     update(_dt, t) {
+      // S-12's e2e waits are set by this path: the far ring comes back into view after ~18 s, the near glass per loop.
       const z = 4 - ((t * 1.4) % 50);
       camera.position.set(Math.sin(t * 0.3) * 0.6, 1.6, z);
       camera.lookAt(Math.sin(t * 0.2) * 3, 1.4, z - 8);
