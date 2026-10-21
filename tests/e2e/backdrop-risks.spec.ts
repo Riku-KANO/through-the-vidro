@@ -16,8 +16,10 @@ import type { BackdropReport } from '../../src/dev/backdrop-risks';
  * every root the scene drew or compiled (the dive world drawn into the home orb's image, a pass's scene).
  *
  * It asks about 1 s after the scene starts running and again at about 5 s, because some scenes build or first draw
- * their world later (prologue-proto and home-dive behind their loading screen). A last case checks that the sensor
- * really sees a world drawn outside sandbox.scene (positive control).
+ * their world later (prologue-proto and home-dive behind their loading screen). For the scenes whose world is drawn
+ * outside sandbox.scene it also checks, with their default switches, that a root besides sandbox.scene holds materials
+ * that read the backdrop: the world's glass (S-15). A last case checks that a risky material put into such a world is
+ * reported (positive control).
  * Limits (process/slices/S-14.md): it sees the scene graph at those two moments only, with each scene's default
  * switches and preset (mid); not a material swapped in only during a pass, created later in play, made transmissive
  * later, or given its node after it was first drawn (that one counts as safe); not a root drawn by other means than
@@ -38,12 +40,16 @@ const backends = (process.env.BACKENDS ?? 'webgpu').split(',');
 /** Seconds after the scene starts running. */
 const CHECK_AT = [1, 5];
 /**
- * Scenes whose world is drawn outside sandbox.scene (the home screen's orb shows it, S-04/S-06). The check below only
- * asks for two or more roots, which is weak: PMREM's helper scenes and the groups passed to compileAsync count too, so
- * it does not prove the world itself was seen when the scene opens with its default switches (review round 2 of S-14).
- * The positive control proves it for autoplay only; S-15 strengthens this with per-root counts of backdrop readers.
+ * Scenes whose world is drawn outside sandbox.scene (the home screen's orb shows it, S-04/S-06). Counting roots does
+ * not show that the world was seen: PMREM's helper scenes and the groups passed to compileAsync are roots too (review
+ * round 2 of S-14). So these scenes must have, besides sandbox.scene (the first root), a root with at least one
+ * material that reads the backdrop (core's readsBackdrop, safe ones included): their world has transmissive glass,
+ * and the home screen around it has none (S-15).
  */
 const WORLD_OUTSIDE_SCENE = ['home-dive', 'prologue-proto'];
+
+const describeRoots = (r: BackdropReport | null): string =>
+  (r?.roots ?? []).map((root) => `${root.label}: ${root.backdropReaders}`).join(', ');
 
 const report = (page: import('@playwright/test').Page) =>
   page.evaluate(() => window.__vidroDebug?.backdropRisks() ?? null);
@@ -74,10 +80,13 @@ for (const scene of scenes) {
         expect(last?.roots.length ?? 0, `roots looked at, at ${at} s`).toBeGreaterThanOrEqual(1);
         found[`${at} s`] = last?.risks ?? [];
       }
-      if (WORLD_OUTSIDE_SCENE.includes(scene))
-        expect(last?.roots.length ?? 0, `roots looked at (${last?.roots.join(', ')})`).toBeGreaterThanOrEqual(
-          2,
-        );
+      if (WORLD_OUTSIDE_SCENE.includes(scene)) {
+        const outside = last?.roots.slice(1) ?? [];
+        expect(
+          Math.max(0, ...outside.map((r) => r.backdropReaders)),
+          `backdrop readers in a root besides sandbox.scene (roots: ${describeRoots(last)})`,
+        ).toBeGreaterThanOrEqual(1);
+      }
       expect(await page.evaluate(() => window.__vidro.errors), 'probe errors').toEqual([]);
       expect(
         found,
@@ -101,7 +110,7 @@ test('positive control: a risky material in a world drawn outside sandbox.scene 
   const result = await page.evaluate(async () => {
     const debug = window.__vidroDebug;
     if (!debug) return { error: '__vidroDebug missing' };
-    const own = debug.backdropRisks().roots[0];
+    const own = debug.backdropRisks().roots[0]?.label;
     // The scenes drawn over a few frames, caught by a wrapper of this test's own (not the sensor's record).
     const renderer = debug.renderer;
     const sensorRender = renderer.render;
@@ -145,7 +154,7 @@ test('positive control: a risky material in a world drawn outside sandbox.scene 
     return {
       own,
       world: `${world.type}#${world.id}`,
-      looked: after.roots.includes(`${world.type}#${world.id}`),
+      looked: after.roots.some((r) => r.label === `${world.type}#${world.id}`),
       reported: after.risks.filter((r) => r.objectNames.includes('S-14 positive control')).length,
     };
   });
