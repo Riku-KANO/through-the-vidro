@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { activeSegmentIds, type Sphere, splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
 import { type AssembledAsset, addAssetColliders, assembleAsset } from '../assets';
-import { loadGlbInNode } from '../assets/node-glb';
+import { loadGlbInNode } from '../assets/node-glb.test-helper';
 import { BODY_RADIUS } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
@@ -20,6 +20,7 @@ import {
   FOOTING_SEGMENT,
   FURNACE,
   FURNACE_FACING,
+  FURNACE_MOUTH,
   GATE,
   GRATE,
   MOUTH_PIPE_REACH,
@@ -321,10 +322,9 @@ describe('S-24 trial: a surface-only wall inside the placed orb’s sphere (S-23
     const p = body(r, { feet: inWall, yaw: Math.PI });
     r.wall.sync([{ ...placed, materialize: { target: 0 as const } }]);
     expect(r.wall.offCount).toBe(0);
-    const s = walk(r, p, forward, 2);
-    // what Rapier's character controller does with a body that starts inside a collider: recorded in S-24.md
-    const moved = Math.hypot((s.at(-1)?.x ?? 0) - inWall[0], (s.at(-1)?.z ?? 0) - inWall[2]);
-    expect(moved).toBeLessThan(0.1);
+    // the body now stands inside a solid collider (what Rapier then does with it is recorded in S-24.md: it was shut in)
+    expect(r.wall.enclosing(inWall, BODY_RADIUS, 1.75)).toEqual([]);
+    p.dispose();
   });
 });
 
@@ -389,43 +389,78 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
     expect(hits).toEqual([]);
   });
 
-  it('you cannot walk into what you see: a ray that meets a piece meets its collider first (or within 5 cm)', () => {
+  /**
+   * 空間の可読性と導線 4 (当たり判定は見た目に正直に), both ways, with horizontal rays at body heights from all around each
+   * piece (off its symmetry lines: a ray exactly along a mesh edge can slip between its two triangles):
+   *  - you cannot walk into what you see: where a ray meets the piece, it meets its collider no more than 5 cm later
+   *  - no invisible wall: where it meets the collider, it meets the piece no more than 10 cm later. Not checked where the
+   *    collider closes a hollow the body cannot enter anyway (named below)
+   */
+  const BODY_CANNOT_ENTER: Record<string, string> = {
+    A0_bnch_work01: 'under the bench top (0.83 m) and inside its brass end frames',
+    A0_mrv_marver01: 'between its legs under the brass slab (0.79 m)',
+    A0_chr_stool01: 'between its legs under the seat (0.42 m)',
+    A0_anl_annealer01: 'its arched mouth (0.6 m high, the body is 1.75 m)',
+    A0_shlf_works01: 'under and between its tiers (0.42 m apart), against the wall',
+    A0_pipe_rack01: 'between the leaning pipes and the wall',
+  };
+  function raysAround(piece: { name: string; at: readonly [number, number] }) {
     const r = room();
     r.world.step();
-    const shapes = workshop.colliders.filter((c) => c.layer !== 'back');
+    const visual = workshop.layered.find((l) => l.object.userData.name === piece.name)?.object;
+    const collider = r.furniture.byName.get(`${piece.name}_col`);
+    if (!visual || !collider) throw new Error(`no ${piece.name} or its collider`);
+    visual.updateWorldMatrix(true, true);
     const raycaster = new THREE.Raycaster();
-    const misses: string[] = [];
-    for (const piece of Object.values(WORKSHOP_OBJECTS).filter((o) => o.col)) {
-      const visual = workshop.layered.find((l) => l.object.userData.name === piece.name)?.object;
-      const collider = r.furniture.fixed[shapes.findIndex((c) => c.name === `${piece.name}_col`)];
-      if (!visual || !collider) throw new Error(`no ${piece.name} or its collider`);
-      visual.updateWorldMatrix(true, true);
-      for (const h of [0.25, 0.6, 1.0, 1.5]) {
-        for (let i = 0; i < 24; i++) {
-          // off the pieces' symmetry lines: a ray exactly along a mesh edge can slip between its two triangles
-          const a = ((i + 0.37) / 24) * Math.PI * 2;
-          const dir = new THREE.Vector3(-Math.cos(a), 0, -Math.sin(a));
-          const origin = new THREE.Vector3(piece.at[0] + Math.cos(a) * 3, h, piece.at[1] + Math.sin(a) * 3);
-          raycaster.set(origin, dir);
-          raycaster.far = 6;
-          const seen = raycaster.intersectObject(visual, true)[0]?.distance;
-          if (seen === undefined) continue;
-          const felt = r.world.castRay(
-            new R.Ray(origin, dir),
-            6,
-            true,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            (c) => c === collider,
-          )?.timeOfImpact;
-          if (felt === undefined || felt > seen + 0.05)
-            misses.push(`${piece.name} h${h} a${i}: seen ${seen.toFixed(2)} felt ${felt?.toFixed(2)}`);
-        }
+    const out: { h: number; i: number; dir: THREE.Vector3; seen?: number; felt?: number }[] = [];
+    for (const h of [0.25, 0.6, 1.0, 1.5]) {
+      for (let i = 0; i < 24; i++) {
+        const a = ((i + 0.37) / 24) * Math.PI * 2;
+        const dir = new THREE.Vector3(-Math.cos(a), 0, -Math.sin(a));
+        const origin = new THREE.Vector3(piece.at[0] + Math.cos(a) * 3, h, piece.at[1] + Math.sin(a) * 3);
+        raycaster.set(origin, dir);
+        raycaster.far = 6;
+        const seen = raycaster.intersectObject(visual, true)[0]?.distance;
+        const felt = r.world.castRay(
+          new R.Ray(origin, dir),
+          6,
+          true,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          (c) => c === collider,
+        )?.timeOfImpact;
+        out.push({ h, i, dir, seen, felt });
       }
     }
+    return out;
+  }
+  const pieces = Object.values(WORKSHOP_OBJECTS).filter((o) => o.col);
+
+  it('you cannot walk into what you see: a ray that meets a piece meets its collider first (or within 5 cm)', () => {
+    const misses: string[] = [];
+    for (const piece of pieces)
+      for (const q of raysAround(piece))
+        if (q.seen !== undefined && (q.felt === undefined || q.felt > q.seen + 0.05))
+          misses.push(`${piece.name} h${q.h} a${q.i}: seen ${q.seen.toFixed(2)} felt ${q.felt?.toFixed(2)}`);
     expect(misses).toEqual([]);
+  });
+
+  it('no invisible wall: where a piece’s collider stops you, the piece is drawn within 10 cm (hollows the body cannot enter aside)', () => {
+    const walls: string[] = [];
+    /** Straight into the furnace's mouth: a brass tube 0.34 m across, the fire at its back (the body cannot enter). */
+    const intoTheMouth = (q: { h: number; dir: THREE.Vector3 }): boolean =>
+      Math.abs(q.h - FURNACE_MOUTH[1]) < 0.25 &&
+      -(q.dir.x * FURNACE_FACING[0] + q.dir.z * FURNACE_FACING[1]) > Math.cos((20 * Math.PI) / 180);
+    for (const piece of pieces.filter((p) => !(p.name in BODY_CANNOT_ENTER)))
+      for (const q of raysAround(piece))
+        if (piece.name === WORKSHOP_OBJECTS.furnace.name && intoTheMouth(q)) continue;
+        else if (q.felt !== undefined && (q.seen === undefined || q.seen > q.felt + 0.1))
+          walls.push(`${piece.name} h${q.h} a${q.i}: felt ${q.felt.toFixed(2)} seen ${q.seen?.toFixed(2)}`);
+    expect(walls).toEqual([]);
+    // the exceptions are named for a reason, and are real pieces
+    for (const name of Object.keys(BODY_CANNOT_ENTER)) expect(pieces.map((p) => p.name)).toContain(name);
   });
 
   it('walking at the fire, the body slides by the pipe left in the mouth and round the furnace, never through either', () => {

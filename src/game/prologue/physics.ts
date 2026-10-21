@@ -241,7 +241,9 @@ export class SurfaceColliders {
 
   /** Segments switched off now. */
   get offCount(): number {
-    return this.off.filter(Boolean).length;
+    let n = 0;
+    for (const off of this.off) if (off) n++;
+    return n;
   }
 
   /** Switches the segments for the current spheres (the same array as BackFooting.sync gets). */

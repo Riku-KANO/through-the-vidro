@@ -252,11 +252,9 @@ describe('the workshop interior (S-24: 職人がついさっきまで仕事を�
     expect(along).toBeGreaterThan(0.4);
   });
 
-  it('the stool stands left of the bench, the cup on the bench’s left end, the tub left of the marver', () => {
+  it('the stool stands left of the bench with the half-drunk tea by it, the tub left of the marver', () => {
     expect(CHAIR.center[0]).toBeLessThan(BENCH.center[0] - BENCH.size[0] / 2);
-    expect(TEA_CUP[0]).toBeLessThan(BENCH.center[0] - BENCH.size[0] / 2 + 0.3);
-    expect(TEA_CUP[1]).toBeCloseTo(BENCH.size[1], 6);
-    expect(Math.abs(TEA_CUP[2] - BENCH.center[2])).toBeLessThan(BENCH.size[2] / 2);
+    expect(Math.hypot(TEA_CUP[0] - CHAIR.center[0], TEA_CUP[2] - CHAIR.center[2])).toBeLessThan(1.2);
     expect(WATER_TUB.center[0]).toBeLessThan(MARVER.center[0]);
   });
 

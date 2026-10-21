@@ -244,6 +244,11 @@ for (const backend of backends) {
     mkdirSync(outDir, { recursive: true });
     const errors = collectErrors(page);
     const out: Record<string, unknown> = {};
+    // before the orb is placed the wall stands on the lip of the dead end, across the way onto the bridge
+    await page.goto(`/?scene=prologue-proto&spawn=dead-end&peekHold=0&trial=surface-wall${webgl}`);
+    await waitRoom(page, 'r.ready && r.playing && r.trial', 60_000);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(shotDir, 'trial-wall.png') });
     for (const mode of ['keep', 'cut'] as const) {
       // the orb on the dead-end pedestal, fully grown (growHold=1); the trial wall on the lip of the dead end
       await page.goto(
@@ -251,7 +256,6 @@ for (const backend of backends) {
       );
       const r0 = await waitRoom(page, 'r.ready && r.playing && r.trial', 60_000);
       await page.waitForTimeout(500);
-      await page.screenshot({ path: join(shotDir, `trial-${mode}.png`) });
       cursor.x = 640;
       cursor.y = 360;
       await page.mouse.move(cursor.x, cursor.y);
@@ -262,6 +266,9 @@ for (const backend of backends) {
       await page.keyboard.down('KeyW');
       await page.waitForTimeout(3_500);
       await page.keyboard.up('KeyW');
+      await page.waitForTimeout(300);
+      // where each ends: keep before the wall that is no longer drawn, cut out on the bridge
+      await page.screenshot({ path: join(shotDir, `trial-${mode}.png`) });
       const r = await room(page);
       const trial = (r as RoomProbe & { trial: { mode: string; segments: number; off: number } }).trial;
       out[mode] = { trial, position: r.position };
@@ -286,7 +293,10 @@ for (const backend of backends) {
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(outDir, { recursive: true });
     const errors = collectErrors(page);
-    const views: Record<string, { drawCalls: number; triangles: number; workshop: boolean }> = {};
+    const views: Record<
+      string,
+      { drawCalls: number; triangles: number; transmissive: number; workshop: boolean }
+    > = {};
     for (const view of ['bench', 'furnace', 'shelf', 'door'] as const) {
       // peekHold=0: no controls hint (a clean picture), nothing else held; mid quality, no dynamic resolution
       await page.goto(
@@ -303,14 +313,99 @@ for (const backend of backends) {
       }
       const name = view === 'bench' ? 'wake' : view;
       await page.screenshot({ path: join(shotDir, `${name}.png`) });
-      views[name] = { ...counts, workshop: !!(await room(page)).workshop?.loaded };
+      // 技術設計 > 性能の目標と予算: 透過ガラスの同時表示は近景で20個程度まで (meshes drawn with transmission now)
+      const transmissive = await page.evaluate(() =>
+        (window.__vidro.sceneProbe as { room: { transmissiveInView(): number } }).room.transmissiveInView(),
+      );
+      views[name] = { ...counts, transmissive, workshop: !!(await room(page)).workshop?.loaded };
     }
     writeFileSync(join(outDir, `views-${backend}.json`), JSON.stringify({ backend, views }, null, 2));
     for (const [name, v] of Object.entries(views)) {
       expect(v.workshop, `${name}: the workshop is there`).toBe(true);
       expect(v.drawCalls, name).toBeLessThanOrEqual(BUDGET.drawCalls);
       expect(v.triangles, name).toBeLessThanOrEqual(BUDGET.triangles);
+      expect(v.transmissive, `${name}: transmissive glass in view`).toBeLessThanOrEqual(20);
     }
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+  test(`S-24 home → dive → landing in the workshop: not a black picture (the trace is kept first) [${backend}]`, async ({
+    page,
+  }) => {
+    // 判断待ち8 (S-24.md): once, after landing through the home on WebGPU, every frame stayed black. This keeps what is
+    // needed to find out why the next time: the console, the render scale over time, the darkness, backdropRisks().
+    test.setTimeout(120_000);
+    mkdirSync(outDir, { recursive: true });
+    const consoleAll: string[] = [];
+    page.on('console', (m) => consoleAll.push(`${m.type()}: ${m.text().slice(0, 400)}`));
+    page.on('pageerror', (e) => consoleAll.push(`pageerror: ${e.message}`));
+    const errors = collectErrors(page);
+    const started = Date.now();
+    const scales: [number, number][] = [];
+    const sampleScale = async () => {
+      const v = await page.evaluate(() => window.__vidro?.renderScale ?? null).catch(() => null);
+      if (typeof v === 'number') scales.push([(Date.now() - started) / 1000, v]);
+    };
+    await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
+    const waitHome = async (fn: string, timeout: number) => {
+      const end = Date.now() + timeout;
+      for (;;) {
+        await sampleScale();
+        const ok = await page
+          .evaluate(
+            `(() => { try { const p = window.__vidro?.sceneProbe; return !!p && !!(${fn}); } catch { return false; } })()`,
+          )
+          .catch(() => false);
+        if (ok) return;
+        if (Date.now() > end) throw new Error(`timed out waiting for ${fn}`);
+        await page.waitForTimeout(100);
+      }
+    };
+    await waitHome('p.load && p.load.ready === true', 90_000);
+    await page.locator('[data-ui="loading-start"]').click();
+    await waitHome("p.screen === 'home' && p.transition === null", 30_000);
+    await page.locator('[data-item="start"]').click();
+    await waitHome(
+      "p.screen === 'game' && p.transition === null && p.room && p.room.ready && p.room.playing",
+      60_000,
+    );
+    for (let i = 0; i < 8; i++) {
+      await sampleScale();
+      await page.waitForTimeout(100);
+    }
+    const png = await page.screenshot({ path: join(shotDir, 'landed-through-home.png') });
+    const dark = await page.evaluate(async (b64) => {
+      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+      const bmp = await createImageBitmap(blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = c.getContext('2d');
+      if (!g) throw new Error('no 2d context');
+      g.drawImage(bmp, 0, 0);
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+      let n = 0;
+      let k = 0;
+      for (let i = 0; i < d.length; i += 20) {
+        const l = (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+        if (l < 0.06) k++;
+        n++;
+      }
+      return k / n;
+    }, png.toString('base64'));
+    const backdrop = await page.evaluate(() => {
+      const r = window.__vidroDebug?.backdropRisks();
+      return r ? { risks: r.risks, roots: r.roots.map((x) => `${x.label}: ${x.backdropReaders}`) } : null;
+    });
+    const vidro = await page.evaluate(() => {
+      const { sceneProbe: _s, ...rest } = window.__vidro;
+      return rest;
+    });
+    // written before any assertion, so a failure leaves its evidence in artifacts/S-24/
+    writeFileSync(
+      join(outDir, `landing-${backend}.json`),
+      JSON.stringify({ backend, dark, scales, backdrop, vidro, console: consoleAll }, null, 2),
+    );
+    expect(dark, 'near-black share after landing').toBeLessThan(0.02);
+    expect(backdrop?.risks).toEqual([]);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });

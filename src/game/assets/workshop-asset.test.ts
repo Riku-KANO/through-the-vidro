@@ -16,7 +16,7 @@ import {
 } from '../prologue/layout';
 import { type AssembledAsset, assembleAsset } from './assemble';
 import { parseAssetName, parseGlassMark } from './naming';
-import { loadGlbInNode } from './node-glb';
+import { loadGlbInNode } from './node-glb.test-helper';
 
 /**
  * The workshop's interior as `pnpm assets` exported it from blender/scenes/workshop.blend (S-24), read the way the game
@@ -167,16 +167,16 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
     }
   });
 
-  it('the materials are the design doc’s glass kinds (bubble, milky, clear, frosted) and brass, plus water and the fire', () => {
-    const names = (json.materials ?? []).map((m) => m.name ?? '');
-    const marks = names.map((n) => parseGlassMark(n)).filter((m) => m !== null);
+  it('the glass is the design doc’s kinds (bubble, milky, clear, frosted), marked for the game; the rest is opaque', () => {
+    const materials = json.materials ?? [];
+    const marks = materials.map((m) => parseGlassMark(m.name ?? '')).filter((m) => m !== null);
     for (const m of marks) expect(m.ok).toBe(true);
+    // 色の進行: 序章はほぼ無色 (no amber, lapis or jade yet)
     const kinds = new Set(marks.map((m) => (m.ok ? m.value.kind : '')));
     expect(kinds).toEqual(new Set(['clear', 'frosted', 'bubble', 'milky']));
-    const others = names.filter((n) => parseGlassMark(n) === null);
-    expect(new Set(others)).toEqual(
-      new Set(['A0_brass', 'A0_frost', 'A0_water', 'A0_fire', 'A0_ember', 'A0_air']),
-    );
+    // anything not marked is opaque (brass, the frosted tops, water, fire): no glass the library does not make
+    for (const m of materials.filter((x) => parseGlassMark(x.name ?? '') === null))
+      expect(Object.keys(m.extensions ?? {}), m.name).not.toContain('KHR_materials_transmission');
   });
 
   it('only the furnace glows warm; the annealer only faintly (光と時間帯: 工房で唯一の暖かい光)', () => {

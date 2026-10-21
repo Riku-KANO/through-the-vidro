@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu';
+import { readsBackdrop } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
@@ -311,12 +312,15 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
 async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Promise<BuiltRoom> {
   const { renderer, canvas, overlay, quality } = ctx;
   const { camera, probe, events } = shell;
-  const R = await initPhysics();
+  // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col.
+  // Loaded alongside Rapier, before anything that would need releasing if the file failed to load.
+  const [R, workshop] = await Promise.all([
+    initPhysics(),
+    loadAreaAsset(renderer, quality, `${import.meta.env.BASE_URL}${WORKSHOP_ASSET}`),
+  ]);
   const world = createWorld();
   addRoomColliders(R, world);
   const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
-  // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col
-  const workshop = await loadAreaAsset(renderer, quality, `${import.meta.env.BASE_URL}${WORKSHOP_ASSET}`);
   const furniture = addAssetColliders(R, world, workshop.assembled.colliders);
   // S-24's trial (S-23 判断待ち9, process/slices/S-24.md): a surface-only wall on the dead end's lip, whose collider stays
   // (keep, as assets do today) or goes while it is wholly inside a placed orb's sphere (cut). Off unless asked for.
@@ -351,6 +355,31 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   });
 
   probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
+  if (trial) probe.trial = { mode: trial.mode, segments: trial.segments.length, off: 0 };
+  // 技術設計 > 性能の目標と予算: 透過ガラスの同時表示は近景で20個程度まで. On demand for the sensors (not enumerable, so a
+  // copied probe does not carry it): the meshes the camera draws now whose material reads the backdrop.
+  const frustum = new THREE.Frustum();
+  const viewProjection = new THREE.Matrix4();
+  Object.defineProperty(probe, 'transmissiveInView', {
+    enumerable: false,
+    configurable: true,
+    value: (): number => {
+      camera.updateMatrixWorld();
+      frustum.setFromProjectionMatrix(
+        viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+      );
+      let n = 0;
+      art.scene.traverseVisible((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || !o.layers.test(camera.layers)) return;
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        if (!mats.some(readsBackdrop)) return;
+        if (mesh.frustumCulled && !frustum.intersectsObject(mesh)) return;
+        n++;
+      });
+      return n;
+    },
+  });
 
   const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };
   const session = new PrologueSession({
@@ -539,10 +568,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     const footingSpheres =
       opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius }));
     footing.sync(footingSpheres);
-    if (trial) {
-      trial.sync(footingSpheres);
-      probe.trial = { mode: trial.mode, segments: trial.segments.length, off: trial.offCount };
-    }
+    if (trial?.sync(footingSpheres) && probe.trial) probe.trial.off = trial.offCount;
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;

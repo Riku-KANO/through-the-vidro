@@ -9,7 +9,7 @@ import * as THREE from 'three/webgpu';
  * game loads it (src/core/assets/loader.ts), so a test sees the same nodes, names, extras and geometry (quantized
  * attributes stay normalized, as in the game; three denormalizes when it reads them). KTX2 textures become empty
  * placeholder textures (there is no Basis transcoder here), so tests look at which texture a material uses, not at
- * its pixels. Not part of the app: only tests import it.
+ * its pixels. Not part of the app: only tests import it (hence the `.test-helper` name; it writes `self` on globalThis).
  */
 export async function loadGlbInNode(path: string): Promise<GLTF> {
   // GLTFLoader turns embedded images into object URLs with self.URL

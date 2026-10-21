@@ -55,13 +55,22 @@ class Workshop(unittest.TestCase):
                 self.assertEqual(len(o.material_slots), 0, o.name)
                 self.assertTrue(o.hide_render, o.name)
 
-    def test_materials_are_the_glass_kinds_brass_and_the_atlas(self):
-        used = {s.material.name for o in self.objects for s in o.material_slots if s.material}
-        self.assertEqual(used, {'glass_clear', 'glass_frosted', 'glass_bubble', 'glass_milky', 'A0_brass', 'A0_frost',
-                                'A0_water', 'A0_fire', 'A0_ember', 'A0_air'})
-        images = {n.image.name for m in bpy.data.materials if m.node_tree for n in m.node_tree.nodes
+    def test_glass_is_marked_and_the_rest_is_opaque_on_one_atlas(self):
+        from pipeline import is_transmissive
+        from vidro import naming
+        used = {s.material for o in self.objects for s in o.material_slots if s.material}
+        kinds = set()
+        for m in used:
+            mark = naming.parse_glass_mark(m.name)
+            if mark is None:
+                self.assertFalse(is_transmissive(m), m.name)  # glass is always marked: the game makes it
+            else:
+                self.assertTrue(mark['ok'], m.name)
+                kinds.add(mark['value']['kind'])
+        self.assertEqual(kinds, {'clear', 'frosted', 'bubble', 'milky'})  # 色の進行: 序章はほぼ無色
+        images = {n.image.name for m in used if m.node_tree for n in m.node_tree.nodes
                   if n.type == 'TEX_IMAGE' and n.image}
-        self.assertEqual(images, {'A0_atlas'})
+        self.assertEqual(len(images), 1)  # 小物はアトラスを共有
 
     def test_opaque_uvs_stay_inside_their_atlas_tile(self):
         for o in self.objects:

@@ -507,7 +507,9 @@ def materials() -> dict:
     return out
 
 
-#: 発光の強さ（仮）。炉の口の火はブルームのしきい値（線形 0.9）を超えて滲む光源、炉の泡はその下、徐冷炉は「ほのか」
+#: 発光の強さ（仮。発案者の判断待ち）。炉の口の火はブルームのしきい値（線形 0.9）を超えて滲む光源。炉の泡の灯り 2.2 も
+#: 正面では輝度が約 1.15 でしきい値を超え、炉の全体が淡く滲む（前の点光源と合わせてクリーム色に見える）。泡を滲ませないなら
+#: 0.6〜0.8。徐冷炉の熾火は「ほのか」
 FIRE_GLOW = 6.0
 MILKY_GLOW = 2.2
 EMBER_GLOW = 0.9
@@ -561,24 +563,33 @@ def hull_into(dst: bmesh.types.BMesh, points) -> None:
     tmp.free()
 
 
-def collider(part: Part, arcs: bool = False) -> bmesh.types.BMesh:
+def angular_slices(points, center=(0.0, 0.0), step_deg: float = COL_ARC_DEG, overlap_deg: float = 1.1):
+    """center（x, z）の周りの方位で点を分ける（隣と少し重ねる: 包んだ形の間に隙間を残さない）。弧の部品を弦まで埋めないため"""
+    angles = [math.degrees(math.atan2(p.z - center[1], p.x - center[0])) for p in points]
+    if max(angles) - min(angles) > 300:  # 一周する輪: -180/180 の継ぎ目をまたぐ
+        angles = [a % 360 for a in angles]
+    a0, a1 = min(angles), max(angles)
+    n = max(1, round((a1 - a0) / step_deg))
+    return [[p for p, a in zip(points, angles)
+             if a0 + (a1 - a0) * k / n - overlap_deg <= a <= a0 + (a1 - a0) * (k + 1) / n + overlap_deg]
+            for k in range(n)]
+
+
+def collider(part: Part, arcs: bool = False, split=None) -> bmesh.types.BMesh:
     """部品（つながった形）ごとの凸包。頭より上（COL_MAX_Y）の点は除く。arcs: 部屋の中心の周りに長い部品は
-    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）"""
+    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）。split(points) が点の組の一覧を返す部品は、その組ごとに包む
+    （炉の泡: 一つの凸包では泡と泡のくびれが埋まり、見えない壁になる）"""
     out = bmesh.new()
     for group in islands(part.bm):
         low = [p for p in group if p.y <= COL_MAX_Y]
         if len(low) < 4:
             continue
-        angles = [math.degrees(math.atan2(p.z, p.x)) for p in low]
-        if arcs and max(angles) - min(angles) > COL_ARC_DEG * 1.5:
-            a0, a1 = min(angles), max(angles)
-            n = max(1, round((a1 - a0) / COL_ARC_DEG))
-            for k in range(n):
-                lo = a0 + (a1 - a0) * k / n - 1.1
-                hi = a0 + (a1 - a0) * (k + 1) / n + 1.1
-                hull_into(out, [p for p, a in zip(low, angles) if lo <= a <= hi])
-        else:
-            hull_into(out, low)
+        groups = split(low) if split is not None else None
+        if groups is None:
+            angles = [math.degrees(math.atan2(p.z, p.x)) for p in low]
+            groups = angular_slices(low) if arcs and max(angles) - min(angles) > COL_ARC_DEG * 1.5 else [low]
+        for g in groups:
+            hull_into(out, g)
     return out
 
 
@@ -617,8 +628,9 @@ def finish_collider(bm: bmesh.types.BMesh, name: str, origin) -> bpy.types.Objec
     return obj
 
 
-def build(part: Part, name: str, origin, col: bool = False, arcs: bool = False, sharp_deg: float = 60.0) -> None:
-    hull = collider(part, arcs=arcs) if col else None
+def build(part: Part, name: str, origin, col: bool = False, arcs: bool = False, sharp_deg: float = 60.0,
+          split=None) -> None:
+    hull = collider(part, arcs=arcs, split=split) if col else None
     finish(part, name, origin, sharp_deg=sharp_deg)
     if hull is not None:
         finish_collider(hull, name, origin)
@@ -811,7 +823,20 @@ def furnace(m) -> None:
     u_pts = [f(yoke_a, yy + 0.035 - 0.035 * math.sin(math.pi * k / 8), 0.035 * math.cos(math.pi * k / 8))
              for k in range(9)]
     p.merge(tube_bm(u_pts, 0.008, 6), m['brass'])
-    build(p, 'A0_frn_furnace01', (cx, 0.0, cz), col=True, sharp_deg=80.0)
+    # 当たり判定: 泡の形は泡ごとに包む（各頂点をいちばん近い泡へ。境は少し重ねる）。裾の輪は炉の周りに分けて包む
+    bubbles = [(Vector(c), r) for c, r, negative in balls if not negative]
+    blob_size = len(blob.verts)
+
+    def split(points):
+        if len(points) >= blob_size * 0.9:
+            dists = [[(p - c).length / r for c, r in bubbles] for p in points]
+            return [[p for p, d in zip(points, dists) if d[i] <= min(d) * 1.14] for i in range(len(bubbles))]
+        mean = sum((p for p in points), Vector()) / len(points)
+        if math.hypot(mean.x - cx, mean.z - cz) < 0.3 and max((p - mean).length for p in points) > 0.6:
+            return angular_slices(points, (cx, cz), 12.0, 1.0)  # 裾の輪
+        return None
+
+    build(p, 'A0_frn_furnace01', (cx, 0.0, cz), col=True, sharp_deg=80.0, split=split)
 
 
 def grate(m) -> None:
