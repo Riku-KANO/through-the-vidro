@@ -147,7 +147,11 @@ export interface SoundRoom {
 
 /** window.__vidro.sceneProbe.sound (tests/e2e/S-16-*.spec.ts). Getters read the live state. */
 export interface SoundProbe {
-  /** 'locked' before the first gesture, then the AudioContext's state ('closed' once disposed). */
+  /**
+   * 'locked' before the audio starts, then the AudioContext's state. Its own context is closed when this sound is
+   * disposed ('closed'); a shared one when its owner is (S-18), and 'locked' stays while the owner has none
+   * (not pressed yet, the autoplay script, or no Web Audio: the owner's probe tells which).
+   */
   readonly state: string;
   /** The audio has started: the first gesture made its own engine, or the shared one was handed over. */
   readonly unlocked: boolean;
@@ -157,7 +161,10 @@ export interface SoundProbe {
   readonly room: string;
   /** Panning model of each live emitter. */
   readonly panning: string[];
-  /** This sound's voices the engine started / refused (a shared engine also counts the UI's). */
+  /**
+   * Voices the engine started / refused: on its own engine, all of them (only this sound plays there); on a shared
+   * one, those started while answering this sound's cues (the engine also counts the UI's).
+   */
   readonly voicesStarted: number;
   readonly voicesDropped: number;
   readonly played: readonly PlayedCue[];
@@ -273,15 +280,16 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         at.z = point[2];
         emitter.setPosition(at);
       }
+      // what the engine itself started / refused for this cue (a shared engine also counts the UI's voices)
+      const before = engine.snapshot();
       const started =
         cue.kind === 'popen'
           ? playPopen(engine, cue.popen, { emitter }) !== null
           : strikeGlass(engine, cue.size, cue.strength, { emitter }) !== null;
-      if (!started) {
-        voicesDropped++;
-        return null;
-      }
-      voicesStarted++;
+      const after = engine.snapshot();
+      voicesStarted += after.voicesStarted - before.voicesStarted;
+      voicesDropped += after.voicesDropped - before.voicesDropped;
+      if (!started) return null;
       return { distance: Math.hypot(point[0] - ear.x, point[1] - ear.y, point[2] - ear.z) };
     },
   };
@@ -368,11 +376,12 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     get panning() {
       return live.map((e) => (e.input as PannerNode).panningModel);
     },
+    // its own engine: everything the engine did (nothing else plays on it); shared: what it did for this sound
     get voicesStarted() {
-      return voicesStarted;
+      return shared ? voicesStarted : (engine?.snapshot().voicesStarted ?? 0);
     },
     get voicesDropped() {
-      return voicesDropped;
+      return shared ? voicesDropped : (engine?.snapshot().voicesDropped ?? 0);
     },
     get played() {
       return log.played;

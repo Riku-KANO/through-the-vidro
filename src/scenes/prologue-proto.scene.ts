@@ -120,8 +120,12 @@ function withSound(host: SandboxScene, sound: PrologueSound, audio: AudioGate): 
     },
     dispose() {
       sound.dispose();
-      host.dispose();
-      audio.dispose();
+      try {
+        host.dispose();
+      } finally {
+        // also when the host failed to let go: the page's AudioContext must not outlive the scene
+        audio.dispose();
+      }
     },
   };
   if (host.render) wrapped.render = () => host.render?.();

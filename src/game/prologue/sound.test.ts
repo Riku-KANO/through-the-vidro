@@ -212,8 +212,10 @@ class FakeEngine {
     this.unlocks++;
     return Promise.resolve();
   }
+  /** Voices the engine starts per request (a stand-in for a cue that would start more than one). */
+  perCall = 1;
   startVoice(): object {
-    this.started.push(this.started.length);
+    for (let i = 0; i < this.perCall; i++) this.started.push(this.started.length);
     return { end: 1, fadeOut: () => {} };
   }
   snapshot(): object {
@@ -435,7 +437,7 @@ describe('the prologue sound on a shared engine (ホーム経由, S-18: one Audi
     r.sound.dispose();
   });
 
-  it('counts its own voices: the UI rings on the same engine', () => {
+  it('counts the voices the engine started for its cues, not the UI’s on the same engine', () => {
     const r = sharedRig();
     r.start();
     r.engine.startVoice();
@@ -443,6 +445,23 @@ describe('the prologue sound on a shared engine (ホーム経由, S-18: one Audi
     r.room.events.emit({ type: 'peekStart' });
     expect(r.engine.started).toHaveLength(3);
     expect(r.sound.probe.voicesStarted).toBe(1);
+    expect(r.sound.probe.playedCount).toBe(1);
+    // the count is the engine's, not a copy of what was logged as played
+    r.engine.perCall = 2;
+    r.room.events.emit({ type: 'place', pedestal: 'dead-end' });
+    expect(r.sound.probe.voicesStarted).toBe(3);
+    expect(r.sound.probe.playedCount).toBe(2);
+    r.sound.dispose();
+  });
+
+  it('on its own engine, reports everything that engine started (only it plays there)', async () => {
+    const r = rig();
+    r.gesture();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    engine.startVoice();
+    r.room.events.emit({ type: 'peekStart' });
+    expect(r.sound.probe.voicesStarted).toBe(2);
     expect(r.sound.probe.playedCount).toBe(1);
     r.sound.dispose();
   });

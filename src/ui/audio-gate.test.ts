@@ -4,16 +4,63 @@ import type { AudioEngine } from '../core/audio/engine';
 import type { RoomPreset } from '../core/audio/reverb';
 import { AudioGate, type AudioGateOptions } from './audio-gate';
 
-/** Stand-ins for the browser's AudioContext and S-09's AudioEngine: they count what is made, started and closed. */
+/**
+ * Stand-ins for the browser's AudioContext and S-09's AudioEngine: they count what is made, started and closed, and
+ * record every connection a sound makes (to see where the drops' pings go).
+ */
+class FakeParam {
+  value = 0;
+  setValueAtTime(): this {
+    return this;
+  }
+  linearRampToValueAtTime(): this {
+    return this;
+  }
+  exponentialRampToValueAtTime(): this {
+    return this;
+  }
+  cancelScheduledValues(): this {
+    return this;
+  }
+  setTargetAtTime(): this {
+    return this;
+  }
+}
+
+class FakeNode {
+  readonly gain = new FakeParam();
+  readonly frequency = new FakeParam();
+  onended: (() => void) | null = null;
+  constructor(
+    readonly kind: 'gain' | 'oscillator',
+    private readonly links: [FakeNode, unknown][],
+  ) {}
+  connect<T>(destination: T): T {
+    this.links.push([this, destination]);
+    return destination;
+  }
+  disconnect(): void {}
+  start(): void {}
+  stop(): void {}
+}
+
 class FakeContext {
-  state: AudioContextState = 'running';
   closes = 0;
+  resumes = 0;
+  readonly destination = { node: 'destination' };
+  /** Every connect(): [from, to]. */
+  readonly links: [FakeNode, unknown][] = [];
   private readonly listeners = new Set<() => void>();
+  constructor(public state: AudioContextState = 'running') {}
   addEventListener(_type: string, f: () => void): void {
     this.listeners.add(f);
   }
   removeEventListener(_type: string, f: () => void): void {
     this.listeners.delete(f);
+  }
+  resume(): Promise<void> {
+    this.resumes++;
+    return Promise.resolve();
   }
   close(): Promise<void> {
     this.closes++;
@@ -21,26 +68,39 @@ class FakeContext {
     for (const f of this.listeners) f();
     return Promise.resolve();
   }
+  createGain(): FakeNode {
+    return new FakeNode('gain', this.links);
+  }
+  createOscillator(): FakeNode {
+    return new FakeNode('oscillator', this.links);
+  }
 }
+
+type Schedule = (ctx: FakeContext, destination: unknown, when: number) => { end: number };
 
 class FakeEngine {
   readonly voices: { level: number; bus?: string }[] = [];
+  /** The engine's buses (what a voice is built into). */
+  readonly buses = { music: { bus: 'music' }, sfx: { bus: 'sfx' }, ambience: { bus: 'ambience' } };
   accepting = true;
   dropped = 0;
   disposed = 0;
   unlocks = 0;
   boundTo: EventTarget | null = null;
+  /** dispose() resolves only when this is called (null: at once). */
+  finishDispose: (() => void) | null = null;
+  holdDispose = false;
   constructor(
     readonly ctx: FakeContext,
     readonly roomId: string,
   ) {}
-  startVoice(spec: { level: number; bus?: string }): object | null {
+  startVoice(spec: { level: number; bus?: keyof FakeEngine['buses'] }, schedule: Schedule): object | null {
     if (!this.accepting) {
       this.dropped++;
       return null;
     }
     this.voices.push({ level: spec.level, bus: spec.bus });
-    return { end: 1, fadeOut: () => {} };
+    return schedule(this.ctx, this.buses[spec.bus ?? 'sfx'], 0);
   }
   bindUnlockGestures(target: EventTarget): void {
     this.boundTo = target;
@@ -63,7 +123,10 @@ class FakeEngine {
   }
   dispose(): Promise<void> {
     this.disposed++;
-    return Promise.resolve();
+    if (!this.holdDispose) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.finishDispose = resolve;
+    });
   }
 }
 
@@ -169,6 +232,53 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     r.gate.dispose();
   });
 
+  it('builds each ping into the bus the engine hands it, never straight to the speakers', async () => {
+    const r = rig();
+    r.gate.unlock();
+    r.gate.ping(587, 0.05, 1.4);
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    const ctx = r.contexts[0] as FakeContext;
+    const into = (to: unknown): FakeNode[] => ctx.links.filter(([, t]) => t === to).map(([from]) => from);
+    expect(into(ctx.destination)).toEqual([]);
+    // one output gain into the engine's effects bus, fed by the two partials
+    const outs = into(engine.buses.sfx);
+    expect(outs.map((n) => n.kind)).toEqual(['gain']);
+    expect(ctx.links.filter(([from]) => from.kind === 'oscillator')).toHaveLength(2);
+    r.gate.dispose();
+  });
+
+  it('asks a suspended context to start right inside the press, before the engine is there', () => {
+    const r = rig({
+      makeContext: () => {
+        const c = new FakeContext('suspended');
+        r.contexts.push(c);
+        return c as unknown as AudioContext;
+      },
+    });
+    r.gate.unlock();
+    expect(r.contexts[0]?.resumes).toBe(1);
+    expect(r.gate.state).toBe('suspended');
+    r.gate.dispose();
+  });
+
+  it('a user that throws on the hand-over does not keep the engine from the others; the error is reported', async () => {
+    const errors: unknown[] = [];
+    const r = rig({ onError: (err) => errors.push(err) });
+    const got: unknown[] = [];
+    r.gate.whenReady(() => {
+      throw new Error('broken listener');
+    });
+    r.gate.whenReady((e) => got.push(e));
+    r.gate.unlock();
+    r.gate.ping(440);
+    await r.settle();
+    expect(got).toEqual([r.engines[0]]);
+    expect(errors.map((e) => (e as Error).message)).toEqual(['broken listener']);
+    expect(r.gate.probe.uiVoices).toBe(1);
+    r.gate.dispose();
+  });
+
   it('autoplay (skip): makes no context, also when pressed later, and hands no engine to anyone', async () => {
     const r = rig();
     const got: unknown[] = [];
@@ -188,8 +298,13 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     r.gate.unlock();
     await r.settle();
     const engine = r.engines[0] as FakeEngine;
+    engine.holdDispose = true;
     r.gate.dispose();
     expect(engine.disposed).toBe(1);
+    await r.settle();
+    // the context stays open while the engine fades out
+    expect(r.contexts[0]?.closes).toBe(0);
+    engine.finishDispose?.();
     await r.settle();
     expect(r.contexts[0]?.closes).toBe(1);
     expect(r.gate.state).toBe('closed');

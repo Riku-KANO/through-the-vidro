@@ -29,6 +29,8 @@ export interface AudioGateOptions {
   makeContext?: () => AudioContext;
   /** Builds the engine on that context. Default: AudioEngine.create with the game's mixer (src/audio/levels.ts). */
   makeEngine?: (context: AudioContext, room: RoomPreset) => Promise<AudioEngine>;
+  /** Where an error thrown by a `whenReady` user goes. Default: thrown again on its own (it shows as a page error). */
+  onError?: (err: unknown) => void;
 }
 
 /** window.__vidro.sceneProbe.audioGate (tests/e2e/S-18-*.spec.ts). Getters read the live state. */
@@ -179,6 +181,9 @@ export class AudioGate {
     this.ctx = ctx;
     ctx.addEventListener('statechange', this.syncState);
     this.syncState();
+    // ask to start now, synchronously inside the press (browsers that only honour resume() there); the engine
+    // asks again once it is made
+    if (ctx.state !== 'running') void ctx.resume().catch(() => undefined);
     const make = this.opts.makeEngine ?? vidroEngine;
     this.making = make(ctx, this.room).then(
       (engine) => {
@@ -195,7 +200,18 @@ export class AudioGate {
         void engine.unlock();
         const waiting = [...this.waiting];
         this.waiting.clear();
-        for (const ready of waiting) ready(engine);
+        for (const ready of waiting) {
+          try {
+            ready(engine);
+          } catch (err) {
+            // one failing user must not keep the engine from the others; the error still surfaces
+            if (this.opts.onError) this.opts.onError(err);
+            else
+              queueMicrotask(() => {
+                throw err;
+              });
+          }
+        }
         return engine;
       },
       () => {

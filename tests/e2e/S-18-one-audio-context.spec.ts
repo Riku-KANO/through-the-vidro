@@ -7,8 +7,10 @@ import { VIDRO_VOLUMES } from '../../src/audio/levels';
  * S-18: one AudioContext. The loading screen's 「はじめる」 starts one AudioEngine (src/ui/audio-gate.ts), and the
  * home's drops and the prologue room's sounds play through it; in direct mode the room makes its own (S-16).
  * window.AudioContext is wrapped before the page loads, so every context made is recorded: whether the page had
- * user activation at that moment (AGENTS.md: made inside the first gesture), its state, and how many AudioEngines
- * were built on it (each engine makes one limiter, a DynamicsCompressorNode; src/core/audio/engine.ts).
+ * user activation at that moment and which event handler made it (AGENTS.md: made inside the first gesture), its
+ * state, how many AudioEngines were built on it (each engine makes one limiter, a DynamicsCompressorNode;
+ * src/core/audio/engine.ts), and how many connections reach its speakers (only the engine's limiter should: then
+ * every sound went through the engine's buses and master, i.e. follows its four volumes).
  *  - home → room: none before 「はじめる」 (a stray click makes none either), then one, made inside that press, with
  *    one engine; the engine counted the drops' pings and the room's cues; the cues follow the room's events (S-16)
  *  - direct: none before the first gesture, then one, made by the room's own sound (S-16)
@@ -22,8 +24,13 @@ interface ContextRecord {
   state: string;
   /** navigator.userActivation.isActive when it was made (null: no such API). */
   activation: boolean | null;
+  /** The event being handled when it was made (window.event): it was made synchronously inside that handler. */
+  event: string | null;
+  trusted: boolean | null;
   /** AudioEngines built on it (one limiter each). */
   engines: number;
+  /** Connections made into its speakers (destination): the engine's limiter is the only way out. */
+  speakers: number;
 }
 interface RoomProbe {
   ready: boolean;
@@ -101,26 +108,53 @@ function collectErrors(page: Page): string[] {
   return errors;
 }
 
-/** Wraps window.AudioContext before any page script runs; window.__s18Contexts() lists what was made. */
+/**
+ * Wraps window.AudioContext (and AudioNode.connect, to see what reaches the speakers) before any page script runs;
+ * window.__s18Contexts() lists what was made.
+ */
 async function countContexts(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const Base = window.AudioContext;
     if (!Base) return;
-    const made: { context: AudioContext; activation: boolean | null; engines: number }[] = [];
+    type Made = {
+      context: BaseAudioContext;
+      activation: boolean | null;
+      event: string | null;
+      trusted: boolean | null;
+      engines: number;
+      speakers: number;
+    };
+    const made: Made[] = [];
+    const recordOf = (context: BaseAudioContext): Made | undefined => made.find((m) => m.context === context);
     class CountedAudioContext extends Base {
       constructor(options?: AudioContextOptions) {
         super(options);
         const activation = navigator.userActivation ? navigator.userActivation.isActive : null;
-        made.push({ context: this, activation, engines: 0 });
+        const event = window.event;
+        made.push({
+          context: this,
+          activation,
+          event: event ? event.type : null,
+          trusted: event ? event.isTrusted : null,
+          engines: 0,
+          speakers: 0,
+        });
       }
       override createDynamicsCompressor(): DynamicsCompressorNode {
-        for (const m of made) if (m.context === this) m.engines++;
+        const m = recordOf(this);
+        if (m) m.engines++;
         return super.createDynamicsCompressor();
       }
     }
     window.AudioContext = CountedAudioContext;
+    const connect = AudioNode.prototype.connect as (this: AudioNode, ...args: unknown[]) => unknown;
+    AudioNode.prototype.connect = function (this: AudioNode, ...args: unknown[]) {
+      const m = args[0] instanceof AudioDestinationNode ? recordOf(this.context) : undefined;
+      if (m) m.speakers++;
+      return connect.apply(this, args);
+    } as AudioNode['connect'];
     (window as unknown as { __s18Contexts: () => unknown }).__s18Contexts = () =>
-      made.map((m) => ({ state: m.context.state, activation: m.activation, engines: m.engines }));
+      made.map(({ context, ...rest }) => ({ state: context.state, ...rest }));
   });
 }
 
@@ -202,6 +236,9 @@ for (const backend of backends) {
     let made = await contexts(page);
     expect(made, 'one context').toHaveLength(1);
     expect(made[0]?.activation, 'made inside the press').toBe(true);
+    // synchronously in the press's own click handler (not on the activation a stray click left behind)
+    expect(made[0]?.event).toBe('click');
+    expect(made[0]?.trusted).toBe(true);
     expect(made[0]?.engines, 'one engine on it').toBe(1);
     expect(made[0]?.state).toBe('running');
     // the home probe copies the gate's state once per frame
@@ -232,6 +269,9 @@ for (const backend of backends) {
     expect(made, 'still one context after the dive and the play').toHaveLength(1);
     expect(made[0]?.engines).toBe(1);
     expect(made[0]?.state).toBe('running');
+    // the drops and the room rang, and only the engine's limiter reaches the speakers: both went through its
+    // buses and its master, so both follow its four volumes
+    expect(made[0]?.speakers, 'connections into the speakers').toBe(1);
     // the S-16 sounds, unchanged: one cue per event, in order, from the hand
     expect(events).toEqual(['pickup:bench', 'peekStart', 'peekEnd']);
     expect(now.sound.played.map(({ event, cue }) => ({ event, cue }))).toEqual(expectedCues(events));
@@ -274,7 +314,11 @@ for (const backend of backends) {
     );
     expect(made, 'one context').toHaveLength(1);
     expect(made[0]?.activation, 'made inside the first gesture').toBe(true);
+    // in the room's own gesture listener, on the press of the mouse (S-16)
+    expect(made[0]?.event).toBe('pointerdown');
+    expect(made[0]?.trusted).toBe(true);
     expect(made[0]?.engines, 'one engine on it').toBe(1);
+    expect(made[0]?.speakers, 'only the engine’s limiter reaches the speakers').toBe(1);
     expect(made[0]?.state).toBe('running');
     expect(s.state).toBe('running');
     expect(events).toEqual(['pickup:bench', 'peekStart', 'peekEnd']);
@@ -304,6 +348,9 @@ for (const backend of backends) {
     let made = await contexts(page);
     expect(made).toHaveLength(1);
     expect(made[0]?.activation, 'made inside the key press').toBe(true);
+    // Enter on a button clicks it: made in that click's handler
+    expect(made[0]?.event).toBe('click');
+    expect(made[0]?.trusted).toBe(true);
     expect(made[0]?.engines).toBe(1);
 
     // Esc plays the opening back to the loading screen; pressing again keeps the same context
@@ -321,6 +368,7 @@ for (const backend of backends) {
     made = await contexts(page);
     expect(made, 'still one').toHaveLength(1);
     expect(made[0]?.engines).toBe(1);
+    expect(made[0]?.speakers, 'the pings go through the engine, not straight to the speakers').toBe(1);
     expect(made[0]?.state).toBe('running');
     expect(g.contexts).toBe(1);
     // only the UI rings in this world: the engine's voices are its pings
