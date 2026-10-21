@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type GovernorAction, PerfGovernor, type PerfGovernorOptions } from './governor';
+import { DYNRES_MAX_RESUMES, type GovernorAction, PerfGovernor, type PerfGovernorOptions } from './governor';
 
 const FRAME = 1000 / 60;
 
@@ -35,12 +35,16 @@ function simulate(
  * read back 2 frames later with the epoch of the request, the cost taken at the scale the frame was rendered at.
  * Frames take one refresh interval, or two when the GPU cost does not fit (vsync).
  */
-function simulateApp(g: PerfGovernor, seconds: number, gpuMs: (scale: number) => number): GovernorAction[] {
+function simulateApp(
+  g: PerfGovernor,
+  seconds: number,
+  gpuMs: (scale: number, elapsedMs: number) => number,
+): GovernorAction[] {
   const actions: GovernorAction[] = [];
   let pending: { ms: number; epoch: number; at: number } | null = null;
   let elapsed = 0;
   for (let i = 0; elapsed < seconds * 1000; i++) {
-    const cost = gpuMs(g.scale);
+    const cost = gpuMs(g.scale, elapsed);
     const ms = cost <= FRAME ? FRAME : FRAME * 2;
     elapsed += ms;
     if (pending && i >= pending.at) {
@@ -52,6 +56,15 @@ function simulateApp(g: PerfGovernor, seconds: number, gpuMs: (scale: number) =>
     if (a) actions.push(a);
   }
   return actions;
+}
+
+/** Deterministic uniform noise in [min, max) (32-bit LCG on the high bits), whatever the sampling stride. */
+function noise(min: number, max: number, seed = 7): () => number {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return min + ((max - min) * x) / 2 ** 32;
+  };
 }
 
 const opts = (o: Partial<PerfGovernorOptions> = {}): PerfGovernorOptions => ({
@@ -273,5 +286,147 @@ describe('PerfGovernor', () => {
     const actions = simulate(g, 20, null);
     expect(actions).toEqual([{ kind: 'quality', level: 'high', reason: expect.stringMatching(/^forced/) }]);
     expect(g.verified).toBe(true);
+  });
+});
+
+/**
+ * S-11: once the response check stopped dynamic resolution, a new load (the smoothed GPU time 30% or more above the
+ * level it stopped at, sustained) resumes it, a limited number of times per session. The light-load numbers mirror
+ * the closed loop the parent measured for S-08 (vsync, high, DPR 2, dynresTarget=6: the span jittered 3.6–6.7 ms in
+ * the small window and did not follow the resolution, then read 8.6–11 ms once the window grew).
+ */
+describe('PerfGovernor: dynamic resolution resumes after a stop (S-11)', () => {
+  const lightJitter = (seed = 7) => {
+    const n = noise(3.6, 6.7, seed);
+    return () => n();
+  };
+
+  it('a: stopped at a light load under vsync, resumes and lowers once the load grows (dynresTarget=6, high)', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    simulateApp(g, 15, lightJitter());
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(g.scale).toBe(1);
+    expect(g.dynresStops).toBe(1);
+    // It watches for a new load: 30% above the light level, and above the 4.8 ms where it would step down.
+    expect(g.dynresResumeAtMs).toBeGreaterThan(4.8);
+    // The window grows: the cost now follows the pixels (~9.5 ms at full scale, ±10%).
+    const wobble = noise(0.9, 1.1, 3);
+    const actions = simulateApp(g, 20, (s) => 9.5 * s ** 2 * wobble());
+    expect(g.dynresResumes).toBe(1);
+    expect(g.dynresResumeReason).toMatch(/rose/);
+    expect(g.dynresResumeAtMs).toBeNull();
+    expect(g.dynresStopReason).toBeNull();
+    expect(actions.length).toBeGreaterThan(0);
+    expect(g.scale).toBeLessThan(0.8);
+    expect(g.scale).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it('a: also when the new load is only ~1.45× the light one (the closed loop of S-11: 6.2–6.8 ms, then 7.5–10.4 ms)', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    simulateApp(g, 15, noise(5.5, 7.5, 13));
+    expect(g.dynresStopReason).toMatch(/follow/);
+    const wobble = noise(0.85, 1.15, 17);
+    simulateApp(g, 20, (s) => 9.3 * s ** 2 * wobble());
+    expect(g.dynresResumes).toBe(1);
+    expect(g.scale).toBeLessThan(0.85);
+  });
+
+  it('a: also when the smoothed value at the stop still carries the start-up (the closed loop of S-11 stopped at 5 s)', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    // Shader compiles and first uploads, then the light load; the stop comes ~4 s later and a new load ~5 s after it.
+    simulateApp(g, 0.6, () => 14);
+    simulateApp(g, 10, lightJitter(3));
+    expect(g.dynresStopReason).toMatch(/follow/);
+    const wobble = noise(0.9, 1.1, 19);
+    simulateApp(g, 6, (s) => 8 * s ** 2 * wobble());
+    expect(g.dynresResumes).toBe(1);
+    expect(g.scale).toBeLessThan(1);
+  });
+
+  it('a: the same with the real target (16.7 ms): a light frame whose span reads long stops it, real overload resumes it', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulateApp(g, 15, noise(13.5, 15.5));
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(g.scale).toBe(0.85);
+    simulateApp(g, 25, (s) => 25 * (s / 0.85) ** 2);
+    expect(g.dynresResumes).toBe(1);
+    expect(g.dynresStopReason).toBeNull();
+    expect(g.gpuReliable).toBe(true);
+    expect(g.scale).toBeLessThan(0.7);
+  });
+
+  it('b: a light load that only jitters under vsync does not resume', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    const jitter = lightJitter(11);
+    simulateApp(g, 15, jitter);
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(simulateApp(g, 60, jitter)).toEqual([]);
+    expect(g.dynresResumes).toBe(0);
+    expect(g.scale).toBe(1);
+  });
+
+  it('b: nor does a slow swing of the same light load, or a one-second burst', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    simulateApp(g, 15, lightJitter(5));
+    expect(g.dynresStopReason).toMatch(/follow/);
+    // 3.6–6.7 ms as a 4 s swing, then a 1 s burst at three times the load (a loading hitch).
+    const swing = (_s: number, t: number) => 5.15 + 1.55 * Math.sin((2 * Math.PI * t) / 4000);
+    expect(simulateApp(g, 40, swing)).toEqual([]);
+    const burst = (_s: number, t: number) => (t < 1000 ? 16 : 5.15);
+    expect(simulateApp(g, 10, burst)).toEqual([]);
+    expect(g.dynresResumes).toBe(0);
+  });
+
+  it('c: a constant cost that does not follow the resolution stays stopped', () => {
+    const g = new PerfGovernor(opts({ dynres: true }));
+    simulateApp(g, 5, () => 8);
+    simulateApp(g, 25, () => 25);
+    expect(g.dynresStopReason).toMatch(/follow/);
+    expect(simulateApp(g, 60, () => 25)).toEqual([]);
+    const wobble = noise(0.9, 1.1);
+    expect(simulateApp(g, 60, () => 25 * wobble())).toEqual([]);
+    expect(g.dynresResumes).toBe(0);
+    expect(g.scale).toBe(0.85);
+  });
+
+  it('d: resumes at most DYNRES_MAX_RESUMES times when every new load again does not follow the resolution', () => {
+    const g = new PerfGovernor(opts({ dynres: true, dynresTargetMs: 6 }));
+    // A staircase of constant costs, each 40% above the last: every step is a new load, none follows the pixels.
+    let cost = 5;
+    for (let i = 0; i <= DYNRES_MAX_RESUMES; i++) {
+      simulateApp(g, 20, () => cost);
+      cost *= 1.4;
+    }
+    expect(g.dynresResumes).toBe(DYNRES_MAX_RESUMES);
+    expect(g.dynresStops).toBe(DYNRES_MAX_RESUMES + 1);
+    expect(g.dynresStopReason).toMatch(/for the session/);
+    expect(g.dynresResumeAtMs).toBeNull();
+    expect(g.scale).toBe(0.85);
+    // One more new load: no more resumes, the preset scale stays.
+    expect(simulateApp(g, 30, () => cost)).toEqual([]);
+    expect(g.dynresResumes).toBe(DYNRES_MAX_RESUMES);
+    expect(g.gpuReliable).toBe(true);
+  });
+
+  it('d: a load that goes back and forth between light and heavy is judged once, not resumed every time', () => {
+    const g = new PerfGovernor(opts({ dynres: true, dynresTargetMs: 6 }));
+    for (let i = 0; i < 6; i++) simulateApp(g, 15, () => (i % 2 === 0 ? 5 : 9));
+    expect(g.dynresResumes).toBe(1);
+    expect(g.dynresStops).toBe(2);
+    expect(g.scale).toBe(0.85);
+  });
+
+  it('does not resume once GPU time stopped being trusted (implausible readings)', () => {
+    const g = new PerfGovernor(opts({ level: 'high', dynres: true, dynresTargetMs: 6 }));
+    simulateApp(g, 15, lightJitter());
+    expect(g.dynresStopReason).toMatch(/follow/);
+    // Readings far above the frame time: implausible, however much they rose.
+    expect(simulateApp(g, 10, () => 60)).toEqual([]);
+    expect(g.gpuReliable).toBe(false);
+    expect(g.dynresStopReason).toMatch(/implausible/);
+    expect(simulateApp(g, 20, (s) => 9.5 * s ** 2)).toEqual([]);
+    expect(g.dynresResumes).toBe(0);
+    // Already stopped: the reason changes, it does not count as another stop.
+    expect(g.dynresStops).toBe(1);
   });
 });

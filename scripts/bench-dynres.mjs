@@ -9,8 +9,10 @@
 //   GROW_AT=8   start at 960×540 and grow the window to 1920×1080 after this many seconds: an overload that starts
 //               mid-session (the response check must keep lowering then, S-08 review round 2)
 //   QUIET=1     refuse to run while other Playwright browsers use the GPU (exit 3)
-// Dynamic resolution stops (back at the preset scale) when three steps down do not lower the GPU time; add
-// &dynresResponse=0 to watch the controller without that check.
+// Dynamic resolution stops (back at the preset scale) when three steps down do not lower the GPU time, and resumes
+// when the GPU time then holds 30% above where it stopped (a new load, at most 3 times; S-11). Each line shows the
+// stop and resume counts, and the reasons when they change. Add &dynresResponse=0 to watch the controller without
+// that check. Leave out dynresTarget to watch the real target (80% of a 60 Hz frame).
 import { chromium } from '@playwright/test';
 import {
   contendingBrowsers,
@@ -53,6 +55,7 @@ try {
   console.log(
     `${query}&dynres=1  DPR ${dpr}  vsync ${uncapped ? 'off' : 'on'}${growAt === null ? '' : `  960×540 → 1920×1080 at ${growAt}s`}`,
   );
+  const last = { stopped: null, resumed: null, errors: 0 };
   for (let i = 0; i <= seconds; i++) {
     const p = await page.evaluate(() => ({
       status: window.__vidro.status,
@@ -62,11 +65,22 @@ try {
       reliable: window.__vidro.gpuReliable,
       cpu: window.__vidro.cpuRenderMs,
       stopped: window.__vidro.dynresStopped,
+      resumeAt: window.__vidro.dynresResumeAtMs,
+      resumed: window.__vidro.dynresResumed,
+      stops: window.__vidro.dynresStops,
+      resumes: window.__vidro.dynresResumes,
       errors: window.__vidro.errors.length,
+      newErrors: window.__vidro.errors.slice(-3),
     }));
     console.log(
-      `t=${String(i).padStart(2)}s  scale ${p.scale.toFixed(2)}  gpu(${p.source}) ${p.gpuMs?.toFixed(2) ?? 'n/a'} ms  cpu render ${p.cpu?.toFixed(2) ?? 'n/a'} ms  reliable=${p.reliable}  errors ${p.errors}${p.stopped ? `  stopped: ${p.stopped}` : ''}`,
+      `t=${String(i).padStart(2)}s  scale ${p.scale.toFixed(2)}  gpu(${p.source}) ${p.gpuMs?.toFixed(2) ?? 'n/a'} ms  cpu render ${p.cpu?.toFixed(2) ?? 'n/a'} ms  reliable=${p.reliable}  stops ${p.stops} resumes ${p.resumes}${p.resumeAt == null ? '' : ` (resumes at ${p.resumeAt.toFixed(2)} ms)`}  errors ${p.errors}${p.stopped && p.stopped !== last.stopped ? `\n       stopped: ${p.stopped}` : ''}${p.resumed && p.resumed !== last.resumed ? `\n       resumed: ${p.resumed}` : ''}`,
     );
+    last.stopped = p.stopped;
+    last.resumed = p.resumed;
+    if (p.errors > last.errors) {
+      for (const e of new Set(p.newErrors)) console.log(`       error: ${e.slice(0, 300)}`);
+      last.errors = p.errors;
+    }
     if (p.status === 'error') break;
     if (i === growAt) {
       await page.setViewportSize(FULL);
