@@ -2,8 +2,9 @@ import type { MeshData } from '../player/walk-lab-field';
 import { BRIDGE, deckHeight, WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
 
 /**
- * Shapes of the prologue room as plain vertex data, so the drawn mesh and the Rapier triangle mesh are
- * the same triangles (空間の可読性と導線 4).
+ * Shapes of the prologue room as plain vertex data, so what is drawn and what is walked on agree
+ * (空間の可読性と導線 4): the dome wall is the same triangles in both; the deck's drawn mesh and its
+ * colliders are swept from the same curve (sampled at different z, about 1.5 mm apart at most).
  */
 
 /** Columns around the dome; the door is DOOR_COLUMNS of them centred on -Z (its width at the floor). */
