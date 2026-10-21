@@ -2,6 +2,7 @@ import type { SandboxScene, SceneFactory } from '../core/scene';
 import { Autopilot } from '../game/prologue/autopilot';
 import { isSpawnName, type SpawnName } from '../game/prologue/layout';
 import { createPrologueRoom } from '../game/prologue/room';
+import { createPrologueSound, type PrologueSound } from '../game/prologue/sound';
 import { createHomeDive } from '../ui/home/dive-host';
 import { pickLang } from '../ui/lang';
 
@@ -20,7 +21,9 @@ export const title =
  *                  measures it at rest)
  *   peek=hold      keep peeking (the heaviest view, for measuring); peek=toggle: peek toggles per press
  *   peekHold=<0..1>, growHold=<0..1>   freeze the peek / a placed orb's growth (exact screenshots)
- * Publishes window.__vidro.sceneProbe.room (game/prologue/room.ts RoomProbe) next to the home/dive probe.
+ * Publishes window.__vidro.sceneProbe.room (game/prologue/room.ts RoomProbe) next to the home/dive probe, and
+ * .sound (game/prologue/sound.ts SoundProbe): the room's events answered with po-pens and glass (S-16), silent until
+ * the first gesture.
  */
 const unit = (v: string | null): number | null => {
   if (v === null || v.trim() === '') return null;
@@ -47,17 +50,35 @@ const create: SceneFactory = async (ctx) => {
     lang: pickLang(navigator.languages),
   });
 
-  // The WebGL2 timestamp-pool workaround that lived here is gone: main.ts drains the pool outside any render (S-11).
-  if (!direct) return createHomeDive(ctx, room, { rewindFromGame: false, probeExtras: { room: room.probe } });
+  const sound = createPrologueSound(room);
 
-  window.__vidro.sceneProbe = { screen: 'game', room: room.probe };
-  await room.prepare();
+  // The WebGL2 timestamp-pool workaround that lived here is gone: main.ts drains the pool outside any render (S-11).
+  if (!direct) {
+    const host = createHomeDive(ctx, room, {
+      rewindFromGame: false,
+      probeExtras: { room: room.probe, sound: sound.probe },
+    });
+    return withSound(host, sound);
+  }
+
+  window.__vidro.sceneProbe = { screen: 'game', room: room.probe, sound: sound.probe };
+  try {
+    await room.prepare();
+  } catch (e) {
+    // a factory that rejects is never disposed (main.ts): let go of the gesture listeners and the room here
+    sound.dispose();
+    room.dispose();
+    throw e;
+  }
   room.setPlaying(true);
   let first = true;
   const sandbox: SandboxScene = {
     scene: room.scene,
     camera: room.camera,
-    update: (dt, t) => room.update(dt, t),
+    update(dt, t) {
+      room.update(dt, t);
+      sound.update();
+    },
     render() {
       // the first frame also compiles the placed orb and the boundary film (no stall at the first placement)
       if (first) room.warm();
@@ -66,11 +87,35 @@ const create: SceneFactory = async (ctx) => {
     },
     resize: (w, h) => room.resize(w, h),
     dispose() {
+      sound.dispose();
       room.dispose();
       window.__vidro.sceneProbe = {};
     },
   };
   return sandbox;
 };
+
+/** The home → dive host with the room's sound: the listener follows the camera after the host moved it. */
+function withSound(host: SandboxScene, sound: PrologueSound): SandboxScene {
+  const wrapped: SandboxScene = {
+    get scene() {
+      return host.scene;
+    },
+    get camera() {
+      return host.camera;
+    },
+    update(dt, t) {
+      host.update(dt, t);
+      sound.update();
+    },
+    dispose() {
+      sound.dispose();
+      host.dispose();
+    },
+  };
+  if (host.render) wrapped.render = () => host.render?.();
+  if (host.resize) wrapped.resize = (w, h) => host.resize?.(w, h);
+  return wrapped;
+}
 
 export default create;
