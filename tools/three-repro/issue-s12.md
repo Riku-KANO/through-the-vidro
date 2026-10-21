@@ -1,7 +1,11 @@
 # three.js への報告の下書き（S-12）
 
 投稿は発案者が行う（公開の操作）。本家の担当者は「エラーの報告だけで十分」としている（#34324）ので、直し方の案は書かない。
-Live example の欄は、本家の issue テンプレートにある jsfiddle（WebGPURenderer、dev）に下の Code を貼って作ったリンクに置き換える。
+
+jsfiddle の作り方: issue の書式にある「jsfiddle-dev WebGPURenderer」（https://jsfiddle.net/xno7bmw0/）を開き、3つの欄を
+`jsfiddle-s12/` の中身で置き換える（HTML 欄 ← `html.html`、CSS 欄 ← `style.css`、JavaScript 欄 ← `script.js`）。
+Run して、ブラウザのコンソールに `Destroyed texture … used in a submit` が並び、左上に `r187dev` と出ることを確かめてから
+Save（または Fork）し、そのリンクを Live example の欄に貼る。
 
 ---
 
@@ -33,16 +37,22 @@ default). Possibly related: #34324, #34612.
 ### Code
 
 ```js
-import * as THREE from 'three/webgpu';
+import * as THREE from 'three';
+import { materialThickness } from 'three/tsl';
+
+// Two meshes share one transmissive material without node properties. The right one is hidden while the
+// drawing buffer goes 1 -> 0.75 -> 1 (pixel ratio). When it is shown again, every frame fails on WebGPU:
+// "Destroyed texture [...] used in a submit." (WebGL backend: "bindTexture: attempt to use a deleted object").
+
+const info = document.getElementById( 'info' );
 
 const renderer = new THREE.WebGPURenderer();
 renderer.setSize( 640, 360 );
 document.body.appendChild( renderer.domElement );
-await renderer.init();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color( 0x335577 );
-scene.add( new THREE.HemisphereLight( 0xffffff, 0x444444, 2 ) );
+scene.add( new THREE.HemisphereLight( 0xffffff, 0x444444, 2 ) ); // a light is needed for transmission
 
 const camera = new THREE.PerspectiveCamera( 50, 640 / 360, 0.1, 100 );
 camera.position.set( 0, 0, 5 );
@@ -53,6 +63,8 @@ scene.add( box );
 camera.lookAt( 0, 0, - 3 );
 
 const glass = new THREE.MeshPhysicalNodeMaterial( { transmission: 1, roughness: 0, thickness: 0.5 } );
+// glass.thicknessNode = materialThickness; // any node property avoids the errors (same value as the default)
+
 const geometry = new THREE.SphereGeometry( 0.8, 32, 16 );
 const first = new THREE.Mesh( geometry, glass ); // stays visible
 first.position.set( - 1, 0, 0 );
@@ -61,11 +73,11 @@ second.position.set( 1, 0, 0 );
 scene.add( first, second );
 
 const steps = [
-	[ 10, () => {} ],
-	[ 10, () => { second.visible = false; } ],
-	[ 10, () => { renderer.setPixelRatio( 0.75 ); } ],
-	[ 10, () => { renderer.setPixelRatio( 1 ); } ],
-	[ 30, () => { second.visible = true; } ], // errors on every frame from here
+	[ 'both visible', 10, () => {} ],
+	[ 'right sphere hidden', 10, () => { second.visible = false; } ],
+	[ 'pixel ratio 0.75', 10, () => { renderer.setPixelRatio( 0.75 ); } ],
+	[ 'pixel ratio 1', 10, () => { renderer.setPixelRatio( 1 ); } ],
+	[ 'right sphere visible again (errors on every frame from here)', 30, () => { second.visible = true; } ],
 ];
 
 let step = 0, left = 0;
@@ -74,8 +86,16 @@ renderer.setAnimationLoop( () => {
 
 	if ( left === 0 ) {
 
-		if ( step >= steps.length ) return renderer.setAnimationLoop( null );
-		const [ frames, action ] = steps[ step ++ ];
+		if ( step >= steps.length ) {
+
+			renderer.setAnimationLoop( null );
+			info.textContent += ' - done';
+			return;
+
+		}
+
+		const [ name, frames, action ] = steps[ step ++ ];
+		info.textContent = `r${ THREE.REVISION } - ${ name }`;
 		action();
 		left = frames;
 
@@ -89,7 +109,7 @@ renderer.setAnimationLoop( () => {
 
 ### Live example
 
-- jsfiddle（dev）: （作成したリンク）
+- jsfiddle-dev WebGPURenderer: （作成したリンク）
 
 ### Version
 
