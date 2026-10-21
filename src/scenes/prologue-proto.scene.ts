@@ -28,29 +28,6 @@ const unit = (v: string | null): number | null => {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : null;
 };
 
-/**
- * Workaround (three r186, WebGL2): the timestamp query pool resets itself when it is full (1024 render
- * contexts) even in the middle of a nested render (a RenderPipeline pass, a shadow map), and the next
- * beginQuery then warns "a query is already active". Since S-08, main.ts turns three's per-pass timestamps
- * off where the GPU span is the source (WebGPU); on WebGL2 they stay on and are only read while the stats
- * or a bench want them, so here the pool is drained regularly from outside any render (checked after
- * merging main b88d317: still 2 warnings in 45 s without this). S-11 fixes main.ts; remove this then.
- */
-const DRAIN_EVERY_FRAMES = 64;
-
-function drainTimestamps(ctx: Parameters<SceneFactory>[0], sandbox: SandboxScene): SandboxScene {
-  if (ctx.backend !== 'webgl2') return sandbox;
-  let frames = 0;
-  const draw = sandbox.render?.bind(sandbox);
-  return Object.assign(sandbox, {
-    render() {
-      if (draw) draw();
-      else ctx.renderer.render(sandbox.scene, sandbox.camera);
-      if (++frames % DRAIN_EVERY_FRAMES === 0) ctx.renderer.resolveTimestampsAsync('render').catch(() => {});
-    },
-  });
-}
-
 const create: SceneFactory = async (ctx) => {
   const { params } = ctx;
   const bench = params.has('bench');
@@ -70,11 +47,8 @@ const create: SceneFactory = async (ctx) => {
     lang: pickLang(navigator.languages),
   });
 
-  if (!direct)
-    return drainTimestamps(
-      ctx,
-      createHomeDive(ctx, room, { rewindFromGame: false, probeExtras: { room: room.probe } }),
-    );
+  // The WebGL2 timestamp-pool workaround that lived here is gone: main.ts drains the pool outside any render (S-11).
+  if (!direct) return createHomeDive(ctx, room, { rewindFromGame: false, probeExtras: { room: room.probe } });
 
   window.__vidro.sceneProbe = { screen: 'game', room: room.probe };
   await room.prepare();
@@ -96,7 +70,7 @@ const create: SceneFactory = async (ctx) => {
       window.__vidro.sceneProbe = {};
     },
   };
-  return drainTimestamps(ctx, sandbox);
+  return sandbox;
 };
 
 export default create;
