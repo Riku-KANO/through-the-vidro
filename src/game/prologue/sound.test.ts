@@ -5,7 +5,19 @@ import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
 import { EventBus, eventName, type PrologueEvent } from './events';
-import { BENCH_ORB, DROP, GATE, PEDESTAL_ORB, SPAWNS, WORKSHOP, WORKSHOP_FLOOR_RADIUS } from './layout';
+import {
+  BENCH_ORB,
+  DROP,
+  FURNACE_MOUTH,
+  floorAt,
+  GATE,
+  PEDESTAL_ORB,
+  SPAWNS,
+  TUB_DRIP,
+  WIND_CHIME,
+  WORKSHOP,
+  WORKSHOP_FLOOR_RADIUS,
+} from './layout';
 import {
   answer,
   CueLog,
@@ -277,13 +289,22 @@ class FakeEngine {
     this.roomId = preset.id;
   }
   createEmitter(bus = 'sfx', position = { x: 0, y: 0, z: 0 }): Emitter {
-    const input = { panningModel: 'HRTF' };
+    // a PannerNode's panning model and position, as the probe reads them back from the audio graph
+    const input = {
+      panningModel: 'HRTF',
+      positionX: { value: position.x },
+      positionY: { value: position.y },
+      positionZ: { value: position.z },
+    };
     const rec: FakeEmitter = { bus, position: { ...position }, disposed: false, input };
     this.emitters.push(rec);
     return {
       input: input as unknown as AudioNode,
       setPosition: (p) => {
         rec.position = { x: p.x, y: p.y, z: p.z };
+        input.positionX.value = p.x;
+        input.positionY.value = p.y;
+        input.positionZ.value = p.z;
       },
       dispose: () => {
         rec.disposed = true;
@@ -629,7 +650,9 @@ const fakeBanks = (): SoundBanks => ({
   },
   ambience: {
     wind: fakeBuffer('wind', 8),
+    fire: fakeBuffer('fire', 7),
     chimes: Array.from({ length: 5 }, (_, v) => fakeBuffer(`chime${v}`, 2.8)),
+    doorChime: Array.from({ length: 4 }, (_, v) => fakeBuffer(`door${v}`, 1.6)),
     drops: Array.from({ length: 8 }, (_, v) => fakeBuffer(`drop${v}`, 0.25)),
   },
 });
@@ -816,7 +839,8 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
   it('is placed in the room: wind at the dome’s gaps, the chimes far off beyond the gate, drops in a few places', () => {
     const kinds = PROLOGUE_AMBIENCE.map((p) => p.kind);
     expect(kinds.filter((k) => k === 'wind').length).toBeGreaterThanOrEqual(2);
-    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(1);
+    // the far chimes in the town (S-22) and, since S-25, the one above the door
+    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(2);
     expect(kinds.filter((k) => k === 'drops').length).toBeGreaterThanOrEqual(3);
     const top = WORKSHOP.sphereCenterY + WORKSHOP.radius;
     const skylight = PROLOGUE_AMBIENCE.find((p) => p.id === 'wind:skylight');
@@ -824,7 +848,8 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
     expect(Math.hypot(skylight?.position[0] ?? 9, skylight?.position[2] ?? 9)).toBeLessThan(WORKSHOP.oculus);
     expect(skylight?.position[1]).toBeGreaterThan(top - 0.5);
     expect(Math.abs((door?.position[2] ?? 0) + WORKSHOP_FLOOR_RADIUS)).toBeLessThan(0.3);
-    const chimes = PROLOGUE_AMBIENCE.find((p) => p.kind === 'chimes');
+    const chimes = PROLOGUE_AMBIENCE.find((p) => p.id === 'chimes:town');
+    expect(chimes?.kind).toBe('chimes');
     expect(chimes?.position[2]).toBeLessThan(GATE.z - 3);
     // 遠く: from the bench where the dive lands, the chimes are far away
     const [bx, , bz] = SPAWNS.bench.feet;
@@ -845,7 +870,10 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
     r.room.probe.playing = true;
     r.frame();
     expect(r.sound.probe.ambience.playing).toBe(true);
-    expect(loops(r.engine)).toHaveLength(PROLOGUE_AMBIENCE.filter((p) => p.kind === 'wind').length);
+    // the wind's and (S-25) the furnace's
+    expect(loops(r.engine)).toHaveLength(
+      PROLOGUE_AMBIENCE.filter((p) => p.kind === 'wind' || p.kind === 'fire').length,
+    );
     const ambient = r.engine.emitters.filter((e) => e.bus === 'ambience');
     for (const place of PROLOGUE_AMBIENCE) {
       const [x, y, z] = place.position;
@@ -885,5 +913,72 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
     expect(r.engine.emitters.every((e) => e.disposed)).toBe(true);
     expect(r.sound.probe.emitters).toBe(0);
     expect(r.sound.probe.ambience.playing).toBe(false);
+  });
+});
+
+describe('the workshop’s own sounds where S-24 drew them (S-25: 炉の燃える音、水桶の雫、扉の上の風鈴)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const spot = (id: string) => PROLOGUE_AMBIENCE.find((p) => p.id === id);
+
+  it('the furnace burns in its mouth, a drop falls into the tub, the chime hangs above the door and the door’s draught rings it', () => {
+    expect(spot('fire:furnace')).toMatchObject({ kind: 'fire', position: FURNACE_MOUTH });
+    expect(spot('drops:tub')).toMatchObject({ kind: 'drops', position: TUB_DRIP });
+    expect(spot('chimes:door')).toMatchObject({
+      kind: 'chimes',
+      bells: 'door',
+      draught: 'wind:door',
+      position: WIND_CHIME,
+    });
+    expect(spot('wind:door')?.kind).toBe('wind');
+    // the far chimes ring their own bells (S-22)
+    expect(spot('chimes:town')?.bells ?? 'town').toBe('town');
+    // into water: the deeper drops (D5 … A5)
+    expect(spot('drops:tub')?.notes).toEqual([0, 1, 2, 3]);
+    // S-22's drop over the brass grate, where nothing was drawn to catch it, is gone
+    for (const p of PROLOGUE_AMBIENCE.filter((q) => q.kind === 'drops'))
+      expect(floorAt(p.position[0], p.position[2]).zone, p.id).not.toBe('grate');
+    // one place each
+    expect(new Set(PROLOGUE_AMBIENCE.map((p) => p.id)).size).toBe(PROLOGUE_AMBIENCE.length);
+  });
+
+  it('plays them on the ambience bus from there, the furnace as a loop; the probe reads each place back from its panner', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    expect(loops(r.engine).map(tagOf).sort()).toEqual(
+      PROLOGUE_AMBIENCE.filter((p) => p.kind === 'wind' || p.kind === 'fire')
+        .map((p) => (p.kind === 'fire' ? 'fire' : 'wind'))
+        .sort(),
+    );
+    const places = r.sound.probe.ambience.places;
+    expect(places.map((p) => p.id)).toEqual(PROLOGUE_AMBIENCE.map((p) => p.id));
+    for (const s of PROLOGUE_AMBIENCE) {
+      const p = places.find((q) => q.id === s.id);
+      expect(p?.kind, s.id).toBe(s.kind);
+      expect(p?.position, s.id).toEqual([...s.position]);
+      expect(p?.panning, s.id).toBe('HRTF');
+    }
+    // the chime above the door rings in time, in a draught, from its own place
+    for (let i = 0; i < 60 * 30; i++) r.frame();
+    const a = r.sound.probe.ambience;
+    expect(a.sources.find((s) => s.id === 'chimes:door')?.plays).toBeGreaterThan(0);
+    expect(a.draughts.length).toBeGreaterThan(0);
+    const door = a.hits.filter((h) => h.id === 'chimes:door');
+    expect(door.length).toBeGreaterThan(0);
+    for (const h of door) expect(a.draughts.some((d) => h.at >= d.at && h.at <= d.held)).toBe(true);
+    expect(r.sound.probe.voicesStarted).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('before the sounds are loaded the probe has no places, no hits, no draughts', () => {
+    const r = soundscapeRig();
+    r.frame();
+    const a = r.sound.probe.ambience;
+    expect(a.places).toEqual([]);
+    expect(a.hits).toEqual([]);
+    expect(a.draughts).toEqual([]);
+    r.sound.dispose();
   });
 });

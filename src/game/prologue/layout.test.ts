@@ -42,6 +42,7 @@ import {
   type SpawnName,
   shelfFrontRadius,
   TEA_CUP,
+  TUB_DRIP,
   WATER_TUB,
   WIND_CHIME,
   WORKS_SHELF,
@@ -268,6 +269,17 @@ describe('the workshop interior (S-24: 職人がついさっきまで仕事を�
     expect(WORKS_SHELF.toDeg).toBeLessThan(180);
     const annealerDeg = (Math.atan2(ANNEALER.center[2], ANNEALER.center[0]) * 180) / Math.PI;
     expect(WORKS_SHELF.fromDeg - annealerDeg).toBeGreaterThan(20);
+  });
+
+  it('S-25: the drop into the tub falls on its water, inside the rim, off the middle (from the ladle hung on the rim)', () => {
+    const [cx, , cz] = WATER_TUB.center;
+    const off = Math.hypot(TUB_DRIP[0] - cx, TUB_DRIP[2] - cz);
+    // inside the glass wall (2 cm thick at the rim) and not in the middle of the water
+    expect(off).toBeLessThan(WATER_TUB.radius - 0.05);
+    expect(off).toBeGreaterThan(0.03);
+    expect(TUB_DRIP[1]).toBe(WATER_TUB.water);
+    // the tub is the only thing there to catch it: not over the brass grate, inside the workshop
+    expect(floorAt(TUB_DRIP[0], TUB_DRIP[2]).zone).toBe('workshop');
   });
 
   it('the wind chime hangs inside the door, above the head', () => {
