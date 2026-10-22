@@ -20,8 +20,10 @@ import { FURNACE_FACING, FURNACE_MOUTH, WORKSHOP_OBJECTS } from '../../src/game/
  *      what blooms is then the fire itself, not the brass it lights (the S-30 build, with the light, already brightened a
  *      fifth of the disc: the blowpipe and the collar beside the light; process/slices/S-31.md). About the mouth (a disc
  *      over the opening, wider than it) enough pixels are brightened by the bloom; a place of the same size away from the
- *      fire is not. Pixels that differ between the two pictures of one mode and the hand orb are left out. That the bloom
- *      stays a little is held by S-27's sensors (the mouth still a fire's red, no cream from the door).
+ *      fire is not. Pixels that differ between the two pictures of one mode and the hand orb are left out. The ring outside
+ *      the opening (1.2–1.8 times its radius: the glow crossing the rim) is recorded, not judged. That the bloom stays a
+ *      little is held by the upper bound of the mean here (measured with the light dark) and by S-27's sensors (the mouth
+ *      still a fire's red, no cream from the door).
  */
 test.use({ locale: 'ja-JP' });
 
@@ -228,16 +230,20 @@ async function twoShots(page: Page): Promise<{ a: Buffer; b: Buffer; orb: Circle
   return { a, b, orb };
 }
 
-/** What the bloom adds within `disc`: `on` and `off` are two pictures each, with and without it. */
+/**
+ * What the bloom adds within `disc` (outside `inner` of the same centre, when given): `on` and `off` are two pictures each,
+ * with and without it.
+ */
 async function glowIn(
   page: Page,
   on: { a: Buffer; b: Buffer },
   off: { a: Buffer; b: Buffer },
   disc: Circle,
   leaveOut: Circle[],
+  inner = 0,
 ): Promise<Glow> {
   return page.evaluate(
-    async ({ shots, disc, leaveOut, gain }) => {
+    async ({ shots, disc, leaveOut, gain, inner }) => {
       const pixels = async (b64: string) => {
         const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
         const bmp = await createImageBitmap(blob);
@@ -271,7 +277,8 @@ async function glowIn(
         for (let px = x0; px <= x1; px++) {
           const x = px / k;
           const y = py / k;
-          if (Math.hypot(x - disc.cx, y - disc.cy) > disc.r) continue;
+          const fromCentre = Math.hypot(x - disc.cx, y - disc.cy);
+          if (fromCentre > disc.r || fromCentre < inner) continue;
           if (leaveOut.some((o) => Math.hypot(x - o.cx, y - o.cy) <= o.r)) continue;
           inDisc++;
           const i = (py * width + px) * 4;
@@ -296,6 +303,7 @@ async function glowIn(
       disc,
       leaveOut,
       gain: GAIN,
+      inner,
     },
   );
 }
@@ -425,7 +433,9 @@ for (const backend of backends) {
     const leaveOut = [...off.orb, ...on.orb];
     const near = await glowIn(page, on, off, mouth, leaveOut);
     const far = await glowIn(page, on, off, away, leaveOut);
-    keep('glow', { mouth: near, away: far, disc: mouth, awayDisc: away });
+    // recorded, not judged: the ring outside the opening (1.2–1.8 times its radius), where the glow crosses the rim
+    const ring = await glowIn(page, on, off, mouth, leaveOut, (mouth.r * 1.2) / GLOW_DISC);
+    keep('glow', { mouth: near, ring, away: far, disc: mouth, awayDisc: away });
     expect(near.pixels, 'the mouth is on the screen').toBeGreaterThan(3_000);
     expect(near.unsteady, 'pixels about the mouth left out as unsteady').toBeLessThan(0.3);
     expect(near.brightened, 'share of the mouth brightened by the bloom').toBeGreaterThan(LIMITS.brightened);

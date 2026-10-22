@@ -206,11 +206,12 @@ class Workshop(unittest.TestCase):
     # ── S-31: the furnace made again (徐冷炉と同じ低く広い泡のドーム) ─────────────────────────────────────────
 
     def test_the_fire_core_blooms_a_little_and_its_walls_stay_red(self):
-        """画面の仕上げ (ブルームは控えめにし、強い光源だけが滲む) and AGENTS.md「何が光るかは美術で決める」: the hottest colour the
-        furnace's fire shows (the atlas at its UVs × FIRE_GLOW, linear) is above the bloom's threshold (linear luminance 0.9,
-        src/game/orb/peek-pipeline.ts) but not far (a little: under 1.6); the walls at the mouth's rim stay a deep red, every
-        channel under 0.5 (AgX turns brighter reds pink: S-27). S-30 found the core at 0.43: the tile's margin kept the hot
-        end of the atlas from being used"""
+        """画面の仕上げ (ブルームは控えめにし、強い光源だけが滲む) and AGENTS.md「何が光るかは美術で決める」「AgX は明るい赤を桃色へ
+        寄せる」: the hottest colour the furnace's fire shows (the atlas at its UVs × FIRE_GLOW, linear) is above the bloom's
+        threshold (linear luminance 0.9, src/game/orb/peek-pipeline.ts) but not far (a little: under 1.6); every other corner
+        of the fire is a red wall, each channel under 0.5 (none in between: a corner under the threshold but brighter than that
+        turns salmon). S-30 found the core at 0.24 (the tile's margin kept the hot end of the atlas from being used); review
+        round 1 of S-31 found a ring of the walls at 0.65"""
         mw = self.mw
         furnace = next(o for o in self.objects if o.name == 'A0_frn_furnace01')
         atlas = mw.atlas_pixels()
@@ -224,13 +225,13 @@ class Workshop(unittest.TestCase):
                 u, v = uv[li].uv
                 px = min(cols_px - 1, max(0, int(u * cols_px)))
                 py = min(rows_px - 1, max(0, int(v * rows_px)))
-                colours.append((float(v), atlas[py, px] * mw.FIRE_GLOW))
+                colours.append(atlas[py, px] * mw.FIRE_GLOW)
         self.assertGreater(len(colours), 0)
-        lum = [0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] for _, c in colours]
+        lum = [0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] for c in colours]
         self.assertGreater(max(lum), 0.9)
         self.assertLess(max(lum), 1.6)
-        rim = min(colours, key=lambda vc: vc[0])[1]
-        self.assertLess(float(max(rim)), 0.5, f'the rim of the fire: {rim}')
+        pink = sorted({round(float(max(c)), 2) for c, l in zip(colours, lum) if l <= 0.9 and max(c) >= 0.5})
+        self.assertEqual(pink, [], 'corners of the fire under the threshold but brighter than a deep red')
 
 
 # ── helpers (three's coordinates: y up, the door at -Z) ──────────────────────────────────────────────────

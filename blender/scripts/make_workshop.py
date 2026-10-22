@@ -369,15 +369,11 @@ def air_bubbles(part: Part, mat, center, radius: float, count: int, seed: int, h
 ATLAS_GRID = (4, 2)
 TILE_PX = 128
 #: 区画（列, 行）。行 0 が下
+#: S-31: 熾火は自分の区画（S-27 の火の色の傾きを区画の 0〜1 で描いたもの。熾火の規則の v はそれに合わせてあるので、色は S-27 のまま）。
+#: 火の区画は炉の火だけが使い、規則の v で描く
 TILES = {'A0_brass': (0, 0), 'A0_frost': (1, 0), 'A0_kiln': (2, 0), 'A0_opal': (3, 0),
-         'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_ember': (1, 1), 'A0_shade': (2, 1)}
+         'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_shade': (2, 1), 'A0_ember': (3, 1)}
 TILE_MARGIN = 0.12
-
-
-def s27_tile_v(v: float) -> float:
-    """S-27 の熾火の規則の v を、今の火の区画で同じ色になる v へ。S-31 で火の区画を規則の 0〜1 で描くようにしたので（S-30 までは区画の
-    0〜1 で描き、atlas_uv が規則の v を区画の 0.12〜0.88 に写していた）、熾火（徐冷炉、炉の覗き窓）は S-27 の色のままにする"""
-    return TILE_MARGIN + (1 - 2 * TILE_MARGIN) * v
 
 #: 炉の体の色（線形。S-30）: 下の端と上の端、煤。工房の光は青い（空の半球光 0x7890c0、夜明けの空の映り込み）ので、体の色は
 #: 青みを持たない明るい灰に置く（画面では薄い青灰に写る）。見た目の調整 1〜3 巡目で見た絵: 最初の 0.24〜0.46 の青灰は鋼の青に、
@@ -385,8 +381,8 @@ def s27_tile_v(v: float) -> float:
 KILN_LOW = (0.6, 0.6, 0.6)
 KILN_HIGH = (0.76, 0.76, 0.76)
 KILN_SOOT = (0.03, 0.029, 0.03)
-#: 煤のいちばん濃い所で、体の色に煤を混ぜる割合。煤の量（1 - u）の平方根で混ぜる（線形の色で半分混ぜても、画面ではほとんど
-#: 暗く見えない: 2巡目は口の際の煤が見えなかった）
+#: 煤のいちばん濃い所で、体の色に煤を混ぜる割合。煤の量の平方根で混ぜる（線形の色で半分混ぜても、画面ではほとんど
+#: 暗く見えない: S-30 の 2巡目は口の際の煤が見えなかった）
 KILN_SOOT_MIX = 0.9
 
 
@@ -397,9 +393,11 @@ def to_srgb(c: np.ndarray) -> np.ndarray:
 
 def atlas_pixels(seed: int = 24) -> np.ndarray:
     """線形の色で描く。真鍮: 下ほど緑青がかって暗く、手の触れる上ほど明るい（真鍮の鈍い金）。曇りガラスの天板: 薄い青灰。
-    炉の体（S-30）: 煤けた厚い曇りガラスの薄い青灰（色の進行: 序章は白、薄い青灰）。u は煤の少なさ（0 が口の縁と煙突の根の煤、
-    1 が煤のない所）、v は高さ（上ほど明るい）。乳白の作品（S-27）: 光らない乳白（オパール）。棚の背板（S-27）: 影の青灰。
-    水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の熱い橙へ（S-31: 規則の v で描く）"""
+    炉の体（S-30）: 煤けた厚い曇りガラスの薄い青灰（色の進行: 序章は白、薄い青灰）。S-31: u はドームの軸の周りの口からの角
+    （0 が口の向き、1 が真後ろ。左右は同じ）、v は高さ（上ほど明るい）。煤は区画の画素ごとにドームの面の点から口までの距離で描く
+    （kiln_soot）。乳白の作品（S-27）: 光らない乳白（オパール）。棚の背板（S-27）: 影の青灰。
+    水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の熱い橙へ（S-31: 規則の v で描く）。熾火: S-27 の火の色の
+    傾き（区画の 0〜1 で）"""
     cols, rows = ATLAS_GRID
     h = TILE_PX
     rng = np.random.default_rng(seed)
@@ -426,23 +424,29 @@ def atlas_pixels(seed: int = 24) -> np.ndarray:
     ku = np.clip((u - TILE_MARGIN) / (1 - 2 * TILE_MARGIN), 0, 1)
     kv = np.clip((v - TILE_MARGIN) / (1 - 2 * TILE_MARGIN), 0, 1)
     base = lerp(KILN_LOW, KILN_HIGH, kv) * (1 + 0.04 * soft)
-    kiln = lerp(base, KILN_SOOT, np.sqrt(1.0 - ku) * KILN_SOOT_MIX)
+    kiln = lerp(base, KILN_SOOT, np.sqrt(kiln_soot(ku, kv)) * KILN_SOOT_MIX)
     opal = lerp((0.62, 0.63, 0.62), (0.8, 0.8, 0.78), v) * (1 + 0.025 * soft)
     shade = lerp((0.022, 0.03, 0.046), (0.04, 0.05, 0.072), v) * (1 + 0.04 * soft)
     ripple = 0.5 + 0.5 * np.sin(np.hypot(u - 0.5, v - 0.5) * 70)
     water = lerp((0.02, 0.032, 0.045), (0.045, 0.065, 0.085), ripple * 0.6 + 0.2 * soft)
-    # 火（発光の色。強さ FIRE_GLOW を材質が掛ける）: v = 0 の暗い深い赤 → 赤 → 橙 → v = 1 の熱い所（炉では奥の壁の輪 HOT_RING）。
-    # AgX は明るい赤を桃色へ寄せるので、赤く見せる所は暗く（線形 0.15〜0.45）、光源として滲む（しきい値 0.9 を超える）のは熱い所だけ。
-    # S-31: 規則の v（区画の余白の内）で描く。S-30 までは区画の 0〜1 で描いていたので、規則の v = 1 は区画の 0.88 に写り、熱い所の色
-    # （線形 2.4, 0.9, 0.15、輝度 1.17）が使われず、火の芯はしきい値の下だった
+    # 火（発光の色。強さ FIRE_GLOW を材質が掛ける）: v = 0 の暗い深い赤 → 赤 → v = 0.85〜1 の熱い芯（炉では奥の底の HOT_RING の円）。
+    # AgX は明るい赤を桃色へ寄せるので、赤く見せる壁は FIRE_GLOW を掛けてどの成分も 0.5 未満、光源として滲む（しきい値 0.9 を超える）
+    # のは熱い芯だけ（線形 2.4, 0.9, 0.15、輝度 1.17）。S-31: 規則の v（区画の余白の内）で描く。S-30 までは区画の 0〜1 で描いていたので、
+    # 規則の v = 1 は区画の 0.88 に写り、熱い芯の色が使われず、火はしきい値の下だった。壁の赤は S-27 の 0.12（× 6 = 0.72、鮭色）から
+    # 0.082 に下げた（S-31 のレビュー1巡目）
     fv = kv
-    fire = np.where(fv < 0.55, lerp((0.025, 0.002, 0.0), (0.075, 0.007, 0.001), fv / 0.55),
-                    np.where(fv < 0.85, lerp((0.075, 0.007, 0.001), (0.12, 0.02, 0.002), (fv - 0.55) / 0.3),
-                             lerp((0.12, 0.02, 0.002), (0.4, 0.15, 0.025), (fv - 0.85) / 0.15)))
+    fire = np.where(fv < 0.55, lerp((0.025, 0.002, 0.0), (0.06, 0.005, 0.0008), fv / 0.55),
+                    np.where(fv < 0.85, lerp((0.06, 0.005, 0.0008), (0.082, 0.012, 0.0015), (fv - 0.55) / 0.3),
+                             lerp((0.082, 0.012, 0.0015), (0.4, 0.15, 0.025), (fv - 0.85) / 0.15)))
     fire = fire * (1 + 0.05 * soft)
+    # 熾火（徐冷炉の中、炉の覗き窓）: S-27 の火の傾きを区画の 0〜1 で（熾火の規則の v はこれに合わせて決めた）
+    ember = np.where(v < 0.55, lerp((0.025, 0.002, 0.0), (0.075, 0.007, 0.001), v / 0.55),
+                     np.where(v < 0.85, lerp((0.075, 0.007, 0.001), (0.12, 0.02, 0.002), (v - 0.55) / 0.3),
+                              lerp((0.12, 0.02, 0.002), (0.4, 0.15, 0.025), (v - 0.85) / 0.15)))
+    ember = ember * (1 + 0.05 * soft)
     img = np.zeros((rows * h, cols * h, 3))
     for (col, row), tile in (((0, 0), brass), ((1, 0), frost), ((2, 0), kiln), ((3, 0), opal), ((0, 1), water),
-                             ((1, 1), fire), ((2, 1), shade), ((3, 1), frost)):
+                             ((1, 1), fire), ((2, 1), shade), ((3, 1), ember)):
         img[row * h:(row + 1) * h, col * h:(col + 1) * h] = np.broadcast_to(tile, (h, h, 3))
     return img
 
@@ -790,14 +794,41 @@ HOT_RING = 0.09
 #: 煙突: 管の半径、ドームの軸から壁の側への距離、工房のドームのガラスを抜けて外へ出る長さ。まっすぐ上へ（S-30 の曲がった煙道は
 #: 取っ手に見えた）
 CHIMNEY = {'radius': 0.085, 'back': 0.22, 'out': 0.3}
-#: 覗き窓: 口の向きから左右へこの角度、この高さ（口と並ぶと正面から顔に見えるので、横へ回す）
-PEEP = {'deg': 72.0, 'y': 0.56}
-#: 炉の体の煤（S-30）: 口の真ん中（ドームの面の上）からの距離（m）で、この内は煤、この外は煤なし。上へは KILN_SOOT_UP 倍に縮めて
-#: 測る（煤は上る）。煙突の根の周りも同じ（薄く）。S-31 のドームは前の面が広く、S-30 の範囲（0.2〜0.55m、上へ 0.6 倍）では前の面の
-#: 真ん中がほとんど煤けて暗い紺に見えた（見た目の調整 1 巡目）: 口の縁の上を舐める煤にとどめる
+#: 覗き窓: 口の向きから左右へこの角度、この高さ。正面の丸い口と左右の丸窓が並ぶと潜水兜（面板と横の覗き窓）か顔に見えるので
+#: （S-31 のレビュー1巡目）、炉の前からはドームの陰になる横の後ろの低い所へ回す。扉からは扉の側の 1 つが見える
+PEEP = {'deg': 105.0, 'y': 0.32}
+#: 炉の体の煤（S-30）: 口の真ん中（ドームの面の上）からの距離（m）で、この内は煤、この外は煤なし（間は両端のなめらかな曲線）。上へは
+#: KILN_SOOT_UP 倍に縮め、下へは KILN_SOOT_DOWN 倍、横へは KILN_SOOT_SIDE 倍に延ばして測る（煤は口の上へ上る）。S-31 のドームは前の
+#: 面が広く、S-30 の範囲（0.2〜0.55m、上へ 0.6 倍）では前の面の真ん中がほとんど煤けて暗い紺に見えた（見た目の調整 1 巡目）: 口の縁の上を
+#: 舐める煤にとどめる。上下左右に同じだと、口の周りの暗い輪（目の窪み）に見えた（3 巡目）。煤は頂点の値でなく区画の画素で描く（kiln_soot）:
+#: 頂点ごとに決めると、口の周りのブーリアンの長い三角形の上で煤が多角形の斑になった（レビュー1巡目 P1）。煙突の根の煤はやめた（頂の
+#: 近くは軸の周りの角が定まらず、区画では描けない。根は真鍮の輪が覆う）
 KILN_SOOT_MOUTH = (0.22, 0.42)
-KILN_SOOT_UP = 0.7
-KILN_SOOT_FLUE = (0.09, 0.3)
+KILN_SOOT_UP = 0.6
+KILN_SOOT_DOWN = 2.2
+KILN_SOOT_SIDE = 1.35
+
+
+def kiln_radius(y):
+    """炉の体の、高さ y（配列でもよい）での半径（楕円の輪郭。裾の巻き込みは除く）"""
+    t = np.clip(np.asarray(y, dtype=float) / KILN['height'], 0.0, 1.0)
+    return KILN['radius'] * (1.0 - t ** KILN['power']) ** (1.0 / KILN['power'])
+
+
+def kiln_soot(ku, kv):
+    """炉の体の区画の（規則の）u, v での煤の量（0〜1）。u はドームの軸の周りの口の向きからの角 ÷ π、v は高さ ÷ KILN['height']。
+    その面の点から口の真ん中（ドームの面が口の軸と交わる所）までの距離（上下左右で縮め延ばす）で決める"""
+    az = np.asarray(ku) * np.pi
+    hy = np.asarray(kv) * KILN['height']
+    rr = kiln_radius(hy)
+    dx = rr * np.cos(az) - float(kiln_radius(MOUTH_Y))
+    dz = rr * np.sin(az) * KILN_SOOT_SIDE
+    dy = hy - MOUTH_Y
+    dy = np.where(dy > 0, dy * KILN_SOOT_UP, dy * KILN_SOOT_DOWN)
+    dist = np.sqrt(dx * dx + dy * dy + dz * dz)
+    near, far = KILN_SOOT_MOUTH
+    t = np.clip((far - dist) / (far - near), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
 
 
 def kiln_profile() -> list[tuple[float, float]]:
@@ -866,6 +897,13 @@ def furnace(m) -> None:
     # closed at the bottom for the cut (the boolean needs a solid: on the open shell it kept the cutter's wall inside as a tube
     # of the body's glass, in front of the fire); the bottom goes after the cut (the floor hides it)
     dome = lathe_bm([(0.0, 0.0)] + kiln_profile(), KILN['segments'])
+    # turned so that a column of the lathe runs up the mouth's middle (the body's UV folds there: kiln_uv)
+    step = 2 * math.pi / KILN['segments']
+    facing_az = math.atan2(FACING[1], FACING[0])
+    turn_az = facing_az - round(facing_az / step) * step
+    c_az, s_az = math.cos(turn_az), math.sin(turn_az)
+    for v in dome.verts:
+        v.co = Vector((v.co.x * c_az - v.co.z * s_az, v.co.y, v.co.x * s_az + v.co.z * c_az))
     bmesh.ops.translate(dome, vec=Vector((kx, 0.0, kz)), verts=list(dome.verts))
     bvh = BVHTree.FromBMesh(dome)  # the whole dome (before the mouth is cut): what the mouth's rim and the windows sit on
     # 口の縁: 口の軸（FURNACE_MOUTH の高さで向きに沿う水平の線）から MOUTH_HOLE 離れた線がドームの面と交わる所（とその面の法線）
@@ -940,7 +978,7 @@ def furnace(m) -> None:
         add(lathe_bm(window, 12), m['ember'], place(at + normal * 0.001, axis=tuple(normal)))
         add(tube_bm(circle(tuple(at + normal * 0.004), 0.053, 12, axis=tuple(normal)), 0.005, 4, closed=True),
             m['milky'])
-    p.uv_rules['A0_ember'] = lambda co: (0.5, s27_tile_v(0.88))  # 火の区画の赤橙（S-27 の色のまま）
+    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.88)  # 熾火の区画の赤橙
     # 足元の真鍮の輪: ドームの裾に沿う
     foot = []
     for k in range(KILN['segments']):
@@ -959,24 +997,21 @@ def furnace(m) -> None:
     room_glass = DOME_CY + math.sqrt(DOME_R ** 2 - (chx * chx + chz * chz))
     ys = [base_y - 0.05, COL_MAX_Y - 0.02, room_glass + CHIMNEY['out']]
     add(tube_bm([(chx, y, chz) for y in ys], CHIMNEY['radius'], 10), m['brass'])
-    add(tube_bm(circle((chx, base_y + 0.012, chz), CHIMNEY['radius'] + 0.02, 16), 0.018, 4, closed=True), m['brass'])
-    # 体の色（S-30）: 薄い青灰の曇りガラスで、煤は口の縁の上（熱と煤は上るので、口の上へ伸びる）と煙突の根だけ（u: 煤の少なさ）、
-    # 上ほど明るい（v）
-    soot_c = Vector(raycast(bvh, f(KILN['radius'] + 1.0, MOUTH_Y), -axis))
-    flue_root = Vector((chx, base_y, chz))
+    collar = []
+    for q in circle((chx, 3.0, chz), CHIMNEY['radius'] + 0.02, 16):  # on the dome's surface (it slopes a little there)
+        hit = bvh.ray_cast(Vector(q), Vector((0.0, -1.0, 0.0)))
+        collar.append(tuple(Vector(hit[0]) + Vector(hit[1]).normalized() * 0.012) if hit[0] is not None else
+                      (q[0], base_y + 0.012, q[2]))
+    add(tube_bm(collar, 0.018, 4, closed=True), m['brass'])
+    # 体の色（S-30）: 薄い青灰の曇りガラスで、上ほど明るい（v）。煤は口の縁の上（熱と煤は上る）だけで、区画に描く（kiln_soot）。u は
+    # ドームの軸の周りの口の向きからの角 ÷ π（左右は同じ値に畳む: 煤は口の左右で同じ。畳む所は旋盤の列の上）
+    def kiln_uv(co):
+        q = Vector((co.x - kx, 0.0, co.z - kz))
+        if q.length < 1e-4:  # the top: no direction (no soot there)
+            return (1.0, co.y / KILN['height'])
+        return (math.acos(max(-1.0, min(1.0, q.normalized().dot(axis)))) / math.pi, co.y / KILN['height'])
 
-    def soot(co) -> float:
-        d = co - soot_c
-        lift = max(0.0, d.y) * (1.0 - KILN_SOOT_UP)
-        mouth = math.hypot(d.x, d.z, d.y - lift)
-        near, far = KILN_SOOT_MOUTH
-        s_mouth = min(1.0, max(0.0, (far - mouth) / (far - near)))
-        near, far = KILN_SOOT_FLUE
-        s_flue = min(1.0, max(0.0, (far - (co - flue_root).length) / (far - near))) * 0.7
-        s_ = max(s_mouth, s_flue)
-        return s_ * s_ * (3 - 2 * s_)
-
-    p.uv_rules['A0_kiln'] = lambda co: (1.0 - soot(co), co.y / KILN['height'])
+    p.uv_rules['A0_kiln'] = kiln_uv
     # 口に差したままの吹き竿と、その受け（格子の上）
     pipe_y = lambda a: MOUTH_Y + 0.02 + (a - 0.55) / (MOUTH_PIPE_REACH - 0.55) * 0.18  # noqa: E731
     add(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])
@@ -1150,7 +1185,7 @@ def annealer(m) -> None:
         p.merge(tube_bm([f(-math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s),
                          f(math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s)], 0.008, 6), m['brass'])
     # 熾火は火の区画の赤から橙の間（S-27 で火の区画の縁を暗い深い赤にした。熾火は弱い発光のまま見えるように）
-    p.uv_rules['A0_ember'] = lambda co: (0.5, s27_tile_v(0.62 + 0.26 * min(1.0, max(0.0, (co.y - FLOOR_TOP) / 0.55))))
+    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.62 + 0.26 * min(1.0, max(0.0, (co.y - FLOOR_TOP) / 0.55)))
     build(p, 'A0_anl_annealer01', (cx, 0.0, cz), col=True)
 
 

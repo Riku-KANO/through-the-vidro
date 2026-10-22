@@ -58,6 +58,51 @@ function axisOf(points: THREE.Vector3[]): [number, number] {
   return [c.x, c.y];
 }
 
+/** The furnace's meshes of the body (A0_kiln), with their world matrices up to date. */
+function bodyMeshes(): THREE.Mesh[] {
+  const o = built.layered.find((l) => l.object.userData.name === WORKSHOP_OBJECTS.furnace.name)?.object;
+  if (!o) throw new Error(`no ${WORKSHOP_OBJECTS.furnace.name}`);
+  o.updateWorldMatrix(true, true);
+  const out: THREE.Mesh[] = [];
+  o.traverse((m) => {
+    const mesh = m as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    if ((Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some((x) => x.name === 'A0_kiln'))
+      out.push(mesh);
+  });
+  return out;
+}
+
+/**
+ * Which of 12 sectors round the mouth's axis (level through the fire, FURNACE_MOUTH, along the facing) hold something of the
+ * furnace standing out in front of the dome's own surface by more than `beyond` metres, 10–40 cm off the axis (inside the
+ * opening there is no dome to stand out of; the foot ring is further off). The surface is found along the same line parallel
+ * to the axis (review round 1 of S-31: measuring from the dome's furthest point let a collar on the opening slip through).
+ * `extra`: world points added to the furnace's own (to check that a collar is caught).
+ */
+function sectorsStandingOut(beyond: number, extra: THREE.Vector3[] = []): number[] {
+  const [fx, fz] = FURNACE_FACING;
+  const facing = new THREE.Vector3(fx, 0, fz);
+  const right = new THREE.Vector3(-fz, 0, fx);
+  const meshes = bodyMeshes();
+  const ray = new THREE.Raycaster();
+  const sectors = new Set<number>();
+  for (const p of [...furnaceVertices(), ...extra]) {
+    const q = mouthFrame(p);
+    const up = q.y - FURNACE_MOUTH[1];
+    const off = Math.hypot(q.s, up);
+    if (off < 0.1 || off > 0.4 || q.a < 0.3) continue;
+    const origin = new THREE.Vector3(FURNACE.center[0], q.y, FURNACE.center[2])
+      .addScaledVector(facing, 3)
+      .addScaledVector(right, q.s);
+    ray.set(origin, facing.clone().negate());
+    const hit = ray.intersectObjects(meshes, false)[0];
+    if (!hit || q.a < mouthFrame(hit.point).a + beyond) continue;
+    sectors.add(Math.floor(((Math.atan2(up, q.s) + Math.PI) / (2 * Math.PI)) * 12) % 12);
+  }
+  return [...sectors];
+}
+
 /** Along the mouth's facing from the furnace's centre (a), across it (s, to the right), and up (y). */
 function mouthFrame(p: THREE.Vector3): { a: number; s: number; y: number } {
   const [fx, fz] = FURNACE_FACING;
@@ -104,32 +149,31 @@ describe('S-31 the furnace is a low, wide bubble dome like the annealer, not a k
   });
 
   it('its mouth is an opening in the dome, not a tube: in front of the dome nothing goes round the mouth (no spout)', () => {
-    // the mouth's axis: level through the fire (FURNACE_MOUTH), along the facing; the dome's front about it
-    const at = (p: THREE.Vector3) => {
-      const q = mouthFrame(p);
-      return { a: q.a, side: q.s, up: q.y - FURNACE_MOUTH[1] };
-    };
-    const front = Math.max(
-      ...body()
-        .map(at)
-        .filter((q) => Math.hypot(q.side, q.up) < 0.5)
-        .map((q) => q.a),
-    );
-    // from 8 cm in front of the dome (the brass ring on its rim is thinner) to half a metre: which of 12 sectors round the
-    // axis hold anything 10–45 cm off it. A tube or a spout fills them all (S-30's collar: 12); the blowpipe left in the
-    // mouth and its yoke (thin, rising a little toward the room) only the ones above (S-31: none). It counts vertices: a
-    // straight tube with both ends outside that half metre would slip through
-    const sectors = new Set<number>();
-    for (const q of furnaceVertices().map(at)) {
-      if (q.a < front + 0.08 || q.a > front + 0.5) continue;
-      const off = Math.hypot(q.side, q.up);
-      if (off < 0.1 || off > 0.45) continue;
-      sectors.add(Math.floor(((Math.atan2(q.up, q.side) + Math.PI) / (2 * Math.PI)) * 12) % 12);
-    }
+    // A tube or a spout on the mouth stands out of the dome all round it (S-30's collar: 12 sectors of 12); the brass ring on
+    // the opening's rim stands out about 5 cm; the blowpipe left in the mouth and its yoke, thin and rising a little toward
+    // the room, only above the axis. It counts vertices: a straight tube with no ring of vertices 10–40 cm off the axis in
+    // front of the dome would slip through
+    const beyond = 0.08;
     expect(
-      sectors.size,
-      `sectors round the mouth in front of the dome (front at ${front.toFixed(2)} m)`,
+      sectorsStandingOut(beyond).length,
+      'sectors round the mouth with something in front of the dome',
     ).toBeLessThanOrEqual(3);
+    // and it would see one: S-30's collar (radius 0.2–0.228 m) set on this opening, reaching 0.2 m out of it
+    const [fx, fz] = FURNACE_FACING;
+    const collar: THREE.Vector3[] = [];
+    for (let k = 0; k < 24; k++) {
+      const t = (2 * Math.PI * k) / 24;
+      const a = 0.79 + 0.2;
+      const s = 0.214 * Math.cos(t);
+      collar.push(
+        new THREE.Vector3(
+          FURNACE.center[0] + fx * a - fz * s,
+          FURNACE_MOUTH[1] + 0.214 * Math.sin(t),
+          FURNACE.center[2] + fz * a + fx * s,
+        ),
+      );
+    }
+    expect(sectorsStandingOut(beyond, collar).length).toBeGreaterThanOrEqual(10);
   });
 
   it('its chimney goes straight up from the dome through the workshop’s glass (not bent like a handle)', () => {
