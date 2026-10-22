@@ -209,8 +209,9 @@ class Workshop(unittest.TestCase):
         """画面の仕上げ (ブルームは控えめにし、強い光源だけが滲む) and AGENTS.md「何が光るかは美術で決める」「AgX は明るい赤を桃色へ
         寄せる」: the hottest colour the furnace's fire shows (the atlas at its UVs × FIRE_GLOW, linear) is above the bloom's
         threshold (linear luminance 0.9, src/game/orb/peek-pipeline.ts) but not far (a little: under 1.6); every other corner
-        of the fire is a red wall, each channel under 0.5 (none in between: a corner under the threshold but brighter than that
-        turns salmon). S-30 found the core at 0.24 (the tile's margin kept the hot end of the atlas from being used); review
+        of the fire is a red wall, each channel under 0.5 (no corner in between: a wall under the threshold but brighter than
+        that turns salmon; between the last ring of the wall and the core the faces pass through it, the gradient at the
+        core's edge). S-30 found the core at 0.24 (the tile's margin kept the hot end of the atlas from being used); review
         round 1 of S-31 found a ring of the walls at 0.65"""
         mw = self.mw
         furnace = next(o for o in self.objects if o.name == 'A0_frn_furnace01')

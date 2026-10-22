@@ -20,7 +20,8 @@ import { FURNACE_FACING, FURNACE_MOUTH, WORKSHOP_OBJECTS } from '../../src/game/
  *      what blooms is then the fire itself, not the brass it lights (the S-30 build, with the light, already brightened a
  *      fifth of the disc: the blowpipe and the collar beside the light; process/slices/S-31.md). About the mouth (a disc
  *      over the opening, wider than it) enough pixels are brightened by the bloom; a place of the same size away from the
- *      fire is not. Pixels that differ between the two pictures of one mode and the hand orb are left out. The ring outside
+ *      fire is not. Pixels that differ between the two pictures of one mode and the hand orb are left out. With the light
+ *      on, as the game shows it, hardly any of the disc is blown out white (the brass by the light). The ring outside
  *      the opening (1.2–1.8 times its radius: the glow crossing the rim) is recorded, not judged. That the bloom stays a
  *      little is held by the upper bound of the mean here (measured with the light dark) and by S-27's sensors (the mouth
  *      still a fire's red, no cream from the door).
@@ -84,9 +85,11 @@ const GAIN = 0.03;
  * Thresholds, set before the change from the S-30 build measured the same way (process/slices/S-31.md 赤の証跡: with the
  * fire's light dark, the bloom brightened 1.3% of the disc about the mouth, mean gain 0.003, on both paths): about the
  * mouth at least a tenth of the pixels brightened and a mean gain of at least 0.01 (three times S-30's), but under 0.08
- * (少し: the bloom does not wash over the mouth); away from the fire, the mean gain stays under 0.01.
+ * (少し: the bloom does not wash over the mouth); away from the fire, the mean gain stays under 0.01. Added in review round
+ * 2: with the light on, under 0.2% of the disc blown out white (every channel ≥ 245; the build of round 1, its light 2 cm
+ * over the blowpipe, showed the pipe at 255, 255, 251 and a cream crescent inside the ring).
  */
-const LIMITS = { brightened: 0.1, mean: 0.01, meanMax: 0.08, away: 0.01 };
+const LIMITS = { brightened: 0.1, mean: 0.01, meanMax: 0.08, away: 0.01, white: 0.002 };
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -308,6 +311,34 @@ async function glowIn(
   );
 }
 
+/** Share of the pixels in `disc` (not in `leaveOut`) blown out white: every channel at least 245 of 255. */
+async function whiteIn(page: Page, png: Buffer, disc: Circle, leaveOut: Circle[]): Promise<number> {
+  return page.evaluate(
+    async ({ b64, disc, leaveOut }) => {
+      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+      const bmp = await createImageBitmap(blob);
+      const cv = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = cv.getContext('2d');
+      if (!g) throw new Error('no 2d context');
+      g.drawImage(bmp, 0, 0);
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
+      const k = bmp.width / innerWidth;
+      let n = 0;
+      let white = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const x = ((i / 4) % bmp.width) / k;
+        const y = Math.floor(i / 4 / bmp.width) / k;
+        if (Math.hypot(x - disc.cx, y - disc.cy) > disc.r) continue;
+        if (leaveOut.some((o) => Math.hypot(x - o.cx, y - o.cy) <= o.r)) continue;
+        n++;
+        if (Math.min(d[i] ?? 0, d[i + 1] ?? 0, d[i + 2] ?? 0) >= 245) white++;
+      }
+      return white / Math.max(1, n);
+    },
+    { b64: png.toString('base64'), disc, leaveOut },
+  );
+}
+
 /** Before | after side by side, one row per view (PNG). */
 async function sideBySide(page: Page, rows: { name: string; a: string; b: string }[]): Promise<Buffer> {
   const b64 = await page.evaluate(async (rows) => {
@@ -425,9 +456,13 @@ for (const backend of backends) {
     expect(await darkenFireLight(page), "the fire's light").toBe(1);
     const off = await twoShots(page);
     await openView(page, 'furnace', webgl);
+    // as the game shows it, the light on: nothing about the mouth is blown out white (review round 2: 2 cm under the light,
+    // the blowpipe and the ring's inside were white, brighter than the fire)
+    const mouth = await mouthDisc(page, GLOW_DISC);
+    const litOrb = await handOrb(page);
+    const white = await whiteIn(page, await page.screenshot(), mouth, [...litOrb, ...(await handOrb(page))]);
     expect(await darkenFireLight(page), "the fire's light").toBe(1);
     const on = await twoShots(page);
-    const mouth = await mouthDisc(page, GLOW_DISC);
     // away from the fire: as big a disc, as far up the picture as it fits (the dawn sky and the glass of the dome)
     const away: Circle = { cx: 1280 - mouth.r - 8, cy: mouth.r + 8, r: mouth.r };
     const leaveOut = [...off.orb, ...on.orb];
@@ -435,7 +470,8 @@ for (const backend of backends) {
     const far = await glowIn(page, on, off, away, leaveOut);
     // recorded, not judged: the ring outside the opening (1.2–1.8 times its radius), where the glow crosses the rim
     const ring = await glowIn(page, on, off, mouth, leaveOut, (mouth.r * 1.2) / GLOW_DISC);
-    keep('glow', { mouth: near, ring, away: far, disc: mouth, awayDisc: away });
+    keep('glow', { mouth: near, ring, away: far, disc: mouth, awayDisc: away, whiteWithTheLight: white });
+    expect(white, 'share of the mouth blown out white with the light on').toBeLessThan(LIMITS.white);
     expect(near.pixels, 'the mouth is on the screen').toBeGreaterThan(3_000);
     expect(near.unsteady, 'pixels about the mouth left out as unsteady').toBeLessThan(0.3);
     expect(near.brightened, 'share of the mouth brightened by the bloom').toBeGreaterThan(LIMITS.brightened);

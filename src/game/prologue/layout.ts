@@ -59,8 +59,7 @@ export const BENCH_ORB: Vec3 = [-1.55, 0.99, -2.28];
  * The furnace (炉) on the right, the only warm light of the workshop (光と時間帯: 夜明け前の青). S-31: a low, wide bubble dome
  * of thick glass in the words of the annealer at the back (形のルール: 泡の集合), bigger than it; its mouth an opening in the
  * dome's front rimmed with a brass ring, the fire burning red deep in it (S-27), the chimney a brass pipe straight up. The
- * glass is sooty frosted glass in the prologue's pale blue-grey, the soot only about the mouth and the chimney's root
- * (色の進行; S-30). `radius` is the dome's at the floor; its axis stands 0.12 m toward the wall from `center`, so its foot
+ * glass is sooty frosted glass in the prologue's pale blue-grey, the soot only licking up from the mouth (色の進行; S-30). `radius` is the dome's at the floor; its axis stands 0.12 m toward the wall from `center`, so its foot
  * stays short of the grate (make_workshop.py KILN).
  */
 export const FURNACE = { center: [2.35, 0, -1.4] as Vec3, radius: 1.0 };

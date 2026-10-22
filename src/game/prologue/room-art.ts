@@ -128,7 +128,8 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
  * while the furnace's own body, behind the light, is not lit by it (S-24: a point light of 9, 0xff8a3c, 0.38 m out, which
  * lit the inside of the brass collar, the floor to a cream glow and the furnace's front). Since S-30 the body is pale
  * blue-grey frosted glass (drawn opaque) lit by the dawn and the sky; since S-31 it is a low dome whose mouth is an opening
- * in its front, and the light stands just inside that opening (inside the dome, so none of its outer surface is lit).
+ * in its front, and the light stands inside that opening, beside the blowpipe (inside the dome, so none of its outer
+ * surface is lit; away from the brass, so none of it blows out white).
  * 画面の仕上げ: ブルームは控えめに — the fire's hot core deep in the mouth is the light source that blooms a little (linear
  * (2.4, 0.9, 0.15), luminance 1.17 over the threshold of 0.9; until S-30 the atlas tile's margin kept it at 0.24 and it did
  * not bloom: process/slices/S-31.md), its walls a deep red under it (AgX turns brighter reds pink).
@@ -139,13 +140,24 @@ const SKYLIGHT_ANGLE = 0.13;
 const FIRE_COLOR = 0xff6a2a;
 const FIRE_INTENSITY = 7.5;
 /**
- * How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands, how much higher. S-31: just inside the
- * opening in the dome's front (the opening's middle is 0.17 m in front of the fire), so the light is inside the convex dome
- * and lights none of its outer surface (at 0.36 m, out in front of the opening where S-27 put it by the brass collar's end,
- * its cone lit the dome's foot beside the mouth to a salmon patch with a visible edge: S-31 review round 1).
+ * How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands, how far to the side its beam turns to (the
+ * door's and the bench's, FIRE_AIM_TURN), how much higher. S-31: inside the opening in the dome's front (the opening's middle
+ * is 0.17 m in front of the fire), so the light is inside the convex dome and lights none of its outer surface (at 0.36 m,
+ * out in front of the opening where S-27 put it by the brass collar's end, its cone lit the dome's foot beside the mouth to
+ * a salmon patch with a visible edge: S-31 review round 1); and beside the blowpipe left in the mouth, so no brass is near it
+ * (straight over it, the light was 2 cm from the pipe and blew it out white beside the fire: review round 2; under it, the
+ * first picture lost the warmth on its right, 22.7 under S-27's 22.8). src/game/assets/furnace-shape.test.ts checks both on
+ * the glb.
  */
 const FIRE_REACH = 0.1;
-const FIRE_LIFT = 0.08;
+const FIRE_SIDE = 0.1;
+const FIRE_LIFT = 0.04;
+/** Where the fire's light stands (three's coordinates). */
+export const FIRE_LIGHT: readonly [number, number, number] = [
+  FURNACE_MOUTH[0] + FURNACE_FACING[0] * FIRE_REACH - FURNACE_FACING[1] * FIRE_SIDE,
+  FURNACE_MOUTH[1] + FIRE_LIFT,
+  FURNACE_MOUTH[2] + FURNACE_FACING[1] * FIRE_REACH + FURNACE_FACING[0] * FIRE_SIDE,
+];
 /**
  * Where the light aims: on the floor FIRE_AIM in front of the fire, turned FIRE_AIM_TURN (radians) from the mouth's facing
  * toward the door's side (where the bench is). Its cone and soft edge: wide enough to reach the bench's right end.
@@ -493,11 +505,7 @@ export function buildRoomArt(
     sky.shadow.normalBias = 0.02;
     scene.add(sky.target);
     put(keep(sky), 'shared');
-    fire.position.set(
-      FURNACE_MOUTH[0] + FURNACE_FACING[0] * FIRE_REACH,
-      FURNACE_MOUTH[1] + FIRE_LIFT,
-      FURNACE_MOUTH[2] + FURNACE_FACING[1] * FIRE_REACH,
-    );
+    fire.position.set(...FIRE_LIGHT);
     {
       // the mouth's facing turned toward the door's side (its right, looking out of the mouth)
       const [fx, fz] = FURNACE_FACING;

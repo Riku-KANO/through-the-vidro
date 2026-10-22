@@ -9,6 +9,7 @@ import {
   WORKSHOP_ASSET,
   WORKSHOP_OBJECTS,
 } from '../prologue/layout';
+import { FIRE_LIGHT } from '../prologue/room-art';
 import { type AssembledAsset, assembleAsset } from './assemble';
 import { loadGlbInNode } from './node-glb.test-helper';
 
@@ -75,10 +76,11 @@ function bodyMeshes(): THREE.Mesh[] {
 
 /**
  * Which of 12 sectors round the mouth's axis (level through the fire, FURNACE_MOUTH, along the facing) hold something of the
- * furnace standing out in front of the dome's own surface by more than `beyond` metres, 10–40 cm off the axis (inside the
- * opening there is no dome to stand out of; the foot ring is further off). The surface is found along the same line parallel
- * to the axis (review round 1 of S-31: measuring from the dome's furthest point let a collar on the opening slip through).
- * `extra`: world points added to the furnace's own (to check that a collar is caught).
+ * furnace standing out in front of the dome's own surface by more than `beyond` metres, 10–40 cm off the axis (the foot ring
+ * is further off). The surface is found along the same line parallel to the axis (review round 1 of S-31: measuring from the
+ * dome's furthest point let a collar on the opening slip through); a line through the opening meets the opening's rim in
+ * the same direction instead (review round 2: a tube thinner than the opening slipped through). `extra`: world points added
+ * to the furnace's own (to check that a tube is caught).
  */
 function sectorsStandingOut(beyond: number, extra: THREE.Vector3[] = []): number[] {
   const [fx, fz] = FURNACE_FACING;
@@ -86,22 +88,61 @@ function sectorsStandingOut(beyond: number, extra: THREE.Vector3[] = []): number
   const right = new THREE.Vector3(-fz, 0, fx);
   const meshes = bodyMeshes();
   const ray = new THREE.Raycaster();
+  /** Where the dome's surface is (a) along the line parallel to the axis through (side, up) off it. */
+  const surface = (side: number, up: number): number | undefined => {
+    ray.set(
+      new THREE.Vector3(FURNACE.center[0], FURNACE_MOUTH[1] + up, FURNACE.center[2])
+        .addScaledVector(facing, 3)
+        .addScaledVector(right, side),
+      facing.clone().negate(),
+    );
+    const hit = ray.intersectObjects(meshes, false)[0];
+    return hit ? mouthFrame(hit.point).a : undefined;
+  };
+  // the opening's radius: the body comes no nearer the axis in front of the fire
+  const hole = Math.min(
+    ...body()
+      .map(mouthFrame)
+      .filter((q) => q.a > FURNACE_MOUTH_REACH)
+      .map((q) => Math.hypot(q.s, q.y - FURNACE_MOUTH[1])),
+  );
   const sectors = new Set<number>();
   for (const p of [...furnaceVertices(), ...extra]) {
     const q = mouthFrame(p);
     const up = q.y - FURNACE_MOUTH[1];
     const off = Math.hypot(q.s, up);
     if (off < 0.1 || off > 0.4 || q.a < 0.3) continue;
-    const origin = new THREE.Vector3(FURNACE.center[0], q.y, FURNACE.center[2])
-      .addScaledVector(facing, 3)
-      .addScaledVector(right, q.s);
-    ray.set(origin, facing.clone().negate());
-    const hit = ray.intersectObjects(meshes, false)[0];
-    if (!hit || q.a < mouthFrame(hit.point).a + beyond) continue;
+    const rim = (hole + 0.02) / off;
+    const at = surface(q.s, up) ?? surface(q.s * rim, up * rim);
+    if (at === undefined || q.a < at + beyond) continue;
     sectors.add(Math.floor(((Math.atan2(up, q.s) + Math.PI) / (2 * Math.PI)) * 12) % 12);
   }
   return [...sectors];
 }
+
+/** A ring of points round the mouth's axis, `radius` off it, `a` along the facing from the furnace's centre. */
+function ringRound(a: number, radius: number): THREE.Vector3[] {
+  const [fx, fz] = FURNACE_FACING;
+  const out: THREE.Vector3[] = [];
+  for (let k = 0; k < 24; k++) {
+    const t = (2 * Math.PI * k) / 24;
+    const s = radius * Math.cos(t);
+    out.push(
+      new THREE.Vector3(
+        FURNACE.center[0] + fx * a - fz * s,
+        FURNACE_MOUTH[1] + radius * Math.sin(t),
+        FURNACE.center[2] + fz * a + fx * s,
+      ),
+    );
+  }
+  return out;
+}
+
+/** How far the fire (FURNACE_MOUTH) is from the furnace's centre along the facing. */
+const FURNACE_MOUTH_REACH = Math.hypot(
+  FURNACE_MOUTH[0] - FURNACE.center[0],
+  FURNACE_MOUTH[2] - FURNACE.center[2],
+);
 
 /** Along the mouth's facing from the furnace's centre (a), across it (s, to the right), and up (y). */
 function mouthFrame(p: THREE.Vector3): { a: number; s: number; y: number } {
@@ -150,30 +191,57 @@ describe('S-31 the furnace is a low, wide bubble dome like the annealer, not a k
 
   it('its mouth is an opening in the dome, not a tube: in front of the dome nothing goes round the mouth (no spout)', () => {
     // A tube or a spout on the mouth stands out of the dome all round it (S-30's collar: 12 sectors of 12); the brass ring on
-    // the opening's rim stands out about 5 cm; the blowpipe left in the mouth and its yoke, thin and rising a little toward
-    // the room, only above the axis. It counts vertices: a straight tube with no ring of vertices 10–40 cm off the axis in
+    // the opening's rim stands out about 5 cm; the blowpipe left in the mouth, thin and rising a little toward the room, only
+    // above the axis (its far end). It counts vertices: a straight tube with no ring of vertices 10–40 cm off the axis in
     // front of the dome would slip through
     const beyond = 0.08;
     expect(
       sectorsStandingOut(beyond).length,
       'sectors round the mouth with something in front of the dome',
     ).toBeLessThanOrEqual(3);
-    // and it would see one: S-30's collar (radius 0.2–0.228 m) set on this opening, reaching 0.2 m out of it
-    const [fx, fz] = FURNACE_FACING;
-    const collar: THREE.Vector3[] = [];
-    for (let k = 0; k < 24; k++) {
-      const t = (2 * Math.PI * k) / 24;
-      const a = 0.79 + 0.2;
-      const s = 0.214 * Math.cos(t);
-      collar.push(
-        new THREE.Vector3(
-          FURNACE.center[0] + fx * a - fz * s,
-          FURNACE_MOUTH[1] + 0.214 * Math.sin(t),
-          FURNACE.center[2] + fz * a + fx * s,
-        ),
-      );
+    // and it would see one (the opening's middle is about 0.79 m out): a collar round the opening, just outside its rim,
+    // reaching 0.2 m out; a tube in the opening (S-30's collar was 0.17–0.2 m round), reaching 0.25 m out
+    expect(sectorsStandingOut(beyond, ringRound(0.99, 0.214)).length).toBeGreaterThanOrEqual(10);
+    expect(
+      sectorsStandingOut(beyond, [...ringRound(0.9, 0.18), ...ringRound(1.04, 0.18)]).length,
+    ).toBeGreaterThanOrEqual(10);
+  });
+
+  it('the fire’s light stands inside the dome (lighting none of its outer face) and clear of its brass', () => {
+    // review rounds 1 and 2 of S-31: in front of the opening its cone lit the dome's foot to a salmon patch; 2 cm over the
+    // blowpipe it blew the pipe and the ring out white beside the fire
+    const pts = body();
+    const [cx, cz] = axisOf(pts);
+    const [lx, ly, lz] = FIRE_LIGHT;
+    const radius = Math.max(
+      ...pts.filter((p) => Math.abs(p.y - ly) < 0.05).map((p) => Math.hypot(p.x - cx, p.z - cz)),
+    );
+    expect(radius - Math.hypot(lx - cx, lz - cz), 'how far inside the dome').toBeGreaterThan(0.03);
+    const o = built.layered.find((l) => l.object.userData.name === WORKSHOP_OBJECTS.furnace.name)?.object;
+    const brass: THREE.Mesh[] = [];
+    o?.traverse((m) => {
+      const mesh = m as THREE.Mesh;
+      if (
+        mesh.isMesh &&
+        (Array.isArray(mesh.material) ? mesh.material : [mesh.material]).some((x) => x.name === 'A0_brass')
+      )
+        brass.push(mesh);
+    });
+    expect(brass.length).toBeGreaterThan(0);
+    const ray = new THREE.Raycaster();
+    const from = new THREE.Vector3(lx, ly, lz);
+    let nearest = Number.POSITIVE_INFINITY;
+    const n = 600;
+    for (let i = 0; i < n; i++) {
+      // directions spread evenly over the sphere (a Fibonacci lattice)
+      const y = 1 - (2 * (i + 0.5)) / n;
+      const r = Math.sqrt(1 - y * y);
+      const t = i * Math.PI * (3 - Math.sqrt(5));
+      ray.set(from, new THREE.Vector3(Math.cos(t) * r, y, Math.sin(t) * r));
+      const hit = ray.intersectObjects(brass, false)[0];
+      if (hit) nearest = Math.min(nearest, hit.distance);
     }
-    expect(sectorsStandingOut(beyond, collar).length).toBeGreaterThanOrEqual(10);
+    expect(nearest, 'the nearest brass to the light').toBeGreaterThan(0.07);
   });
 
   it('its chimney goes straight up from the dome through the workshop’s glass (not bent like a handle)', () => {
