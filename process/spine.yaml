@@ -657,7 +657,9 @@ slices:
 
   - id: S-29
     title: 潜った後の黒い画面 — 大きさに追従しなくなった描画先（WebGPU、RGBA16Float のコピーが範囲の外）
-    status: todo
+    status: integrated
+    branch: slice/S-29-stale-target
+    accepted: レビュー2巡で P1・P2 なし（2巡目の P3-1 は統合時に親が直した）。core 0.10.0（glass/backdrop.ts の ownBackdropImage）。three r187 で直っている（#34636）（2026-10-22）
     depends: [S-24]
     priority: 高（遊べなくなる不具合）
     requirements:

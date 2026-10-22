@@ -181,6 +181,12 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **AgX は明るい赤を桃色へ寄せる（S-27）。** 赤く見せたい光る物（火、熾火）は線形 0.15〜0.5 に抑え、光源として滲ませる芯だけを 0.9 以上にする
   （線形 (2.4, 0.3, 0) は sRGB (0.93, 0.59, 0.45) のサーモンになる）。
 - **透明の物を見せる背には不透明の面を置く（S-27）。** 透過は不透明な物しか屈折しないので、透明の作品を空や透過のガラスを背に置くと消える。
+- **透過を描く描画先が2つ以上あって別の時に描くなら、最初に描く前に `ownBackdropImage(target)` を通す（three r186、S-29）。**
+  描画先ごとの背景画像が大きさの記録を共有し、描画の大きさが変わると後から描いた方が古い大きさのまま残る（WebGPU は毎フレーム
+  `Texture copy range … touches outside` で画面が黒、WebGL2 は `GL_INVALID_VALUE`）。今はホームの玉の中の像と序章の scene pass。届くのは前面の
+  背景画像だけなので、`DoubleSide` の透過には `forceSinglePass = true`（glb のガラスで両面を写すときも）、`BackSide` の透過は使わない。
+  three を r187 以上に上げたら外す（単体テストが知らせる）。見張りは `tests/e2e/S-29-landing-resize.spec.ts` の `installTracer`
+  （背景画像の `version` が変わらないのに大きさの違うコピーを数える）。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

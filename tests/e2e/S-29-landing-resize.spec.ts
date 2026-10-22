@@ -223,7 +223,7 @@ interface Arrival {
 class Run {
   readonly arrivals: Arrival[] = [];
   preset = 0;
-  /** Each landing is saved as <shots>-<n>.png. */
+  /** Each landing is saved as <shots>-<n>.png, n counting landings only. */
   constructor(
     readonly page: Page,
     private readonly shots: string,
@@ -272,7 +272,8 @@ class Run {
     const arrived = await this.mark(label);
     await frames(this.page, 30);
     const scale = await this.page.evaluate(() => window.__vidro.renderScale);
-    const shot = `${this.shots}-${this.arrivals.length + 1}.png`;
+    // numbered by landings only (a return to the home takes no picture)
+    const shot = `${this.shots}-${this.arrivals.filter((a) => a.dark !== null).length + 1}.png`;
     const dark = landed ? await darkShare(this.page, shot) : null;
     this.arrivals.push({ label, scale, dark, mustCross, crossed: await this.crossed(since, arrived) });
   }
