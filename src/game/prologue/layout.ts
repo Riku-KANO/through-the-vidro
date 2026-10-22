@@ -189,6 +189,9 @@ export const WORKSHOP_OBJECTS = {
   cartWares: { name: 'A0_ware_cart01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: false },
   shelfOpal: { name: 'A0_ware_opal01', at: shelfPoint(), col: false },
   shelfBoard: { name: 'A0_shlf_board01', at: shelfBoardPoint(), col: true },
+  // S-26 (make_workshop.py floor, dome_frame): moved from room-art.ts into the glb to be baked with the rest
+  floor: { name: 'A0_flr_floor01', at: [0, 0], col: false },
+  frame: { name: 'A0_bld_frame01', at: [0, 0], col: false },
 } as const satisfies Record<string, { name: string; at: readonly [number, number]; col: boolean }>;
 
 /** The middle of the shelf's arc at its lowest tier (x, z). */

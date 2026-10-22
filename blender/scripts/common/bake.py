@@ -28,6 +28,7 @@ import sys
 import zlib
 from typing import Iterable
 
+import bmesh
 import bpy
 import numpy as np
 
@@ -77,8 +78,20 @@ def _ensure_materials(objs: list, tag: str) -> list:
     return mats
 
 
-def _prepare_uv(objs: list, repack: bool, island_margin: float) -> dict:
-    """各物に UV Lightmap を用意し（最初の UV が空なら作り）、重ならないよう展開・配置する。元の render UV を覚えて返す"""
+def _excluded_faces(o, exclude: frozenset) -> list[bool]:
+    """面ごとに、焼かない材質（exclude の名前）か"""
+    names = [s.material.name if s.material else '' for s in o.material_slots]
+    return [bool(names) and names[min(p.material_index, len(names) - 1)] in exclude for p in o.data.polygons]
+
+
+def _prepare_uv(objs: list, repack: bool, island_margin: float, exclude: frozenset = frozenset(),
+                density: dict | None = None) -> dict:
+    """各物に UV Lightmap を用意し（最初の UV が空なら作り）、重ならないよう展開・配置する。元の render UV を覚えて返す。
+
+    exclude の材質の面は展開も配置もせず、UV を (0, 0) の 1 点に潰す（ライトマップの場所を取らない。焼いても画素はほぼ書かない）。
+    density（物の名前 → 倍率）の物は、展開の後、配置の前に島を倍率だけ大きくする（画素の細かさが倍率倍。既定 1）。
+    島の間の余白は island_margin（UV の 0〜1 の割合、FRACTION）で、島の大きさによらない
+    """
     saved = {}
     for o in objs:
         me = o.data
@@ -96,15 +109,43 @@ def _prepare_uv(objs: list, repack: bool, island_margin: float) -> dict:
         o.data.uv_layers.active = lm
         lm.active_render = True
     if repack:
+        skipped = {o.name: _excluded_faces(o, exclude) for o in objs}
         _select(objs, objs[0])
         bpy.ops.object.mode_set(mode='EDIT')
         try:
             bpy.context.tool_settings.use_uv_select_sync = True
             bpy.ops.mesh.select_all(action='SELECT')
+            if exclude:
+                # only the faces to bake are unwrapped and packed (smart project and pack work on the selection)
+                bpy.ops.mesh.select_all(action='DESELECT')
+                for o in objs:
+                    bm = bmesh.from_edit_mesh(o.data)
+                    bm.faces.ensure_lookup_table()
+                    for f, skip in zip(bm.faces, skipped[o.name]):
+                        if not skip:
+                            f.select_set(True)
+                    bmesh.update_edit_mesh(o.data)
             bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=island_margin)
-            bpy.ops.uv.pack_islands(margin=island_margin)
+            for o in objs:
+                k = float((density or {}).get(o.name, 1.0))
+                if abs(k - 1.0) < 1e-9:
+                    continue
+                bm = bmesh.from_edit_mesh(o.data)
+                layer = bm.loops.layers.uv[UV_NAME]
+                for f in bm.faces:
+                    if f.select:
+                        for loop in f.loops:
+                            loop[layer].uv = loop[layer].uv * k
+                bmesh.update_edit_mesh(o.data)
+            bpy.ops.uv.pack_islands(margin_method='FRACTION', margin=island_margin)
         finally:
             bpy.ops.object.mode_set(mode='OBJECT')
+        for o in objs:
+            layer = o.data.uv_layers[UV_NAME].data
+            for p, skip in zip(o.data.polygons, skipped[o.name]):
+                if skip:
+                    for li in p.loop_indices:
+                        layer[li].uv = (0.0, 0.0)
     return saved
 
 
@@ -188,8 +229,54 @@ def _despike(peak: np.ndarray) -> np.ndarray:
     return np.where(spike, around, peak)
 
 
-def _save_normalized(img, path: str, percentile: float = PERCENTILE) -> dict:
-    """焼いた float 画像を、高い百分位で割って 8bit の sRGB PNG にする。
+def _pin_image_uvs(group: list, mats: list, saved_uv: dict) -> list:
+    """UV のノードを持たない画像のノードに、その材質を使う物の元の描画用の UV（saved_uv）をつなぐ。足したノードを返す"""
+    uv_of = {}
+    for o in group:
+        for slot in o.material_slots:
+            if slot.material is not None:
+                uv_of.setdefault(slot.material, saved_uv[o.name])
+    pinned = []
+    for m in mats:
+        nt = m.node_tree
+        for node in list(nt.nodes):
+            if node.type != 'TEX_IMAGE' or node.name == _NODE or node.inputs['Vector'].is_linked:
+                continue
+            uvmap = nt.nodes.new('ShaderNodeUVMap')
+            uvmap.uv_map = uv_of.get(m, 'UVMap')
+            nt.links.new(uvmap.outputs['UV'], node.inputs['Vector'])
+            pinned.append((m, uvmap))
+    return pinned
+
+
+def _fill_gutters(rgb: np.ndarray, mask: np.ndarray) -> None:
+    """焼いていない画素（mask が False）を近くの焼いた画素の色で埋める（押し引き: 半分ずつの大きさで焼いた画素の平均を作り、
+    粗い段から細かい段へ戻しながら、空いた所だけを埋める）。rgb（高さ, 幅, 3）を書き換える"""
+    levels = []
+    c = np.where(mask[..., None], rgb, 0).astype(np.float32)
+    wgt = mask.astype(np.float32)
+    while True:
+        levels.append((c, wgt))
+        h, w = wgt.shape
+        if h <= 1 and w <= 1:
+            break
+        ph, pw = h + (h & 1), w + (w & 1)
+        if (ph, pw) != (h, w):
+            c = np.pad(c, ((0, ph - h), (0, pw - w), (0, 0)))
+            wgt = np.pad(wgt, ((0, ph - h), (0, pw - w)))
+        c = c[0::2, 0::2] + c[1::2, 0::2] + c[0::2, 1::2] + c[1::2, 1::2]
+        wgt = wgt[0::2, 0::2] + wgt[1::2, 0::2] + wgt[0::2, 1::2] + wgt[1::2, 1::2]
+    avg = levels[-1][0] / np.maximum(levels[-1][1], 1e-12)[..., None]
+    for c, wgt in reversed(levels[:-1]):
+        h, w = wgt.shape
+        up = np.repeat(np.repeat(avg, 2, axis=0), 2, axis=1)[:h, :w]
+        avg = np.where((wgt > 0)[..., None], c / np.maximum(wgt, 1e-12)[..., None], up)
+    hole = ~mask
+    rgb[hole] = avg[hole]
+
+
+def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool = False) -> dict:
+    """焼いた float 画像を、高い百分位で割って 8bit の sRGB PNG にする（fill=True なら焼いていない画素を島の色で埋めて）。
 
     戻り値: scale（割った倍率 = lightmap_scale）、max（焼いた最大）、clipped_frac（焼かれた画素のうち 1.0 で切れた割合）。
     メモリを抑えるため float32 のまま、符号化は行の塊ごとにする。
@@ -208,6 +295,8 @@ def _save_normalized(img, path: str, percentile: float = PERCENTILE) -> dict:
     else:
         scale, peak_max, clipped = 1.0, 0.0, 0.0
     scale = max(scale, 1e-4)
+    if fill and n_lit:
+        _fill_gutters(lin, lit_mask)
     rgb = np.empty((h, w, 3), dtype=np.uint8)
     inv = np.float32(1.0 / scale)
     for y0 in range(0, h, 256):
@@ -248,14 +337,25 @@ def bake_lightmaps(
     margin: int | None = None,
     split_shared: bool = False,
     percentile: float = PERCENTILE,
+    exclude_materials: Iterable[str] = (),
+    density: dict | None = None,
+    fill: bool = True,
 ) -> list[dict]:
     """objects の光と影を Lightmap UV に焼き、8bit の PNG を out_dir に書く。
 
     atlas=True なら全部の物で 1 枚（`<name>.png`。name の既定は `<部屋>.lightmap`）、False なら物ごとに 1 枚（`<物の名前>.png`）。
     メッシュを共有する物があると止まる（split_shared=True で単独のコピーにして焼く）。
     percentile は正規化に使う明るさの百分位（既定 99.99）。それより明るい画素は切れる。
+    exclude_materials（材質の名前）の面は焼かない: 展開せず UV を (0, 0) に潰す（repack=True のとき。ガラスや光る面を同じ物に
+    持つ物で、ライトマップの場所を取らない）。光る面は焼かなくても、場面の光としては焼いた物を照らす。
+    density（物の名前 → 倍率、既定 1）は物ごとの画素の細かさ（大きく見える床を細かく、細い管を粗く）。
+    margin は焼いた色を島の外へ伸ばす画素の数で、島の間はその倍（repack のとき）。
+    fill=True なら、それでも焼いていない画素（島の間）を近くの島の色で全部埋める（ミップの粗い段で島の外の黒が島へ混ざらない）。
+    焼く間は、UV のノードを持たない画像のノードに元の描画用の UV をつなぐ（焼く間は Lightmap が描画用の UV になり、アトラスの
+    色が Lightmap の UV で読まれて、光る面の色と跳ね返りの色が狂う）。終わったら外す。
     戻り値: [{'object': 物の名前, 'image': PNG の絶対パス, 'scale': lightmap_scale,
-              'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合}, ...]
+              'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合,
+              'device': 焼いた計算機（METAL / CPU …）}, ...]
     """
     objs = [o for o in objects if o.type == 'MESH']
     if not objs:
@@ -293,7 +393,8 @@ def bake_lightmaps(
                 if o.data.users > 1:  # split_shared=True のとき
                     o.data = o.data.copy()
             mats = _ensure_materials(group, gname)
-            saved_uv = _prepare_uv(group, repack, island_margin)
+            saved_uv = _prepare_uv(group, repack, island_margin, frozenset(exclude_materials), density)
+            pinned = _pin_image_uvs(group, mats, saved_uv)
             img = bpy.data.images.new(f'{gname}.bake', size, size, alpha=False, float_buffer=True)
             img.colorspace_settings.name = 'Non-Color'  # 焼いた線形の値をそのまま float に残す（色空間の変換を入れない）
             nodes = []
@@ -314,9 +415,9 @@ def bake_lightmaps(
                 device = 'CPU'
                 _bake(margin)
             path = os.path.join(out_dir, f'{gname}.png')
-            stat = _save_normalized(img, path, percentile)
+            stat = _save_normalized(img, path, percentile, fill=fill)
             scale = stat['scale']
-            for m, node in nodes:
+            for m, node in nodes + pinned:
                 m.node_tree.nodes.remove(node)
             bpy.data.images.remove(img)
             for o in group:
@@ -325,7 +426,8 @@ def bake_lightmaps(
                     u.active_render = u.name == saved_uv[o.name]
                 o[PROP] = os.path.relpath(path, out_dir)
                 o[PROP_SCALE] = scale
-                results.append({'object': o.name, 'image': path, 'scale': scale, 'max_over_scale': stat['max'] / scale, 'clipped_frac': stat['clipped_frac']})
+                results.append({'object': o.name, 'image': path, 'scale': scale, 'max_over_scale': stat['max'] / scale,
+                                'clipped_frac': stat['clipped_frac'], 'device': device})
             print(
                 f'bake: {gname} {size}px {samples}spp {device} 8bit {os.path.getsize(path)}B scale={scale} '
                 f"max/scale={stat['max'] / scale:.2f} clipped={stat['clipped_frac'] * 100:.3f}% -> {path}"

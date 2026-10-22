@@ -112,6 +112,155 @@ export function runBlender({ blend, script, args = [], stdio = 'pipe' }) {
   return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+// ── glb files (S-26: the baked lightmap goes into the area's glb as one more texture) ──────────────────────────────
+const GLB_MAGIC = 0x46546c67; // 'glTF'
+const CHUNK_JSON = 0x4e4f534a; // 'JSON'
+const CHUNK_BIN = 0x004e4942; // 'BIN\0'
+const pad4 = (n) => (n + 3) & ~3;
+
+/** The JSON and the binary chunk of a .glb (the binary chunk is buffers[0], the one without a uri). */
+export function readGlb(glb) {
+  const b = Buffer.from(glb.buffer, glb.byteOffset, glb.byteLength);
+  if (b.readUInt32LE(0) !== GLB_MAGIC || b.readUInt32LE(4) !== 2) throw new Error('not a glTF 2.0 binary');
+  const jsonLength = b.readUInt32LE(12);
+  if (b.readUInt32LE(16) !== CHUNK_JSON) throw new Error('the first chunk of the glb is not JSON');
+  const json = JSON.parse(b.subarray(20, 20 + jsonLength).toString('utf8'));
+  let bin = Buffer.alloc(0);
+  const at = 20 + jsonLength;
+  if (at + 8 <= b.length && b.readUInt32LE(at + 4) === CHUNK_BIN) {
+    bin = Buffer.from(b.subarray(at + 8, at + 8 + b.readUInt32LE(at)));
+  }
+  return { json, bin };
+}
+
+/** A .glb from its JSON and binary chunk (each padded to 4 bytes: the JSON with spaces, the binary with zeros). */
+export function writeGlb(json, bin) {
+  const text = Buffer.from(JSON.stringify(json), 'utf8');
+  const jsonChunk = Buffer.concat([text, Buffer.alloc(pad4(text.length) - text.length, 0x20)]);
+  const binChunk = Buffer.concat([bin, Buffer.alloc(pad4(bin.length) - bin.length)]);
+  const parts = [Buffer.alloc(12), Buffer.alloc(8), jsonChunk];
+  if (bin.length > 0) parts.push(Buffer.alloc(8), binChunk);
+  const out = Buffer.concat(parts);
+  out.writeUInt32LE(GLB_MAGIC, 0);
+  out.writeUInt32LE(2, 4);
+  out.writeUInt32LE(out.length, 8);
+  out.writeUInt32LE(jsonChunk.length, 12);
+  out.writeUInt32LE(CHUNK_JSON, 16);
+  if (bin.length > 0) {
+    out.writeUInt32LE(binChunk.length, 20 + jsonChunk.length);
+    out.writeUInt32LE(CHUNK_BIN, 24 + jsonChunk.length);
+  }
+  return out;
+}
+
+/**
+ * The bake of a job (blender/pipeline.json `bake`), or null when it is not baked: the job has none, or the run says not
+ * to (`BAKE=0`, or `--no-bake`: export what is there without a lightmap, the game lights it all in real time).
+ */
+export function bakeSettings(job, env = process.env, argv = []) {
+  if (!job.bake || env.BAKE === '0' || argv.includes('--no-bake')) return null;
+  return job.bake;
+}
+
+/** glTF sampler values (WebGL enums). */
+export const GL = { LINEAR: 9729, LINEAR_MIPMAP_LINEAR: 9987, CLAMP_TO_EDGE: 33071 };
+
+/**
+ * Adds an image to a .glb as a texture of its own, which no material uses (S-26: the area's lightmap; the game finds it
+ * by name, from the extras `lightmap` of the baked objects). The image goes at the end of the binary chunk (buffers[0]),
+ * a KTX2 image through KHR_texture_basisu (required: the texture has no other source). Returns the new .glb and the
+ * index of the texture. Pure.
+ */
+export function addTexture(glb, { name, mimeType, bytes, sampler }) {
+  const { json, bin } = readGlb(glb);
+  json.buffers ??= [];
+  if (json.buffers.length === 0) json.buffers.push({ byteLength: 0 });
+  if (json.buffers[0].uri !== undefined) throw new Error('buffers[0] of the glb is not its binary chunk');
+  const offset = pad4(bin.length);
+  const data = Buffer.concat([bin, Buffer.alloc(offset - bin.length), Buffer.from(bytes)]);
+  json.buffers[0].byteLength = data.length;
+  json.bufferViews ??= [];
+  json.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: bytes.length });
+  json.images ??= [];
+  json.images.push({ name, mimeType, bufferView: json.bufferViews.length - 1 });
+  const image = json.images.length - 1;
+  json.samplers ??= [];
+  json.samplers.push(sampler);
+  const texture = { name, sampler: json.samplers.length - 1 };
+  if (mimeType === 'image/ktx2') {
+    texture.extensions = { KHR_texture_basisu: { source: image } };
+    for (const list of ['extensionsUsed', 'extensionsRequired']) {
+      json[list] ??= [];
+      if (!json[list].includes('KHR_texture_basisu')) json[list].push('KHR_texture_basisu');
+    }
+  } else {
+    texture.source = image;
+  }
+  json.textures ??= [];
+  json.textures.push(texture);
+  return { glb: writeGlb(json, data), texture: json.textures.length - 1 };
+}
+
+/**
+ * Arguments of `ktx create` for a baked lightmap (S-26): an 8-bit sRGB PNG (common/bake.py) to KTX2 with its mip levels,
+ * marked sRGB. `etc1s` (decided: 色は ETC1S, the high-compression mode the doc gives colour) at the highest quality level
+ * (the default 128 drew the 4×4 blocks over the smooth light of the furnace's dome and the bench); `uastc` (the
+ * high-quality mode, zstd-supercompressed) to compare.
+ */
+export function lightmapKtxArgs(png, out, codec = 'etc1s') {
+  const encode =
+    codec === 'uastc'
+      ? ['--encode', 'uastc', '--uastc-quality', '2', '--zstd', '18']
+      : ['--encode', 'basis-lz', '--qlevel', '255'];
+  return [
+    'create',
+    '--format',
+    'R8G8B8_SRGB',
+    '--assign-tf',
+    'srgb',
+    '--assign-primaries',
+    'bt709',
+    ...encode,
+    '--generate-mipmap',
+    png,
+    out,
+  ];
+}
+
+/** Encodes a baked lightmap PNG to KTX2 with the `ktx` CLI. */
+export function encodeLightmap(png, out, codec = 'etc1s') {
+  const r = spawnSync(KTX_COMMAND, lightmapKtxArgs(png, out, codec), { encoding: 'utf8' });
+  if (r.error || r.status !== 0)
+    throw new Error(`ktx create failed for ${png}: ${r.error?.message ?? ''}${r.stdout}${r.stderr}`);
+}
+
+/**
+ * Whether a lightmap clips only what its percentile means to clip: the brightest (100 − percentile)% of its texels (with a
+ * half again for the noise). The bake normalizes by that percentile on purpose (blender/pipeline.json).
+ */
+export function clipsByDesign(bake, image) {
+  const share = (100 - Number(bake?.percentile ?? 99.99)) / 100;
+  return (image?.clipped_frac ?? 0) <= share * 1.5;
+}
+
+/** Lines about the bake for the terminal (blender/scripts/pipeline.py report.bake). */
+export function bakeLines(bake) {
+  if (!bake) return ['bake (光と影のライトマップ): off'];
+  const out = [
+    `bake (光と影のライトマップ): ${bake.size}px, ${bake.samples} samples, ${bake.device}, ${bake.seconds} s` +
+      ` (percentile ${bake.percentile}${bake.margin != null ? `, margin ${bake.margin}px` : ''})`,
+  ];
+  for (const i of bake.images ?? []) {
+    out.push(
+      `  ${pad(i.name, 14)} ${String(i.objects?.length ?? 0).padStart(3)} objects  scale ${i.scale}` +
+        `  clipped ${((i.clipped_frac ?? 0) * 100).toFixed(3)}%${clipsByDesign(bake, i) ? ' (by its percentile)' : ''}` +
+        `  ${i.seconds} s`,
+    );
+  }
+  for (const l of bake.lights ?? []) out.push(`  light ${pad(l.name, 14)} ${l.type} ${l.energy}`);
+  return out;
+}
+
 /** Runs the gltf-transform CLI of this repository (devDependency @gltf-transform/cli). */
 export function gltfTransform(args) {
   const bin = join(process.cwd(), 'node_modules/.bin/gltf-transform');
