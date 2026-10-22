@@ -142,6 +142,11 @@ export const WORKSHOP_ASSET = 'assets/workshop/a0.glb';
 /** Where S-27's pipe bucket stands by the marver and the cart by the annealer (make_workshop.py PIPE_BUCKET, ANNEAL_CART). */
 const PIPE_BUCKET_AT = { a: 0.5, s: 0.25 } as const;
 const ANNEAL_CART_AT = { a: 0.06, s: 1.12 } as const;
+/**
+ * The shelf's back board (make_workshop.py SHELF_BOARD): from 0.3 m up to 0.44 m above the top tier, 8 mm off the glass,
+ * 2 cm thick.
+ */
+const SHELF_BOARD_AT = { fromY: 0.3, aboveTop: 0.44, gap: 0.008, thick: 0.02 } as const;
 
 /**
  * The objects of WORKSHOP_ASSET (設計書 命名規則: <area>_<kind>_<id>, A0 = 序章) and where each stands (x, z). `col`: it has a
@@ -188,14 +193,12 @@ function shelfPoint(): [number, number] {
   return [r * Math.cos(a), r * Math.sin(a)];
 }
 
-/**
- * The middle of the shelf's back board (x, z): on the leaning wall at the board's middle height, the board's own middle
- * (make_workshop.py SHELF_BOARD: 0.3 m up to 0.44 m above the top tier, 8 mm off the glass, 2 cm thick).
- */
+/** The middle of the shelf's back board (x, z): on the leaning wall at the board's middle height (SHELF_BOARD_AT). */
 function shelfBoardPoint(): [number, number] {
+  const { fromY, aboveTop, gap, thick } = SHELF_BOARD_AT;
   const a = (((WORKS_SHELF.fromDeg + WORKS_SHELF.toDeg) / 2) * Math.PI) / 180;
-  const y = (0.3 + (WORKS_SHELF.tiers[2] ?? 0) + 0.44) / 2;
-  const r = domeWallRadius(y) - 0.008 - 0.01;
+  const y = (fromY + (WORKS_SHELF.tiers[WORKS_SHELF.tiers.length - 1] ?? 0) + aboveTop) / 2;
+  const r = domeWallRadius(y) - gap - thick / 2;
   return [r * Math.cos(a), r * Math.sin(a)];
 }
 

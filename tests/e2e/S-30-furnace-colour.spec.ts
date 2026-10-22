@@ -49,6 +49,8 @@ interface BodyColour {
   fireRed: number;
   /** Share of the picture that is noise (two pictures of the same thing differ). */
   noise: number;
+  /** Share of the pixels the mask changes that are left out because the light changed them too (review round 2). */
+  excluded: number;
 }
 
 const root = process.cwd();
@@ -207,10 +209,24 @@ async function maskBody(page: Page, on: boolean): Promise<{ meshes: number; mate
   );
 }
 
-/** The colour of the body's pixels in `shown` (those `mask` changes, without those `again` changes). */
-async function bodyColour(page: Page, shown: Buffer, again: Buffer, mask: Buffer): Promise<BodyColour> {
+/**
+ * The colour of the body's pixels. A pixel is the body's when the magenta mask changes it clearly more than the time between
+ * the two pictures of the same thing does (review round 2: dropping every pixel that changed between them at all left out
+ * about 7% of the body in front of the furnace, where the fire's light breathes on it):
+ *   min(diff(shown, mask), diff(again, mask)) > 3 · diff(shown, again) + 12
+ * (diff: the largest of the three channel differences, 0–255). Its colour is the mean of `shown` and `again`. `excludedPng`:
+ * the pixels the mask changes (diff(shown, mask) > 12) that this leaves out, as a picture (white on black, PNG base64).
+ * `leaveOut`: discs not measured at all (the hand orb).
+ */
+async function bodyColour(
+  page: Page,
+  shown: Buffer,
+  again: Buffer,
+  mask: Buffer,
+  leaveOut: Circle[],
+): Promise<BodyColour & { excludedPng: string }> {
   return page.evaluate(
-    async ({ a, b, c }) => {
+    async ({ a, b, c, leaveOut }) => {
       const pixels = async (b64: string) => {
         const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
         const bmp = await createImageBitmap(blob);
@@ -218,33 +234,51 @@ async function bodyColour(page: Page, shown: Buffer, again: Buffer, mask: Buffer
         const g = cv.getContext('2d');
         if (!g) throw new Error('no 2d context');
         g.drawImage(bmp, 0, 0);
-        return g.getImageData(0, 0, bmp.width, bmp.height).data;
+        return {
+          data: g.getImageData(0, 0, bmp.width, bmp.height).data,
+          width: bmp.width,
+          height: bmp.height,
+        };
       };
-      const d = await pixels(a);
-      const e = await pixels(b);
-      const f = await pixels(c);
-      const differs = (p: Uint8ClampedArray, q: Uint8ClampedArray, i: number): boolean =>
+      const { data: d, width, height } = await pixels(a);
+      const e = (await pixels(b)).data;
+      const f = (await pixels(c)).data;
+      const diff = (p: Uint8ClampedArray, q: Uint8ClampedArray, i: number): number =>
         Math.max(
           Math.abs((p[i] ?? 0) - (q[i] ?? 0)),
           Math.abs((p[i + 1] ?? 0) - (q[i + 1] ?? 0)),
           Math.abs((p[i + 2] ?? 0) - (q[i + 2] ?? 0)),
-        ) > 12;
+        );
+      const out = new ImageData(width, height);
       let n = 0;
       let noise = 0;
+      let excluded = 0;
       let dark = 0;
       let red = 0;
       let sr = 0;
       let sg = 0;
       let sb = 0;
+      const k = width / innerWidth;
       for (let i = 0; i < d.length; i += 4) {
-        if (differs(d, e, i)) {
-          noise++;
+        out.data[i + 3] = 255;
+        const x = ((i / 4) % width) / k;
+        const y = Math.floor(i / 4 / width) / k;
+        if (leaveOut.some((o) => Math.hypot(x - o.cx, y - o.cy) <= o.r)) continue;
+        const breathing = diff(d, e, i);
+        if (breathing > 12) noise++;
+        const masked = Math.min(diff(d, f, i), diff(e, f, i));
+        if (masked <= 3 * breathing + 12) {
+          if (diff(d, f, i) > 12) {
+            excluded++;
+            out.data[i] = 255;
+            out.data[i + 1] = 255;
+            out.data[i + 2] = 255;
+          }
           continue;
         }
-        if (!differs(d, f, i)) continue;
-        const r = (d[i] ?? 0) / 255;
-        const g = (d[i + 1] ?? 0) / 255;
-        const bl = (d[i + 2] ?? 0) / 255;
+        const r = ((d[i] ?? 0) + (e[i] ?? 0)) / 510;
+        const g = ((d[i + 1] ?? 0) + (e[i + 1] ?? 0)) / 510;
+        const bl = ((d[i + 2] ?? 0) + (e[i + 2] ?? 0)) / 510;
         n++;
         sr += r;
         sg += g;
@@ -256,6 +290,12 @@ async function bodyColour(page: Page, shown: Buffer, again: Buffer, mask: Buffer
       const mean: [number, number, number] = [sr / m, sg / m, sb / m];
       const hi = Math.max(...mean);
       const lo = Math.min(...mean);
+      const cv = new OffscreenCanvas(width, height);
+      cv.getContext('2d')?.putImageData(out, 0, 0);
+      const bytes = new Uint8Array(await (await cv.convertToBlob({ type: 'image/png' })).arrayBuffer());
+      let str = '';
+      for (let k = 0; k < bytes.length; k += 0x8000)
+        str += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
       return {
         pixels: n,
         mean,
@@ -264,10 +304,36 @@ async function bodyColour(page: Page, shown: Buffer, again: Buffer, mask: Buffer
         dark: dark / m,
         fireRed: red / m,
         noise: noise / (d.length / 4),
+        excluded: excluded / Math.max(1, n + excluded),
+        excludedPng: btoa(str),
       };
     },
-    { a: shown.toString('base64'), b: again.toString('base64'), c: mask.toString('base64') },
+    { a: shown.toString('base64'), b: again.toString('base64'), c: mask.toString('base64'), leaveOut },
   );
+}
+
+/** A disc on the screen (CSS pixels of the page). */
+interface Circle {
+  cx: number;
+  cy: number;
+  r: number;
+}
+
+/**
+ * The hand orb on the screen now, a little enlarged (room.orbScreen: normalized, radius a fraction of the height). The orb
+ * refracts what is behind it and sways, so the furnace seen through it is neither the body's own colour nor still.
+ */
+async function handOrb(page: Page): Promise<Circle[]> {
+  const o = await page.evaluate(
+    () =>
+      (
+        window.__vidro.sceneProbe as {
+          room: { orbScreen: { x: number; y: number; r: number; visible: boolean } };
+        }
+      ).room.orbScreen,
+  );
+  if (!o.visible) return [];
+  return [{ cx: o.x * 1280, cy: o.y * 720, r: o.r * 720 * 1.12 + 10 }];
 }
 
 for (const backend of backends) {
@@ -379,18 +445,24 @@ for (const backend of backends) {
       await openView(page, view, webgl);
       // shown → masked → shown again: the second picture is taken later than the masked one, so the pixels left out as
       // noise cover the slow breathing of the fire's light over the whole time the mask is compared with (review round 1)
+      const leaveOut = await handOrb(page);
       const shown = await page.screenshot();
+      leaveOut.push(...(await handOrb(page)));
       const masked = await maskBody(page, true);
       await page.waitForTimeout(800);
       const mask = await page.screenshot({ path: join(shotDir, `${phase}-${view}-mask.png`) });
       await maskBody(page, false);
       await page.waitForTimeout(800);
+      leaveOut.push(...(await handOrb(page)));
       const again = await page.screenshot();
-      const colour = await bodyColour(page, shown, again, mask);
+      leaveOut.push(...(await handOrb(page)));
+      const { excludedPng, ...colour } = await bodyColour(page, shown, again, mask, leaveOut);
+      writeFileSync(join(shotDir, `${phase}-${view}-excluded.png`), Buffer.from(excludedPng, 'base64'));
       keep(view, { ...colour, materials: masked.materials, meshes: masked.meshes });
       expect(masked.meshes, 'meshes of the furnace’s body').toBeGreaterThan(0);
       expect(colour.pixels, 'the body is on the screen').toBeGreaterThan(LIMITS.pixels[view]);
       expect(colour.noise, 'two pictures of the same view').toBeLessThan(0.02);
+      expect(colour.excluded, 'share of the body left out with the breathing light').toBeLessThan(0.02);
       expect(colour.luminance, 'mean luminance of the body (pale)').toBeGreaterThan(LIMITS.luminance[view]);
       expect(colour.dark, 'share of dark body pixels').toBeLessThan(LIMITS.dark);
       expect(colour.mean[2], 'blue at least red (blue-grey, not warm)').toBeGreaterThanOrEqual(
