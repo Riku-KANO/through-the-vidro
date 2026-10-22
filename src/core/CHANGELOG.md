@@ -3,6 +3,28 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.10.0（版は案。統合のときに親が決める。VERSION はまだ 0.9.0）— 2026-10-22（S-29 描画先ごとの背景画像）
+
+足しただけで、既存の部品の振る舞いは変えていない。
+
+- `glass/backdrop.ts` に `ownBackdropImage(target)` と `sharesBackdropImage(target)`: **透過を描く描画先に、背景画像の
+  大きさの記録を1つずつ持たせる**（three r186 の回避策）。
+  - 不具合: three は透過の背景画像を描画先ごとに写す（`ViewportTextureNode` が描画先ごとに `FramebufferTexture` を既定の1枚から
+    `clone()` する）。r186 の `Texture.copy` は source を共有するので、全部の描画先が1つの `{ width, height }` を共有する。three は
+    コピーの前にその記録と描画先の大きさを比べ、違うときだけ作り直す。そのため2つの描画先が別の時に透過を描き、その間に描画の
+    大きさが変わると、先に描いた方が記録を新しい大きさにし、後から描いた方は作り直されず古い大きさのまま残る。
+    古い方が小さいと毎フレームのコピーが範囲の外（WebGPU は `Texture copy range … touches outside of [Texture …]` で submit ごと
+    捨てられ、画面が黒くなる。WebGL2 は `GL_INVALID_VALUE: glCopyTexSubImage2D`）。大きいとメッセージなしで背景がずれる
+  - 直し方: 描画先の背景画像（公開の `ViewportTextureNode.getTextureForReference(target)`、透過の前面が使う
+    `viewportOpaqueMipTexture()` の写し）に、image を写した新しい `THREE.TextureSource` を持たせる。r187 の直し
+    （mrdoob/three.js#34636、`FramebufferTexture.copy()`）と同じ形。既に分かれていれば何もしない（r187 以上では何もしない）
+  - 使う所: 透過を描く描画先が2つ以上あり、別の時に描くとき、最初に描く前に1回。ゲームではホームの玉の中の像
+    （`src/ui/home/dive-host.ts`）と序章の仕上げの scene pass（`src/game/orb/peek-pipeline.ts`）。描画先が1つだけのシーンは要らない
+  - 裏面（`side: BackSide`）の透過の背景画像は three の内側にあって届かない（このゲームに BackSide の透過はない）
+  - 単体テスト（`backdrop.test.ts`）は three 自身の `ViewportTextureNode.updateBefore` を偽の renderer で回し、r186 で後の描画先が
+    古い大きさのまま残ること（three を上げて直っていれば落ちる＝回避策を外す合図）と、回避策で上下どちらの変化にも追従することを確かめる
+- 最小の再現: `tools/three-repro/s29-backdrop-shared-size.html`（0.186.1 で再現、r187dev で直っている）
+
 ## 0.9.0 — 2026-10-22（S-23 glb の読み込み）
 
 追加だけで、既存の部品は変えていない。

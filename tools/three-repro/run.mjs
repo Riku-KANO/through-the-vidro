@@ -32,6 +32,13 @@ const cases = [
     label: `S-05 reflector rt=${rt}`,
     query: `mode=reflector&rt=${rt}`,
   })),
+  ...['up', 'down'].flatMap((dir) =>
+    [0, 1].map((fix) => ({
+      page: 's29-backdrop-shared-size.html',
+      label: `S-29 ${dir} fix=${fix}`,
+      query: `dir=${dir}&fix=${fix}`,
+    })),
+  ),
 ];
 const only = process.env.CASES?.split(',');
 
@@ -55,11 +62,13 @@ try {
     for (const c of cases.filter((x) => !only || only.some((o) => x.label.startsWith(o)))) {
       for (const [backend, flag] of backends) {
         const page = await browser.newPage();
-        const consoleHits = { destroyed: 0, deleted: 0 };
+        const consoleHits = { destroyed: 0, deleted: 0, copy: 0 };
         page.on('console', (m) => {
           const t = m.text();
           if (t.includes('Destroyed texture')) consoleHits.destroyed++;
           if (t.includes('deleted object')) consoleHits.deleted++;
+          // S-29: WebGPU "Texture copy range … touches outside", WebGL2 "glCopyTexSubImage2D: Offset overflows"
+          if (/touches outside|Offset overflows/.test(t)) consoleHits.copy++;
         });
         let r = null;
         let failure = '';
@@ -79,8 +88,10 @@ try {
           destroyed: r?.destroyed ?? '-',
           glErrors: r?.glErrors ?? '-',
           recreated: r?.recreated ?? '-',
+          stale: r?.stale ?? '-',
           'console destroyed': consoleHits.destroyed,
           'console deleted': consoleHits.deleted,
+          'console copy': consoleHits.copy,
           ...(failure ? { failure } : {}),
         });
       }

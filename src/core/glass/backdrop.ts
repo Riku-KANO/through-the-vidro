@@ -1,5 +1,5 @@
-import { materialThickness } from 'three/tsl';
-import type * as THREE from 'three/webgpu';
+import { materialThickness, viewportOpaqueMipTexture } from 'three/tsl';
+import * as THREE from 'three/webgpu';
 
 /**
  * Transmission and changes of the render size (three r186, S-12).
@@ -55,4 +55,46 @@ export function missesBackdropResize(material: THREE.Material): boolean {
 export function followBackdropResize<T extends THREE.MeshPhysicalNodeMaterial>(material: T): T {
   if (missesBackdropResize(material)) material.thicknessNode = materialThickness;
   return material;
+}
+
+/**
+ * One backdrop per render target (three r186, S-29).
+ *
+ * three copies the backdrop per target it draws transmission into (ViewportTextureNode keeps one FramebufferTexture
+ * per render target, cloned from one default; the canvas has its own too). In r186 Texture.copy shares the source,
+ * so all those copies share one image record ({ width, height }). Before each copy three compares that shared record
+ * with the target's size, and re-makes the copy's texture only when they differ. So when the render size changes and
+ * two targets draw transmission at different moments (the orb's image on the home, then the room's scene pass after
+ * the dive), the first one moves the shared record to the new size and is re-made; the second then finds the record
+ * already at its size and keeps its texture at the old size:
+ *   - smaller than its target: each copy is out of range. WebGPU: GPUValidationError "Texture copy range … touches
+ *     outside of [Texture …]", and the whole submit is dropped, every frame (the black screen after the dive, S-27's
+ *     trace); WebGL2: "GL_INVALID_VALUE: glCopyTexSubImage2D: Offset overflows texture dimensions"
+ *   - larger: no message; the glass shows a shifted, partly stale background
+ * three r187 gives each copy its own image (mrdoob/three.js#34636, FramebufferTexture.copy). ownBackdropImage() does
+ * the same for one target, through public API only (ViewportTextureNode.getTextureForReference, Texture.source).
+ *
+ * Call it once for every render target that draws transmissive materials while another target (or the canvas) also
+ * does at other moments, before the first draw. A target left sharing is safe only while it is the last one sharing.
+ * Covers the front-side backdrop, the one every transmissive material reads except `side: BackSide` ones (three keeps
+ * that backdrop out of reach; no glass here is BackSide). With a three that already separates them, it does nothing.
+ */
+export function ownBackdropImage(target: THREE.RenderTarget): void {
+  const copies = viewportOpaqueMipTexture() as unknown as BackdropCopies;
+  const own = copies.getTextureForReference(target);
+  if (sharesBackdropImage(target)) {
+    const image = own.image as { width?: number; height?: number };
+    own.source = new THREE.TextureSource({ width: image.width, height: image.height });
+  }
+}
+
+/** True while this target's backdrop shares its image record with the default the copies are cloned from (r186). */
+export function sharesBackdropImage(target: THREE.RenderTarget): boolean {
+  const copies = viewportOpaqueMipTexture() as unknown as BackdropCopies;
+  return copies.getTextureForReference(target).source === copies.getTextureForReference(null).source;
+}
+
+/** The part of three's ViewportTextureNode used here (public API; viewportOpaqueMipTexture() is typed as Node). */
+interface BackdropCopies {
+  getTextureForReference(reference: THREE.RenderTarget | null): THREE.Texture;
 }
