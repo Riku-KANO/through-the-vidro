@@ -385,10 +385,26 @@ for (const backend of backends) {
     const textureBytes = textures.reduce((s, t) => s + t.bytes, 0);
     const glbFile = join(root, 'public', WORKSHOP_ASSET);
     const glbBytes = statSync(glbFile).size;
-    // what was baked (the glb's scene extras `bake`; the codec is not in it): pictures of two phases compare only one bake
-    const bakeRecord = (readGlbJson(readFileSync(glbFile)) as { scenes?: { extras?: { bake?: unknown } }[] })
+    // what was baked (from the glb's scene extras `bake`; the codec is not in it): pictures of two phases compare only one
+    // bake. Its settings, lights, sky and each lightmap's scale (rounded by the bake); not the clipping statistics, whose
+    // last digits vary from one bake of the same scene to the next on the GPU
+    type BakeRecord = {
+      images?: { name: string; scale: number; objects: string[] }[];
+      [key: string]: unknown;
+    };
+    const record = (readGlbJson(readFileSync(glbFile)) as { scenes?: { extras?: { bake?: BakeRecord } }[] })
       .scenes?.[0]?.extras?.bake;
-    const bake = bakeRecord ? createHash('sha1').update(JSON.stringify(bakeRecord)).digest('hex') : null;
+    const { images, ...rest } = record ?? {};
+    const bake = record
+      ? createHash('sha1')
+          .update(
+            JSON.stringify({
+              ...rest,
+              images: images?.map((i) => ({ name: i.name, scale: i.scale, objects: i.objects })),
+            }),
+          )
+          .digest('hex')
+      : null;
     writeFileSync(
       join(outDir, `views-${backend}-${phase}.json`),
       JSON.stringify({ backend, phase, bake, views, textures, textureBytes, glbBytes }, null, 2),
