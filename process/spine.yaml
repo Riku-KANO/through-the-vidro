@@ -653,3 +653,22 @@ slices:
       - e2e で、置く前は壁で止まり、置くと通り抜けられ、壁の中では拾えず震えることを確かめる。両経路でエラーなし。S-06 の通しは緑のまま
       - 試しのスイッチ（keep/cut）は外すか、決まった方だけを残す（記録に書く）
 
+  - id: S-29
+    title: 潜った後の黒い画面 — 大きさに追従しなくなった描画先（WebGPU、RGBA16Float のコピーが範囲の外）
+    status: todo
+    depends: [S-24]
+    priority: 高（遊べなくなる不具合）
+    requirements:
+      - トランジション設計（黒い画面の切り替えはしない）
+      - 技術設計 > 品質プリセット（動的解像度）
+    evidence: S-24 の判断待ち8（ホーム経由の着地の後、WebGPU で黒のまま。約25回で1回）。S-27 の追跡で初めて console が残った：「GPUValidationError：Texture copy range ([1088,612]) touches outside of [Texture 1024x576 RGBA16Float]」が毎フレーム62回、描画の倍率は0.1秒ごとの見本ではずっと0.85（1280×720の0.85倍＝1088×612、0.8倍＝1024×576）。process/slices/S-27.md の記録
+    paths:
+      - 調べるのはどこでもよい。直すのは原因の場所（例：src/game/orb/peek-pipeline.ts、src/ui/home/**、src/core/**（CHANGELOG に記録）、src/main.ts（動的解像度の配線））。変える場所は記録に理由を書く
+      - tests/e2e/S-29-*.spec.ts
+      - process/slices/S-29.md
+    acceptance:
+      - 再現の手順を作る：追跡に setScale・setSize と描画先の大きさの変化を時刻つきで足し、ホーム経由の着地を繰り返す（dynres=0 との比べを含む）。再現の条件（どの描画先が、どの大きさの変化で、いつ取り残されるか）を記録する。再現が難しければ、大きさの変化を強制する（?debug=1 の setScale を着地の前後に挟む）
+      - 原因を直す。three の不具合なら、公開の API だけで回避し、最小の再現を tools/three-repro に残す（本家への報告は発案者の判断）
+      - センサー：大きさの変化を挟んだ着地を両経路で繰り返し、console の error・warning がなく、画面が黒くならないことを e2e で確かめる（S-12・S-14 のセンサーの考え方）
+      - S-06・S-16・S-24 の通しの e2e は緑のまま
+
