@@ -123,12 +123,18 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
 /**
  * The workshop's lights (S-24, 仮 values for the designer's eye). 光と時間帯: 夜明け前の青 through the skylight onto the
  * vidro; the furnace is the only warm light (the lamp over the bench is gone), flickering a little like a fire.
+ * S-27: the fire's light is a deeper orange, weaker, and stands out over the grate (FIRE_REACH past the mouth) — at the
+ * mouth (S-24: 9, 0xff8a3c, 0.38 m out) it lit the inside of the brass collar and the floor to a cream glow
+ * (画面の仕上げ: ブルームは控えめに; the fire deep in the mouth is the light source that blooms).
  */
 const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
 const SKYLIGHT_INTENSITY = 26;
 const SKYLIGHT_ANGLE = 0.13;
-const FIRE_COLOR = 0xff8a3c;
-const FIRE_INTENSITY = 9;
+const FIRE_COLOR = 0xff6a2a;
+const FIRE_INTENSITY = 5;
+/** How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands, and how much higher. */
+const FIRE_REACH = 0.6;
+const FIRE_LIFT = 0.08;
 /** How much the fire's light breathes (± of its intensity). */
 const FIRE_FLICKER = 0.08;
 /** The valley floor, far below the mist. */
@@ -469,9 +475,9 @@ export function buildRoomArt(
     scene.add(sky.target);
     put(keep(sky), 'shared');
     fire.position.set(
-      FURNACE_MOUTH[0] + FURNACE_FACING[0] * 0.38,
-      FURNACE_MOUTH[1] + 0.06,
-      FURNACE_MOUTH[2] + FURNACE_FACING[1] * 0.38,
+      FURNACE_MOUTH[0] + FURNACE_FACING[0] * FIRE_REACH,
+      FURNACE_MOUTH[1] + FIRE_LIFT,
+      FURNACE_MOUTH[2] + FURNACE_FACING[1] * FIRE_REACH,
     );
     put(keep(fire), 'shared');
   }

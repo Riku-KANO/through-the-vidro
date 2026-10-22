@@ -17,23 +17,33 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 
 作る物（名前は設計書の命名規則。A0 = 序章）:
 - A0_bnch_work01(+_col)    作業台（曇りガラスの天板、真鍮の枠、玉の受け輪、ジャック）
-- A0_ware_bench01          作業台の上の器（透明・気泡入り）
+- A0_ware_bench01          作業台の上の器（透明・気泡入り）、寝かせた作りかけのぽぺん、ガラス棒の束、眼鏡のレンズ（S-27）
+- A0_ware_bench02          作業台の下の棚の器（曇りガラスの重ねた鉢、透明の瓶、盆の上のかけら。S-27）
+- A0_tool_bench01          作業台に置いたままの道具（鋏、ピンセット、キャリパー、眼鏡の縁、下の棚の盆とへら。S-27）
 - A0_cup_tea01             飲みかけの湯のみ（曇りガラス、お茶）
 - A0_chr_stool01(+_col)    椅子（曇りガラスの座面、真鍮の脚）
-- A0_frn_furnace01(+_col)  炉（乳白ガラスの泡の集まり、口の火、真鍮の輪と煙道、口に差したままの吹き竿と受け）
+- A0_frn_furnace01(+_col)  炉（S-27: 熱で煤けた厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、乳白ガラスの覗き窓、
+                           真鍮の煙道、口に差したままの吹き竿と受け）
 - A0_grt_floor01           炉の前の真鍮の格子（床。当たり判定なし）
 - A0_pipe_rack01(+_col)    吹き竿の立て掛け（真鍮）
 - A0_mrv_marver01(+_col)   マーバー台（真鍮の板、曇りガラスの脚）
-- A0_ware_marver01         作りかけの器（気泡入り、竿の先）
+- A0_ware_marver01         作りかけの器（気泡入り、竿の先）、冷ましている杯とかけら（S-27）
+- A0_tool_marver01         マーバー台の上の道具（ピンセット、ブロック、へら。S-27）
+- A0_bkt_marver01(+_col)   竿の桶（真鍮の桶に水、ポンテ 3 本。S-27）
 - A0_tub_water01(+_col)    水桶（曇りガラス、真鍮のたが、水、柄杓）
 - A0_anl_annealer01(+_col) 徐冷炉（曇りガラスの泡、口は中心へ、中がほのかに暖かい）
 - A0_ware_anneal01         冷ましている作品（透明）
+- A0_cart_anneal01(+_col)  徐冷炉の横の台車（真鍮の枠、曇りガラスの 2 段。S-27）
+- A0_tool_anneal01         台車の上の道具（トング、へら、受け輪。S-27）
+- A0_ware_cart01           台車の上で入る順を待つ作品（透明・乳白。S-27）
 - A0_shlf_works01(+_col)   作品の棚（壁に沿う弧の三段、曇りガラスの板、真鍮の縁と柱）
-- A0_ware_clear01 / A0_ware_bubble01 / A0_ware_frost01  棚の瓶・器・ビードロ（材質ごとに一つ）
+- A0_shlf_back01(+_col)    作品の棚の背板（傾く壁に沿う影の青灰の曇りガラス、上の縁は真鍮。S-27）
+- A0_ware_clear01 / A0_ware_bubble01 / A0_ware_frost01 / A0_ware_opal01  棚の瓶・器・ビードロ（材質ごとに一つ。乳白は S-27）
 - A0_chim_door01           扉の上の風鈴（透明ガラス、真鍮の吊り金具、曇りガラスの短冊）
 
 材質: ガラスは印（glass_clear / glass_frosted / glass_bubble / glass_milky）でゲームが作り直す。不透明な物（真鍮・曇りガラスの
-天板・水・火・熾火）は 1 枚のアトラス（A0_atlas、256px の 4 区画）を共有する。泡は A0_air。
+天板・炉の体・乳白の作品・棚の背板・水・火・熾火）は 1 枚のアトラス（A0_atlas、512×256px の 4×2 区画）を共有する。泡は A0_air。
+乳白ガラスの印（内側から光る灯りの器）は炉の覗き窓だけ。棚の乳白の作品は光らない不透明のオパール（A0_opal）。
 当たり判定（_col）は見た目から作る: 部品ごとの凸包（頭より上 2.2m は除く）、弧の部品は 8 度ごとに分けて包む。
 """
 from __future__ import annotations
@@ -140,6 +150,8 @@ class Part:
     def __init__(self):
         self.bm = bmesh.new()
         self.mats: list = []
+        #: 材質の名前 → (three の座標の点 → 区画の中の (u, v)、0〜1)。なければ高さと位置の三角波（atlas_uv）
+        self.uv_rules: dict = {}
 
     def slot(self, mat) -> int:
         if mat not in self.mats:
@@ -350,9 +362,12 @@ def air_bubbles(part: Part, mat, center, radius: float, count: int, seed: int, h
 
 
 # ── アトラス（不透明な物が共有する 1 枚） ─────────────────────────────────────
-ATLAS_SIZE = 256
-#: 区画（列, 行）。行 0 が下（v 0〜0.5）
-TILES = {'A0_brass': (0, 0), 'A0_frost': (1, 0), 'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_ember': (1, 1)}
+#: 区画の数（列, 行）。1 区画は 128px
+ATLAS_GRID = (4, 2)
+TILE_PX = 128
+#: 区画（列, 行）。行 0 が下
+TILES = {'A0_brass': (0, 0), 'A0_frost': (1, 0), 'A0_kiln': (2, 0), 'A0_opal': (3, 0),
+         'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_ember': (1, 1), 'A0_shade': (2, 1)}
 TILE_MARGIN = 0.12
 
 
@@ -361,10 +376,12 @@ def to_srgb(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1 / 2.4) - 0.055)
 
 
-def atlas_pixels(size: int = ATLAS_SIZE, seed: int = 24) -> np.ndarray:
+def atlas_pixels(seed: int = 24) -> np.ndarray:
     """線形の色で描く。真鍮: 下ほど緑青がかって暗く、手の触れる上ほど明るい（真鍮の鈍い金）。曇りガラスの天板: 薄い青灰。
-    水: 暗い青灰に細い波紋。火: 下の深い橙から上の黄白へ"""
-    h = size // 2
+    炉の体（S-27）: 熱で煤けた厚いガラスの暗い青灰（u は口からの近さ: 0 が口の際の煤、v は高さ）。乳白の作品（S-27）: 光らない
+    乳白（オパール）。棚の背板（S-27）: 影の青灰。水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の橙へ"""
+    cols, rows = ATLAS_GRID
+    h = TILE_PX
     rng = np.random.default_rng(seed)
     v = np.linspace(0, 1, h)[:, None, None]
     u = np.linspace(0, 1, h)[None, :, None]
@@ -376,25 +393,39 @@ def atlas_pixels(size: int = ATLAS_SIZE, seed: int = 24) -> np.ndarray:
     def lerp(a, b, t):
         return np.asarray(a) + (np.asarray(b) - np.asarray(a)) * t
 
+    def smooth(e0, e1, x):
+        t = np.clip((x - e0) / (e1 - e0), 0, 1)
+        return t * t * (3 - 2 * t)
+
     dark, mid, bright = (0.16, 0.12, 0.05), (0.434, 0.266, 0.095), (0.56, 0.38, 0.15)
     brass = np.where(v < 0.45, lerp(dark, mid, v / 0.45), lerp(mid, bright, (v - 0.45) / 0.55))
     frost = np.broadcast_to(np.array((0.3, 0.34, 0.4)), (h, h, 3)) * (1 + 0.04 * soft)
+    base = lerp((0.055, 0.062, 0.078), (0.1, 0.11, 0.13), v) * (1 + 0.05 * soft)
+    soot = smooth(0.4, 0.0, u)
+    kiln = lerp(base, (0.03, 0.028, 0.03), soot * 0.85)
+    opal = lerp((0.62, 0.63, 0.62), (0.8, 0.8, 0.78), v) * (1 + 0.025 * soft)
+    shade = lerp((0.022, 0.03, 0.046), (0.04, 0.05, 0.072), v) * (1 + 0.04 * soft)
     ripple = 0.5 + 0.5 * np.sin(np.hypot(u - 0.5, v - 0.5) * 70)
     water = lerp((0.02, 0.032, 0.045), (0.045, 0.065, 0.085), ripple * 0.6 + 0.2 * soft)
-    fire = np.where(v < 0.5, lerp((0.85, 0.16, 0.02), (1.0, 0.45, 0.1), v / 0.5),
-                    lerp((1.0, 0.45, 0.1), (1.0, 0.82, 0.5), (v - 0.5) / 0.5))
+    # 火（発光の色。強さ FIRE_GLOW を材質が掛ける）: 口の縁の暗い深い赤 → 洞の壁の赤 → 橙 → 奥の真ん中の小さな熱い芯。AgX は
+    # 明るい赤を桃色へ寄せるので、赤く見せる壁は暗く（線形 0.15〜0.45）、光源として滲む（しきい値 0.9 を超える）のは芯だけ
+    fire = np.where(v < 0.55, lerp((0.025, 0.002, 0.0), (0.075, 0.007, 0.001), v / 0.55),
+                    np.where(v < 0.85, lerp((0.075, 0.007, 0.001), (0.12, 0.02, 0.002), (v - 0.55) / 0.3),
+                             lerp((0.12, 0.02, 0.002), (0.4, 0.15, 0.025), (v - 0.85) / 0.15)))
     fire = fire * (1 + 0.05 * soft)
-    img = np.zeros((size, size, 3))
-    for (col, row), tile in (((0, 0), brass), ((1, 0), frost), ((0, 1), water), ((1, 1), fire)):
+    img = np.zeros((rows * h, cols * h, 3))
+    for (col, row), tile in (((0, 0), brass), ((1, 0), frost), ((2, 0), kiln), ((3, 0), opal), ((0, 1), water),
+                             ((1, 1), fire), ((2, 1), shade), ((3, 1), frost)):
         img[row * h:(row + 1) * h, col * h:(col + 1) * h] = np.broadcast_to(tile, (h, h, 3))
     return img
 
 
 def atlas_image() -> bpy.types.Image:
     rgb = to_srgb(atlas_pixels())
-    img = bpy.data.images.new('A0_atlas', ATLAS_SIZE, ATLAS_SIZE, alpha=False)
+    hgt, wid = rgb.shape[:2]
+    img = bpy.data.images.new('A0_atlas', wid, hgt, alpha=False)
     img.colorspace_settings.name = 'sRGB'
-    rgba = np.concatenate([rgb, np.ones((ATLAS_SIZE, ATLAS_SIZE, 1))], axis=-1).astype(np.float32)
+    rgba = np.concatenate([rgb, np.ones((hgt, wid, 1))], axis=-1).astype(np.float32)
     img.pixels.foreach_set(rgba.ravel())
     img.file_format = 'PNG'
     img.pack()
@@ -402,24 +433,31 @@ def atlas_image() -> bpy.types.Image:
 
 
 def atlas_uv(part: Part) -> None:
-    """不透明な面の UV をその材質の区画へ。v = 物の中の高さ（真鍮は下が暗い）、u = 位置の三角波（継ぎ目なし）"""
+    """不透明な面の UV をその材質の区画へ。既定は v = 物の中の高さ（真鍮は下が暗い）、u = 位置の三角波（継ぎ目なし）。
+    part.uv_rules に材質の規則があればそれに従う"""
     bm = part.bm
     uv = bm.loops.layers.uv.new('UVMap')
     ys = [v.co.y for v in bm.verts] or [0.0]
     y0, y1 = min(ys), max(ys)
     span = max(y1 - y0, 1e-3)
+    cols, rows = ATLAS_GRID
     for f in bm.faces:
         name = part.mats[f.material_index].name if part.mats else ''
         tile = TILES.get(name)
+        rule = part.uv_rules.get(name)
         for loop in f.loops:
             if tile is None:
                 loop[uv].uv = (0.0, 0.0)
                 continue
             co = loop.vert.co
-            uu = abs(((co.x + co.z) * 0.9) % 2.0 - 1.0)
-            vv = (co.y - y0) / span
-            loop[uv].uv = ((tile[0] + TILE_MARGIN + (1 - 2 * TILE_MARGIN) * uu) / 2,
-                           (tile[1] + TILE_MARGIN + (1 - 2 * TILE_MARGIN) * vv) / 2)
+            if rule is not None:
+                uu, vv = rule(co)
+                uu, vv = min(1.0, max(0.0, uu)), min(1.0, max(0.0, vv))
+            else:
+                uu = abs(((co.x + co.z) * 0.9) % 2.0 - 1.0)
+                vv = (co.y - y0) / span
+            loop[uv].uv = ((tile[0] + TILE_MARGIN + (1 - 2 * TILE_MARGIN) * uu) / cols,
+                           (tile[1] + TILE_MARGIN + (1 - 2 * TILE_MARGIN) * vv) / rows)
 
 
 # ── 材質 ──────────────────────────────────────────────────────────────────
@@ -487,11 +525,18 @@ def materials() -> dict:
     out = {
         'brass': textured('A0_brass', atlas, metallic=1.0, roughness=0.38),
         'frost': textured('A0_frost', atlas, roughness=0.5),
+        # S-27: the furnace's body (thick, heat-darkened glass: glossy, so it mirrors the dawn), the unlit milky works of the
+        # shelf (opal), the shelf's back
+        'kiln': textured('A0_kiln', atlas, roughness=0.26),
+        'opal': textured('A0_opal', atlas, roughness=0.22),
+        'shade': textured('A0_shade', atlas, roughness=0.85),
         'water': textured('A0_water', atlas, roughness=0.06),
         'fire': textured('A0_fire', atlas, roughness=1.0, emission=FIRE_GLOW, base_black=True),
         'ember': textured('A0_ember', atlas, roughness=1.0, emission=EMBER_GLOW, base_black=True),
         'air': air,
-        'clear': glass('glass_clear', thickness=0.006, absorption=(0.6, 0.86, 0.72), distance=0.3),
+        # 空間の可読性と導線 2 (形は縁で伝える): walls thick enough that the green of the edge shows where the view grazes them
+        # (S-24 had 6 mm, and the works on the shelf vanished against the sky)
+        'clear': glass('glass_clear', thickness=0.05, absorption=(0.6, 0.86, 0.72), distance=0.3),
         'frosted': glass('glass_frosted', thickness=0.012, absorption=(0.86, 0.9, 0.93), distance=1.0,
                          roughness=0.45),
         'bubble': glass('glass_bubble', thickness=0.05, absorption=(0.8, 0.93, 0.86), distance=0.9),
@@ -499,6 +544,7 @@ def materials() -> dict:
     }
     # ビューポート（と確かめ用の Workbench）での色。書き出しには関わらない
     for key, color in (('brass', (0.69, 0.55, 0.34, 1)), ('frost', (0.66, 0.7, 0.74, 1)),
+                       ('kiln', (0.3, 0.32, 0.36, 1)), ('opal', (0.9, 0.9, 0.88, 1)), ('shade', (0.36, 0.39, 0.44, 1)),
                        ('water', (0.12, 0.16, 0.2, 1)), ('fire', (1.0, 0.45, 0.1, 1)),
                        ('ember', (0.9, 0.35, 0.1, 1)), ('air', (1, 1, 1, 1)), ('clear', (0.75, 0.9, 0.86, 0.35)),
                        ('frosted', (0.8, 0.85, 0.9, 0.7)), ('bubble', (0.7, 0.88, 0.8, 0.45)),
@@ -507,12 +553,11 @@ def materials() -> dict:
     return out
 
 
-#: 発光の強さ（仮。発案者の判断待ち）。炉の口の火はブルームのしきい値（線形 0.9）を超えて滲む光源。炉の泡の灯り 2.2 も
-#: 正面では輝度が約 1.15 でしきい値を超え、炉の全体が淡く滲む（前の点光源と合わせてクリーム色に見える）。泡を滲ませないなら
-#: 0.6〜0.8。徐冷炉の熾火は「ほのか」
+#: 発光の強さ（仮。発案者の判断待ち）。炉の口の奥の火はブルームのしきい値（線形 0.9）を超えて滲む光源（S-27: 奥ほど橙、縁は
+#: 深い赤）。炉の覗き窓の乳白ガラスはしきい値の下（S-24 は炉の全体が乳白 2.2 で、クリーム色に滲んだ）。徐冷炉の熾火は「ほのか」
 FIRE_GLOW = 6.0
-MILKY_GLOW = 2.2
-EMBER_GLOW = 0.9
+MILKY_GLOW = 1.2
+EMBER_GLOW = 1.4
 
 
 # ── 当たり判定（見た目から） ───────────────────────────────────────────────
@@ -663,18 +708,6 @@ def bench(m) -> None:
     build(p, 'A0_bnch_work01', (cx, 0.0, cz), col=True)
 
 
-def bench_wares(m) -> None:
-    """作業台の上の器（room-art.ts にあった 2 つ。玉への視線を遮らない位置）"""
-    (cx, cz), (_, h, _) = BENCH['center'], BENCH['size']
-    p = Part()
-    flask = [(0.0, 0.0), (0.1, 0.01), (0.13, 0.1), (0.1, 0.2), (0.04, 0.26), (0.036, 0.36), (0.05, 0.38)]
-    vase = [(0.0, 0.0), (0.07, 0.005), (0.085, 0.11), (0.055, 0.26), (0.07, 0.42), (0.085, 0.45)]
-    p.merge(lathe_bm(shell_profile(flask, 0.005), 28), m['clear'], place((cx - 0.62, h, cz - 0.1)))
-    p.merge(lathe_bm(shell_profile(vase, 0.006), 24), m['bubble'], place((cx + 0.62, h, cz + 0.12)))
-    air_bubbles(p, m['air'], (cx + 0.62, h + 0.2, cz + 0.12), 0.05, 12, seed=3, height=0.14)
-    build(p, 'A0_ware_bench01', (cx, h, cz))
-
-
 def tea_cup(m) -> None:
     x, y, z = TEA_CUP
     p = Part()
@@ -760,84 +793,160 @@ def decimate(bm: bmesh.types.BMesh, triangles: int) -> None:
     bpy.data.meshes.remove(me)
 
 
+#: 炉（S-27）: 泡の形の三角形の目安、口の窪みの大きさ、火の洞の深さ（口の奥の椀。中心が FURNACE_MOUTH）
+FURNACE_BLOB_TRIANGLES = 1100
+FURNACE_RECESS = 0.32
+CAVE_DEPTH = 0.26
+#: 口の真鍮の筒の内の半径と、体に開ける穴の半径（筒の外の半径 0.2 より小さく、筒が穴の縁を隠す）
+COLLAR_INNER = 0.17
+MOUTH_HOLE = 0.19
+
+
+def boolean_difference(bm: bmesh.types.BMesh, cutter: bmesh.types.BMesh) -> None:
+    """bm から cutter（閉じた形）をくり抜く（Blender のブーリアン、EXACT）。座標はどちらも同じ空間"""
+    meshes, objs = [], []
+    for name, src in (('tmp_a', bm), ('tmp_b', cutter)):
+        me = bpy.data.meshes.new(name)
+        src.to_mesh(me)
+        meshes.append(me)
+        objs.append(link(bpy.data.objects.new(name, me)))
+    a, b = objs
+    mod = a.modifiers.new('cut', 'BOOLEAN')
+    mod.operation = 'DIFFERENCE'
+    mod.solver = 'EXACT'
+    mod.object = b
+    for o in bpy.context.view_layer.objects:
+        o.select_set(False)
+    a.select_set(True)
+    bpy.context.view_layer.objects.active = a
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    bm.clear()
+    bm.from_mesh(a.data)
+    for o in objs:
+        bpy.data.objects.remove(o)
+    for me in meshes:
+        if me.users == 0:
+            bpy.data.meshes.remove(me)
+
+
 def raycast(bvh: BVHTree, origin, direction):
     hit = bvh.ray_cast(Vector(origin), Vector(direction).normalized())
     return hit[0]
 
 
 def furnace(m) -> None:
-    """乳白ガラスの泡の集まり（形のルール: 建物は泡の集合として作る）。口は部屋の中心へ向き、奥に火。
-    口には吹き竿が 1 本差したまま、その先を格子の上の真鍮の受けが支える。煙道は真鍮の管で、曲がってドームの壁を抜ける"""
+    """吹きガラスの炉（S-27 で作り直した。S-24 は乳白ガラスの泡で、雲のように見えた）。熱で煤けた厚いガラスの泡の集まり（形のルール:
+    建物は泡の集合）に真鍮の帯を締め、口は部屋の中心へ向く。口の奥は火の洞（奥の真ん中ほど橙、縁は深い赤）、口の左右に乳白ガラスの
+    小さな覗き窓（中の熱で淡く光る）。口には吹き竿が 1 本差したまま、その先を格子の上の真鍮の受けが支える。煙道は真鍮の管で、曲がって
+    ドームの壁を抜ける"""
     cx, cz = FURNACE['center']
     f = Frame(cx, cz, FACING)
     p = Part()
-    rest = Part()  # 泡の形と裾の輪のほかの部品（当たり判定は部品ごとに包む）
+    rest = Part()  # 泡の形と帯と裾の輪のほかの部品（当たり判定は部品ごとに包む）
 
     def add(bm, mat, matrix=None):
         p.merge(bm, mat, matrix)
         rest.merge(bm, mat, matrix)
 
     balls = [
-        (f(0.0, 0.36, 0.0), 0.72, False),  # 大きな泡（口がある）
-        (f(-0.12, 1.1, 0.02), 0.38, False),  # 上の泡（煙道の根）
-        (f(-0.38, 0.36, 0.6), 0.48, False),  # 奥の右
-        (f(-0.32, 0.32, -0.62), 0.45, False),  # 奥の左
-        (f(0.3, 0.17, -0.6), 0.24, False),  # 手前の小さな泡
-        (f(0.05, 0.86, 0.46), 0.22, False),  # 肩の小さな泡
-        (f(0.95, MOUTH_Y, 0.0), 0.36, True),  # 口の窪み
+        (f(0.0, 0.4, 0.0), 0.74, False),  # 大きな泡（口がある）
+        (f(-0.42, 0.32, 0.5), 0.46, False),  # 奥の右の肩
+        (f(-0.36, 0.3, -0.54), 0.43, False),  # 奥の左の肩
+        (f(-0.1, 1.3, 0.0), 0.3, False),  # 上の泡（煙道の根）
+        (f(0.95, MOUTH_Y, 0.0), FURNACE_RECESS, True),  # 口の窪み
     ]
     blob = metaball_mesh(balls, 0.065)
+    decimate(blob, FURNACE_BLOB_TRIANGLES)
+    # 口の穴: 口の軸に沿う円柱で体をくり抜く（火の洞が体の中に見える。穴の縁は口の真鍮の筒が隠す）
+    axis = Vector((FACING[0], 0.0, FACING[1]))
+    cutter = bmesh.new()
+    bmesh.ops.create_cone(cutter, cap_ends=True, segments=16, radius1=MOUTH_HOLE, radius2=MOUTH_HOLE, depth=0.9)
+    # create_cone は z に沿う: z を口の軸へ向け、口の奥 0.4m から外へ
+    turn = Vector((0.0, 0.0, 1.0)).rotation_difference(axis).to_matrix().to_4x4()
+    turn.translation = Vector(f(0.4 + 0.45, MOUTH_Y))
+    bmesh.ops.transform(cutter, matrix=turn, verts=list(cutter.verts))
+    boolean_difference(blob, cutter)
+    cutter.free()
     # 床の下は描かない（床の円盤が隠す）
     bmesh.ops.delete(blob, geom=[v for v in blob.verts if v.co.y < -0.03], context='VERTS')
-    decimate(blob, 1500)
     bvh = BVHTree.FromBMesh(blob)
-    p.merge(blob, m['milky'])
-    # 口（グローリーホール）: 窪みから突き出す真鍮の短い筒、奥に火（FURNACE_MOUTH が中心）
-    axis = Vector((FACING[0], 0.0, FACING[1]))
-    collar = shell_profile([(0.2, 0.0), (0.2, 0.26), (0.215, 0.3)], 0.032)
-    add(lathe_bm(collar, 24), m['brass'], place(f(MOUTH_REACH - 0.08, MOUTH_Y), axis=tuple(axis)))
-    add(sphere_bm(0.165, 14, 8, scale=(1.0, 0.3, 1.0)), m['fire'], place(f(MOUTH_REACH, MOUTH_Y), axis=tuple(axis)))
-    # 足元の真鍮の輪: 泡の裾に沿う
-    foot = []
-    for k in range(32):
-        a = 2 * math.pi * k / 32
-        d = Vector((math.cos(a), 0.0, math.sin(a)))
-        hit = raycast(bvh, Vector((cx, 0.05, cz)) + d * 2.0, -d)
-        r = (Vector(hit) - Vector((cx, 0.05, cz))).length if hit else FURNACE['radius']
-        foot.append((cx + d.x * (r + 0.012), 0.035, cz + d.z * (r + 0.012)))
-    foot_bm = tube_bm(foot, 0.02, 5, closed=True)
-    p.merge(foot_bm, m['brass'])
+    p.merge(blob, m['kiln'])
+    # 体の色: 口の際ほど煤ける（u）、上ほど明るい（v）
+    soot_c = Vector(f(MOUTH_REACH + 0.25, MOUTH_Y))
+    p.uv_rules['A0_kiln'] = lambda co: ((co - soot_c).length / 1.0, co.y / 1.6)
+    # 火の洞: 口の奥の椀。面は内（口）を向く。奥の真ん中がいちばん熱く（橙）、縁ほど深い赤。中心が FURNACE_MOUTH（S-25 の音源）。
+    # 縁は真鍮の筒の内側に 2cm 入る（隙間から体の中が見えない）
+    back = MOUTH_REACH - 0.12
+    rim = COLLAR_INNER + 0.002
+    cave = [(rim, CAVE_DEPTH), (rim - 0.007, CAVE_DEPTH * 0.6), (rim - 0.022, CAVE_DEPTH * 0.3),
+            (rim - 0.072, CAVE_DEPTH * 0.08), (0.0, 0.0)]
+    add(lathe_bm(cave, 20), m['fire'], place(f(back, MOUTH_Y), axis=tuple(axis)))
+    back_c = Vector(f(back, MOUTH_Y))
+    reach = math.hypot(CAVE_DEPTH, rim)
+    p.uv_rules['A0_fire'] = lambda co: (0.5, 1.0 - (co - back_c).length / reach)
+    # 口（グローリーホール）: 体の中から突き出す真鍮の筒（穴の縁と洞の縁を隠す）。外の端は少し開く
+    start = MOUTH_REACH
+    length = 0.955 - start
+    collar = shell_profile([(0.2, 0.0), (0.2, length - 0.055), (0.228, length)], 0.2 - COLLAR_INNER)
+    add(lathe_bm(collar, 20), m['brass'], place(f(start, MOUTH_Y), axis=tuple(axis)))
+    # 覗き窓: 口の左右の、乳白ガラスの小さなレンズと真鍮の輪（中の熱で淡く光る。覗き窓のほかに乳白はない）
+    for side in (-1, 1):
+        a = math.radians(50.0) * side
+        d = Vector((FACING[0] * math.cos(a) + f.r[0] * math.sin(a), 0.0, FACING[1] * math.cos(a) + f.r[1] * math.sin(a)))
+        y = 0.62
+        hit = bvh.ray_cast(Vector((cx, y, cz)) + d * 2.0, -d)
+        if hit[0] is None:
+            continue
+        at, normal = Vector(hit[0]), Vector(hit[1]).normalized()
+        add(tube_bm(circle(tuple(at + normal * 0.006), 0.062, 12, axis=tuple(normal)), 0.012, 4, closed=True),
+            m['brass'])
+        lens = [(0.058, 0.0), (0.035, 0.012), (0.0, 0.016)]  # 外 → 軸（上）: 面は外を向く
+        add(lathe_bm(lens, 12), m['milky'], place(at + normal * 0.002, axis=tuple(normal)))
+    # 足元の真鍮の輪と、体を締める 2 本の帯（口の窪みの上と、上の泡の首）: 泡の面に沿う
+    def band(y, segments, lift, radius, sides):
+        pts = []
+        for k in range(segments):
+            a = 2 * math.pi * k / segments
+            d = Vector((math.cos(a), 0.0, math.sin(a)))
+            hit = raycast(bvh, Vector((cx, y, cz)) + d * 2.0, -d)
+            r = (Vector(hit) - Vector((cx, y, cz))).length if hit else FURNACE['radius']
+            pts.append((cx + d.x * (r + lift), y, cz + d.z * (r + lift)))
+        return tube_bm(pts, radius, sides, closed=True)
+
+    rings = [band(0.035, 32, 0.012, 0.02, 4), band(0.94, 30, 0.01, 0.017, 4), band(1.12, 24, 0.01, 0.015, 4)]
+    for ring in rings:
+        p.merge(ring, m['brass'])
     # 煙道: 上の泡の頂から、曲がって壁へ
-    top = raycast(bvh, f(-0.18, 3.0, 0.06), (0.0, -1.0, 0.0)) or Vector(f(-0.18, 1.6, 0.06))
+    top = raycast(bvh, f(-0.1, 3.0, 0.0), (0.0, -1.0, 0.0)) or Vector(f(-0.1, 1.6, 0.0))
     out = Vector((-FACING[0], 0.0, -FACING[1]))
     base = Vector(top) - Vector((0.0, 0.05, 0.0))
     y_wall = 2.8
     wall = out * (wall_r(y_wall) + 0.25) + Vector((0.0, y_wall, 0.0))
-    flue = fillet([tuple(base), tuple(base + Vector((0.0, 0.55, 0.0))), tuple(wall)], 0.35, 6)
-    add(tube_bm(flue, 0.075, 10), m['brass'])
+    flue = fillet([tuple(base), tuple(base + Vector((0.0, 0.5, 0.0))), tuple(wall)], 0.35, 5)
+    add(tube_bm(flue, 0.075, 8), m['brass'])
     # 口に差したままの吹き竿と、その受け（格子の上）
     pipe_y = lambda a: MOUTH_Y + 0.02 + (a - 0.55) / (MOUTH_PIPE_REACH - 0.55) * 0.18  # noqa: E731
     add(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])
     add(tube_bm(circle(f(MOUTH_PIPE_REACH - 0.02, pipe_y(MOUTH_PIPE_REACH)), 0.02, 12, axis=tuple(axis)), 0.006, 4,
-                    closed=True), m['brass'])
+                closed=True), m['brass'])
     yoke_a = 1.5
     yy = pipe_y(yoke_a) - 0.02
     add(tube_bm([f(yoke_a, FLOOR_TOP + 0.02), f(yoke_a, yy - 0.035)], 0.014, 8), m['brass'])
-    add(lathe_bm([(0.0, 0.0), (0.09, 0.0), (0.1, 0.012), (0.0, 0.02)], 16), m['brass'],
-            place(f(yoke_a, FLOOR_TOP)))
+    add(lathe_bm([(0.0, 0.0), (0.09, 0.0), (0.1, 0.012), (0.0, 0.02)], 16), m['brass'], place(f(yoke_a, FLOOR_TOP)))
     u_pts = [f(yoke_a, yy + 0.035 - 0.035 * math.sin(math.pi * k / 8), 0.035 * math.cos(math.pi * k / 8))
              for k in range(9)]
     add(tube_bm(u_pts, 0.008, 6), m['brass'])
     # 当たり判定: 泡の形は泡ごとに包む（一つの凸包では泡と泡のくびれが埋まり、歩ける床から見えない壁になる）。各頂点を
-    # いちばん近い泡へ（見える半径で割った距離）、境は 14% 重ねて隙間を残さない。裾の輪は炉の周りに 12 度ずつ、ほかは部品ごと
+    # いちばん近い泡へ（見える半径で割った距離）、境は 14% 重ねて隙間を残さない。輪と帯は炉の周りに 12 度ずつ、ほかは部品ごと
     hull = collider(rest)
     bubbles = [(Vector(c), r) for c, r, negative in balls if not negative]
     shape = [v.co.copy() for v in blob.verts if v.co.y <= COL_MAX_Y]
     dists = [[(q - c).length / r for c, r in bubbles] for q in shape]
     for i in range(len(bubbles)):
         hull_into(hull, [q for q, d in zip(shape, dists) if d[i] <= min(d) * 1.14])
-    for g in angular_slices([v.co.copy() for v in foot_bm.verts], (cx, cz), 12.0, 1.0):
-        hull_into(hull, g)
+    for ring in rings:
+        for g in angular_slices([v.co.copy() for v in ring.verts], (cx, cz), 12.0, 1.0):
+            hull_into(hull, g)
     build(p, 'A0_frn_furnace01', (cx, 0.0, cz), sharp_deg=80.0, hull=hull)
 
 
@@ -904,25 +1013,6 @@ def marver(m) -> None:
     for s in (-0.29, 0.29):
         p.merge(lathe_bm(leg, 20), m['frost'], place(f(0.0, 0.0, s)))
     build(p, 'A0_mrv_marver01', (cx, 0.0, cz), col=True)
-
-
-def marver_ware(m) -> None:
-    """作りかけの器: マーバー台の上、竿（ポンテ）の先についたままの気泡入りガラス"""
-    cx, cz = MARVER['center']
-    length, height, depth = MARVER['size']
-    f = Frame(cx, cz)
-    p = Part()
-    y = height + 0.012
-    start = Vector(f(-0.04, y + 0.075, -0.24))
-    end = Vector(f(0.12, y + 0.012, 0.42))
-    p.merge(tube_bm([tuple(start), tuple(end)], 0.015, 8), m['brass'])
-    axis = (start - end).normalized()
-    bulb = [(0.0, 0.0), (0.05, 0.008), (0.082, 0.05), (0.088, 0.1), (0.068, 0.15), (0.03, 0.185), (0.016, 0.2)]
-    centre = start + axis * 0.0
-    base = centre - axis * 0.2
-    p.merge(lathe_bm(bulb, 28), m['bubble'], place(base + Vector((0.0, 0.0, 0.0)), axis=tuple(axis)))
-    air_bubbles(p, m['air'], tuple(base + axis * 0.1), 0.05, 8, seed=11)
-    build(p, 'A0_ware_marver01', (cx, height, cz))
 
 
 def water_tub(m) -> None:
@@ -1012,11 +1102,284 @@ def annealer(m) -> None:
     for s in (-0.18, 0.0, 0.18):
         p.merge(tube_bm([f(-math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s),
                          f(math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s)], 0.008, 6), m['brass'])
+    # 熾火は火の区画の赤から橙の間（S-27 で火の区画の縁を暗い深い赤にした。熾火は弱い発光のまま見えるように）
+    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.62 + 0.26 * min(1.0, max(0.0, (co.y - FLOOR_TOP) / 0.55)))
     build(p, 'A0_anl_annealer01', (cx, 0.0, cz), col=True)
 
 
+# ── 置いたままの道具と作りかけ（S-27: 世界観 > まだそこで暮らしている気配） ─────────────────────────────────
+# 作業台・マーバー台・徐冷炉の周りに、手を止めたばかりの道具と作りかけ、出番を待つ作品を置く。歩く線と天窓の下の中央には置かない。
+# 台の上の小物は当たり判定を持たない（台の当たり判定の上）。床に立つ物（マーバー台の横の竿の桶、徐冷炉の横の台車）は _col を持つ。
+def xf(matrix: Matrix, pts):
+    """three の点の列を matrix で動かす"""
+    return [tuple(matrix @ Vector(q)) for q in pts]
+
+
+def tweezers(p: Part, mat, at, yaw: float, length: float = 0.26) -> None:
+    """ピンセット（長い鉗子）: 根で合わさった 2 本の細い腕。寝かせて置く。局所の +x が先"""
+    M = place(at, yaw)
+    for side in (-1, 1):
+        arm = fillet([(0.0, 0.005, 0.0), (length * 0.35, 0.005, side * 0.016), (length, 0.0045, side * 0.005)], 0.05, 3)
+        p.merge(tube_bm(xf(M, arm), 0.0045, 6), mat)
+    p.merge(tube_bm(xf(M, circle((-0.006, 0.006, 0.0), 0.009, 10)), 0.0035, 4, closed=True), mat)
+
+
+def shears(p: Part, mat, at, yaw: float) -> None:
+    """鋏: 要で交わる 2 枚の刃と指の輪。寝かせて置く"""
+    M = place(at, yaw)
+    for side in (-1, 1):
+        blade = fillet([(-0.085, 0.006, side * 0.024), (0.0, 0.006, 0.0), (0.12, 0.005, -side * 0.012)], 0.03, 3)
+        p.merge(tube_bm(xf(M, blade), 0.005, 6, radii=None), mat)
+        p.merge(tube_bm(xf(M, circle((-0.105, 0.006, side * 0.03), 0.019, 12)), 0.0045, 4, closed=True), mat)
+
+
+def calipers(p: Part, mat, at, yaw: float) -> None:
+    """キャリパー（厚みを測る）: 要の輪から弓なりの 2 本の脚"""
+    M = place(at, yaw)
+    for side in (-1, 1):
+        leg = fillet([(0.0, 0.005, 0.0), (0.06, 0.005, side * 0.04), (0.14, 0.005, side * 0.034),
+                      (0.18, 0.005, side * 0.008)], 0.05, 3)
+        p.merge(tube_bm(xf(M, leg), 0.004, 6), mat)
+    p.merge(tube_bm(xf(M, circle((0.0, 0.006, 0.0), 0.012, 10)), 0.004, 4, closed=True), mat)
+
+
+def paddle(p: Part, mat, at, yaw: float, blade=(0.15, 0.09), handle: float = 0.22) -> None:
+    """真鍮のへら（器の底を平らにする）: 角の丸い平らな板と丸い柄"""
+    M = place(at, yaw)
+    p.merge(rounded_box_bm((blade[0], 0.01, blade[1]), 0.004, 2), mat, M @ place((blade[0] / 2, 0.005, 0.0)))
+    p.merge(tube_bm(xf(M, [(blade[0] - 0.01, 0.008, 0.0), (blade[0] + handle, 0.012, 0.0)]), 0.01, 8), mat)
+
+
+def block(p: Part, mat, at, yaw: float) -> None:
+    """ブロック（熱いガラスを丸める椀）: 真鍮の小さな椀と柄。椀を伏せて置く"""
+    M = place(at, yaw)
+    cup = shell_profile([(0.0, 0.05), (0.03, 0.045), (0.048, 0.025), (0.052, 0.0)], 0.005)
+    p.merge(lathe_bm(cup, 14), mat, M)
+    p.merge(tube_bm(xf(M, [(0.045, 0.02, 0.0), (0.2, 0.03, 0.0)]), 0.009, 8), mat)
+
+
+#: 作業台の上の畳んだ眼鏡（S-27）: 作業台の中心からの (x, z) と向き。縁は道具（真鍮）、レンズは器（透明ガラス）の物に入る
+SPECTACLES = ((-0.86, -0.14), 0.5)
+
+
+def spectacles(frame: Part | None, mat, lens: Part | None, glass_mat, at, yaw: float) -> None:
+    """眼鏡（つるを畳んで伏せた）: 真鍮の丸い縁（frame に）と、透明のガラスのレンズ（lens に）"""
+    M = place(at, yaw)
+    for side in (-1, 1):
+        c = (side * 0.031, 0.005, 0.0)
+        if lens is not None:
+            lens.merge(lathe_bm([(0.022, 0.0), (0.012, 0.0015), (0.0, 0.002)], 12), glass_mat,
+                       M @ place((c[0], 0.004, 0.0)))
+        if frame is None:
+            continue
+        frame.merge(tube_bm(xf(M, circle(c, 0.024, 16)), 0.0028, 4, closed=True), mat)
+        frame.merge(tube_bm(xf(M, [(side * 0.055, 0.006, -0.004), (side * 0.06, 0.007, -0.03),
+                                   (-side * 0.03, 0.008, -0.034)]), 0.0022, 4), mat)
+    if frame is not None:
+        frame.merge(tube_bm(xf(M, [(-0.008, 0.006, 0.0), (0.0, 0.009, 0.004), (0.008, 0.006, 0.0)]), 0.0025, 4), mat)
+
+
+def tray(p: Part, mat, at, yaw: float, size=(0.26, 0.18)) -> None:
+    """真鍮の盆: 角の丸い薄い板と縁"""
+    M = place(at, yaw)
+    p.merge(rounded_box_bm((size[0], 0.006, size[1]), 0.002, 1), mat, M @ place((0.0, 0.003, 0.0)))
+    hx, hz = size[0] / 2 - 0.006, size[1] / 2 - 0.006
+    rim = fillet([(-hx, 0.012, -hz), (hx, 0.012, -hz), (hx, 0.012, hz), (-hx, 0.012, hz)], 0.03, 3, closed=True)
+    p.merge(tube_bm(xf(M, rim), 0.005, 4, closed=True), mat)
+
+
+def chips(p: Part, mat, at, count: int, spread: float, seed: int) -> None:
+    """ガラスのかけら（カレット）: 小さな角のない粒"""
+    rng = np.random.default_rng(seed)
+    for _ in range(count):
+        dx, dz = rng.uniform(-spread, spread, 2)
+        r = float(rng.uniform(0.008, 0.014))
+        bm = ico_bm(r)
+        for v in bm.verts:
+            v.co = Vector((v.co.x, v.co.y * 0.6, v.co.z))
+        p.merge(bm, mat, place((at[0] + dx, at[1] + r * 0.5, at[2] + dz), float(rng.uniform(0, math.pi))))
+
+
+def bench_tools(m) -> None:
+    """作業台に置いたままの道具: 鋏、ピンセット、キャリパー、畳んだ眼鏡（レンズは作業台の器の側の透明ガラス）、下の棚の真鍮の
+    盆とへら。玉の周り（天窓の光の丸）は空ける"""
+    (cx, cz), (w, h, d) = BENCH['center'], BENCH['size']
+    p = Part()
+    shears(p, m['brass'], (cx + 0.36, h, cz + 0.27), 0.35)
+    tweezers(p, m['brass'], (cx - 0.56, h, cz + 0.3), -0.12, 0.28)
+    calipers(p, m['brass'], (cx - 0.48, h, cz - 0.3), 2.6)
+    (sx, sz), yaw = SPECTACLES
+    spectacles(p, m['brass'], None, None, (cx + sx, h, cz + sz), yaw)
+    shelf_y = 0.3
+    tray(p, m['brass'], (cx + 0.48, shelf_y, cz + 0.02), 0.1)
+    paddle(p, m['brass'], (cx + 0.3, shelf_y + 0.012, cz + 0.06), 0.15, blade=(0.12, 0.08), handle=0.16)
+    build(p, 'A0_tool_bench01', (cx, h, cz))
+
+
+def bench_wares(m) -> None:
+    """作業台の上の器（room-art.ts にあった 2 つ。玉への視線を遮らない位置）。S-27: 寝かせた作りかけのぽぺん、透明のガラス棒の
+    束、眼鏡のレンズ、下の棚に重ねた曇りガラスの鉢と透明の瓶、盆の上のかけら"""
+    (cx, cz), (_, h, _) = BENCH['center'], BENCH['size']
+    p = Part()
+    flask = [(0.0, 0.0), (0.1, 0.01), (0.13, 0.1), (0.1, 0.2), (0.04, 0.26), (0.036, 0.36), (0.05, 0.38)]
+    vase = [(0.0, 0.0), (0.07, 0.005), (0.085, 0.11), (0.055, 0.26), (0.07, 0.42), (0.085, 0.45)]
+    p.merge(lathe_bm(shell_profile(flask, 0.005), 28), m['clear'], place((cx - 0.62, h, cz - 0.1)))
+    p.merge(lathe_bm(shell_profile(vase, 0.006), 24), m['bubble'], place((cx + 0.62, h, cz + 0.12)))
+    air_bubbles(p, m['air'], (cx + 0.62, h + 0.2, cz + 0.12), 0.05, 12, seed=3, height=0.14)
+    # 作りかけのぽぺん: 首の先を折ったまま横に寝かせる（首は右、作業台の奥へ）
+    axis = Vector((math.cos(-0.5), 0.0, math.sin(-0.5)))
+    body = Vector((cx + 0.32, h + 0.062, cz - 0.24))
+    p.merge(lathe_bm(SHAPES['poppen'], 18), m['bubble'], place(body - axis * 0.05, axis=tuple(axis)))
+    air_bubbles(p, m['air'], tuple(body), 0.035, 4, seed=5, height=0.02)
+    # 透明のガラス棒の束（4 本、並べて）
+    for i in range(4):
+        z = cz + 0.36 - i * 0.013
+        p.merge(tube_bm([(cx - 0.95, h + 0.0065, z), (cx - 0.5, h + 0.0065, z + 0.02)], 0.0065, 6), m['clear'])
+    (sx, sz), yaw = SPECTACLES
+    spectacles(None, None, p, m['clear'], (cx + sx, h, cz + sz), yaw)
+    build(p, 'A0_ware_bench01', (cx, h, cz))
+
+
+def bench_shelf_wares(m) -> None:
+    """作業台の下の棚（S-27）: 重ねた曇りガラスの鉢、透明の瓶 2 つ、真鍮の盆（道具の側）の上のかけら"""
+    (cx, cz), _ = BENCH['center'], BENCH['size']
+    p = Part()
+    shelf_y = 0.3
+    bowl = shell_profile([(0.0, 0.0), (0.045, 0.0), (0.08, 0.025), (0.1, 0.06), (0.105, 0.075)], 0.004)
+    for i in range(3):
+        p.merge(lathe_bm(bowl, 20), m['frosted'], place((cx - 0.6, shelf_y + i * 0.022, cz - 0.02)))
+    jar = shell_profile([(0.0, 0.0), (0.05, 0.0), (0.06, 0.02), (0.062, 0.13), (0.045, 0.16), (0.048, 0.17)], 0.004)
+    p.merge(lathe_bm(jar, 18), m['clear'], place((cx - 0.25, shelf_y, cz - 0.1)))
+    p.merge(lathe_bm(jar, 18), m['clear'], place((cx - 0.1, shelf_y, cz + 0.08), 0.0))
+    chips(p, m['clear'], (cx + 0.43, shelf_y + 0.009, cz + 0.0), 7, 0.06, seed=8)
+    build(p, 'A0_ware_bench02', (cx, shelf_y, cz))
+
+
+def marver_tools(m) -> None:
+    """マーバー台の上に置いたままの道具: ピンセット、へら、ブロック（作りかけの竿は台の真ん中を斜めに横切る）"""
+    cx, cz = MARVER['center']
+    _, height, _ = MARVER['size']
+    f = Frame(cx, cz)
+    p = Part()
+    y = height
+    # 手前の帯（a 0.15〜0.25）にピンセットとブロック、奥の帯にへら。作りかけの竿は真ん中を斜めに横切る
+    tweezers(p, m['brass'], f(0.19, y, -0.42), f.yaw, 0.27)
+    block(p, m['brass'], f(0.19, y, 0.16), f.yaw)
+    paddle(p, m['brass'], f(-0.18, y, 0.02), f.yaw, blade=(0.14, 0.085), handle=0.2)
+    build(p, 'A0_tool_marver01', (cx, y, cz))
+
+
+#: マーバー台の横の竿の桶（S-27）: 台の枠での位置（a = 中心へ、s = 右）、半径、高さ
+PIPE_BUCKET = {'a': -0.2, 's': -0.74, 'radius': 0.16, 'height': 0.3}
+
+
+def pipe_bucket(m) -> None:
+    """竿の桶: マーバー台の左の、水を張った真鍮の桶。ポンテ（竿）3 本を立てて冷ましたまま。竿の頭は桶の縁の内"""
+    cx, cz = MARVER['center']
+    f = Frame(cx, cz)
+    bx, _, bz = f(PIPE_BUCKET['a'], 0.0, PIPE_BUCKET['s'])
+    r, hgt = PIPE_BUCKET['radius'], PIPE_BUCKET['height']
+    p = Part()
+    rest = Part()  # 当たり判定に入れる部品（水面は入れない）
+    shell = shell_profile([(0.0, 0.0), (r - 0.03, 0.0), (r - 0.012, 0.02), (r - 0.006, hgt - 0.02), (r, hgt)], 0.008)
+    for q in (p, rest):
+        q.merge(lathe_bm(shell, 24), m['brass'], place((bx, FLOOR_TOP, bz)))
+    p.merge(lathe_bm([(0.0, 0.0), (r - 0.012, 0.0)], 24), m['water'], place((bx, FLOOR_TOP + hgt - 0.06, bz)))
+    for k, (ang, lean) in enumerate(((0.3, 0.05), (2.4, 0.07), (4.3, 0.04))):
+        foot = Vector((bx + 0.06 * math.cos(ang), FLOOR_TOP + 0.03, bz + 0.06 * math.sin(ang)))
+        head = Vector((bx + (0.06 + lean) * math.cos(ang), 1.0 + 0.04 * k, bz + (0.06 + lean) * math.sin(ang)))
+        for q in (p, rest):
+            q.merge(tube_bm([tuple(foot), tuple(head)], 0.009, 8), m['brass'])
+            q.merge(tube_bm(circle(tuple(head - (head - foot).normalized() * 0.012), 0.011, 10,
+                                   axis=tuple(head - foot)), 0.004, 4, closed=True), m['brass'])
+    build(p, 'A0_bkt_marver01', (bx, 0.0, bz), hull=collider(rest))
+
+
+def marver_ware(m) -> None:
+    """作りかけの器: マーバー台の上、竿（ポンテ）の先についたままの気泡入りガラス。S-27: 台の隅に冷ましている小さな杯と、
+    かけらの小山"""
+    cx, cz = MARVER['center']
+    length, height, depth = MARVER['size']
+    f = Frame(cx, cz)
+    p = Part()
+    y = height + 0.012
+    start = Vector(f(-0.04, y + 0.075, -0.24))
+    end = Vector(f(0.12, y + 0.012, 0.42))
+    p.merge(tube_bm([tuple(start), tuple(end)], 0.015, 8), m['brass'])
+    axis = (start - end).normalized()
+    bulb = [(0.0, 0.0), (0.05, 0.008), (0.082, 0.05), (0.088, 0.1), (0.068, 0.15), (0.03, 0.185), (0.016, 0.2)]
+    centre = start + axis * 0.0
+    base = centre - axis * 0.2
+    p.merge(lathe_bm(bulb, 28), m['bubble'], place(base + Vector((0.0, 0.0, 0.0)), axis=tuple(axis)))
+    air_bubbles(p, m['air'], tuple(base + axis * 0.1), 0.05, 8, seed=11)
+    cup = shell_profile([(0.0, 0.0), (0.03, 0.0), (0.042, 0.012), (0.046, 0.07), (0.05, 0.09)], 0.005)
+    p.merge(lathe_bm(cup, 18), m['bubble'], place(f(-0.17, height, -0.1)))
+    air_bubbles(p, m['air'], f(-0.17, height + 0.045, -0.1), 0.025, 4, seed=12, height=0.025)
+    chips(p, m['bubble'], f(0.2, height, 0.0), 5, 0.035, seed=13)
+    build(p, 'A0_ware_marver01', (cx, height, cz))
+
+
+#: 徐冷炉の横の台車（S-27）: 徐冷炉の枠での位置（a = 中心へ、s = 右）、長さ（s に沿う）・奥行き、2 段の高さ
+ANNEAL_CART = {'a': 0.06, 's': 1.12, 'size': (0.62, 0.36), 'shelves': (0.22, 0.62)}
+
+
+def cart_frame(at_s: float, at_a: float):
+    cx, cz = ANNEALER['center']
+    f = Frame(cx, cz)
+    return f, (lambda a, y, s: f(at_a + a, y, at_s + s))
+
+
+def anneal_cart(m) -> None:
+    """徐冷炉の横の台車: 真鍮の枠に曇りガラスの 2 段の板、小さな車輪、押し手。徐冷炉へ入れる順を待つ作品を載せる"""
+    f, at = cart_frame(ANNEAL_CART['s'], ANNEAL_CART['a'])
+    length, depth = ANNEAL_CART['size']
+    low, top = ANNEAL_CART['shelves']
+    p = Part()
+    for y in (low, top):
+        p.merge(rounded_box_bm((length, 0.025, depth), 0.01, 2), m['frost'], place(at(0.0, y, 0.0), f.yaw))
+    hs, ha = length / 2 - 0.03, depth / 2 - 0.03
+    for sa in (-1, 1):
+        for ss in (-1, 1):
+            p.merge(tube_bm([at(sa * ha, FLOOR_TOP + 0.06, ss * hs), at(sa * ha, top + 0.07, ss * hs)], 0.013, 8),
+                    m['brass'])
+            wheel = circle(at(sa * ha, FLOOR_TOP + 0.035, ss * hs), 0.026, 12, axis=(f.f[0], 0.0, f.f[1]))
+            p.merge(tube_bm(wheel, 0.009, 4, closed=True), m['brass'])
+    rim = fillet([at(-ha, top + 0.045, -hs), at(-ha, top + 0.045, hs), at(ha, top + 0.045, hs),
+                  at(ha, top + 0.045, -hs)], 0.05, 3, closed=True)
+    p.merge(tube_bm(rim, 0.008, 5, closed=True), m['brass'])
+    # 押し手: 右の端の上に渡した横棒（柱の頭の上）
+    p.merge(tube_bm([at(-ha, top + 0.2, hs + 0.04), at(ha, top + 0.2, hs + 0.04)], 0.012, 8), m['brass'])
+    for sa in (-1, 1):
+        p.merge(tube_bm([at(sa * ha, top + 0.06, hs), at(sa * ha, top + 0.2, hs + 0.04)], 0.011, 8), m['brass'])
+    origin = at(0.0, 0.0, 0.0)
+    build(p, 'A0_cart_anneal01', origin, col=True)
+
+
+#: 台車の上の段で作品を立てる受け輪の位置（s）
+CART_STANDS = (0.13, 0.25)
+
+
+def anneal_tools(m) -> None:
+    """台車の上の道具: 長いトング、作品を徐冷炉へ運ぶ平らなへら、作品を立てる真鍮の受け輪 2 つ"""
+    f, at = cart_frame(ANNEAL_CART['s'], ANNEAL_CART['a'])
+    low, top = ANNEAL_CART['shelves']
+    y = top + 0.0125
+    p = Part()
+    # 台車の上の段の手前の半分（s < 0）に道具、奥の半分に作品
+    M = place(at(0.08, y, -0.3), f.yaw)
+    for side in (-1, 1):
+        arm = fillet([(0.0, 0.006, 0.0), (0.1, 0.006, side * 0.018), (0.3, 0.006, side * 0.011),
+                      (0.36, 0.006, side * 0.02)], 0.05, 3)
+        p.merge(tube_bm(xf(M, arm), 0.006, 8), m['brass'])
+    p.merge(tube_bm(xf(M, circle((-0.008, 0.008, 0.0), 0.012, 10)), 0.005, 4, closed=True), m['brass'])
+    paddle(p, m['brass'], at(-0.1, y, -0.3), f.yaw, blade=(0.15, 0.1), handle=0.12)
+    for s in CART_STANDS:
+        p.merge(tube_bm(circle(at(-0.07, y + 0.006, s), 0.032, 14), 0.006, 4, closed=True), m['brass'])
+    build(p, 'A0_tool_anneal01', at(0.0, y, 0.0))
+
+
 def annealer_wares(m) -> None:
-    """冷ましている作品（透明）: 中の棚の上の 3 つ"""
+    """冷ましている作品（透明）: 中の棚の上の 3 つ。S-27: 横の台車の上で入る順を待つ作品（透明と乳白）"""
     cx, cz = ANNEALER['center']
     f = Frame(cx, cz)
     p = Part()
@@ -1028,6 +1391,28 @@ def annealer_wares(m) -> None:
     for prof, (a, s), t in ((bowl, (-0.02, -0.2), 0.004), (bottle, (-0.12, 0.0), 0.004), (vase, (-0.02, 0.2), 0.005)):
         p.merge(lathe_bm(shell_profile(prof, t), 20), m['clear'], place(f(a, y, s)))
     build(p, 'A0_ware_anneal01', (cx, y, cz))
+
+
+def cart_wares(m) -> None:
+    """徐冷炉の横の台車の上で入る順を待つ作品（S-27）: 上の段に受け輪に立てた透明の瓶と花瓶、乳白の壺。下の段に乳白の鉢を
+    2 つ重ねて、透明の鉢"""
+    bowl = [(0.0, 0.0), (0.05, 0.0), (0.085, 0.03), (0.105, 0.075), (0.11, 0.09)]
+    bottle = [(0.0, 0.0), (0.04, 0.0), (0.05, 0.02), (0.052, 0.13), (0.03, 0.17), (0.014, 0.2), (0.013, 0.26),
+              (0.018, 0.27)]
+    vase = [(0.0, 0.0), (0.045, 0.0), (0.07, 0.06), (0.06, 0.15), (0.035, 0.2), (0.045, 0.23)]
+    p = Part()
+    _, at = cart_frame(ANNEAL_CART['s'], ANNEAL_CART['a'])
+    low, top = ANNEAL_CART['shelves']
+    ty, ly = top + 0.0125, low + 0.0125
+    p.merge(lathe_bm(shell_profile(bottle, 0.004), 18), m['clear'], place(at(-0.07, ty + 0.006, CART_STANDS[0])))
+    p.merge(lathe_bm(shell_profile(vase, 0.005), 18), m['clear'], place(at(-0.07, ty + 0.006, CART_STANDS[1])))
+    jar = shell_profile([(0.0, 0.0), (0.05, 0.0), (0.066, 0.03), (0.07, 0.1), (0.05, 0.15), (0.052, 0.16)], 0.005)
+    p.merge(lathe_bm(jar, 18), m['opal'], place(at(0.09, ty, 0.22)))
+    obowl = shell_profile([(0.0, 0.0), (0.055, 0.0), (0.09, 0.03), (0.11, 0.07), (0.115, 0.08)], 0.005)
+    for i in range(2):
+        p.merge(lathe_bm(obowl, 18), m['opal'], place(at(0.0, ly + i * 0.025, -0.12)))
+    p.merge(lathe_bm(shell_profile(bowl, 0.004), 18), m['clear'], place(at(0.02, ly, 0.16)))
+    build(p, 'A0_ware_cart01', at(0.0, ty, 0.0))
 
 
 # ── 作品の棚 ────────────────────────────────────────────────────────────────
@@ -1061,18 +1446,21 @@ def shelf(m) -> None:
     build(p, 'A0_shlf_works01', (r * math.cos(mid_deg), 0.0, r * math.sin(mid_deg)), col=True, arcs=True)
 
 
-#: 棚の作品: (段, 方位の度, 形, 材質)。瓶・器・ビードロ（ぽぺん形と丸い玉）
+#: 棚の作品: (段, 方位の度, 形, 材質)。瓶・器・ビードロ（ぽぺん形と丸い玉）。S-27: 透明だけでは空を背にして消えるので、気泡入り・
+#: 曇り・乳白（光らないオパール。乳白ガラスの印は灯りの器で、内側から光る）を混ぜ、透明の作品は乳白や気泡入りの間に置く
 SHELF_ITEMS = [
-    (0, 118.5, 'jar', 'frosted'), (0, 124.0, 'bowl', 'clear'), (0, 129.5, 'vase', 'bubble'),
-    (0, 135.5, 'jar', 'frosted'), (0, 141.0, 'bottle', 'clear'), (0, 147.0, 'bowl', 'frosted'),
-    (0, 152.5, 'flask', 'clear'), (0, 158.5, 'jar', 'frosted'), (0, 162.5, 'cup', 'frosted'),
-    (1, 118.0, 'bottle', 'clear'), (1, 122.5, 'vidro', 'bubble'), (1, 127.0, 'flask', 'clear'),
-    (1, 132.5, 'poppen', 'bubble'), (1, 138.0, 'cup', 'frosted'), (1, 143.0, 'bottle', 'clear'),
-    (1, 148.5, 'vidro', 'bubble'), (1, 154.0, 'bowl', 'clear'), (1, 159.5, 'poppen', 'bubble'),
-    (2, 119.0, 'vidro', 'bubble'), (2, 125.0, 'bottle', 'clear'), (2, 131.0, 'jar', 'frosted'),
-    (2, 137.0, 'poppen', 'bubble'), (2, 143.5, 'flask', 'clear'), (2, 150.0, 'cup', 'frosted'),
-    (2, 156.0, 'vidro', 'bubble'), (2, 161.5, 'bottle', 'clear'),
+    (0, 118.5, 'jar', 'frosted'), (0, 124.0, 'bowl', 'clear'), (0, 129.5, 'vase', 'opal'),
+    (0, 135.5, 'bottle', 'clear'), (0, 141.0, 'vidro', 'bubble'), (0, 147.0, 'jar', 'opal'),
+    (0, 152.5, 'flask', 'clear'), (0, 158.5, 'vase', 'frosted'), (0, 162.5, 'cup', 'frosted'),
+    (1, 118.0, 'bottle', 'clear'), (1, 122.5, 'poppen', 'bubble'), (1, 127.5, 'bowl', 'opal'),
+    (1, 133.0, 'flask', 'clear'), (1, 138.5, 'cup', 'frosted'), (1, 143.5, 'vidro', 'bubble'),
+    (1, 148.5, 'bottle', 'opal'), (1, 154.0, 'bowl', 'clear'), (1, 159.5, 'poppen', 'bubble'),
+    (2, 119.0, 'vidro', 'bubble'), (2, 125.0, 'jar', 'opal'), (2, 131.0, 'bottle', 'clear'),
+    (2, 137.0, 'poppen', 'bubble'), (2, 143.5, 'flask', 'clear'), (2, 150.0, 'vase', 'opal'),
+    (2, 156.0, 'vidro', 'bubble'), (2, 161.5, 'cup', 'frosted'),
 ]
+#: 棚の作品の大きさ（S-24 の輪郭に掛ける。4m 先から形が読めるように）
+SHELF_WARE_SCALE = 1.35
 SHAPES = {
     'jar': [(0.0, 0.0), (0.05, 0.0), (0.062, 0.02), (0.065, 0.11), (0.05, 0.14), (0.045, 0.16), (0.05, 0.17)],
     'bowl': [(0.0, 0.0), (0.04, 0.0), (0.075, 0.025), (0.095, 0.06), (0.1, 0.075)],
@@ -1086,26 +1474,35 @@ SHAPES = {
 }
 
 
+def scaled(profile, k: float):
+    return [(r * k, y * k) for r, y in profile]
+
+
 def shelf_wares(m) -> None:
     """棚の瓶・器・ビードロ。材質ごとに 1 つの物にまとめる（描画の呼び出しを減らす。1 つは 500〜3000 三角形）"""
-    parts = {'clear': Part(), 'bubble': Part(), 'frosted': Part()}
+    parts = {'clear': Part(), 'bubble': Part(), 'frosted': Part(), 'opal': Part()}
     seed = 40
+    k = SHELF_WARE_SCALE
     for tier, deg, shape, kind in SHELF_ITEMS:
         y = SHELF['tiers'][tier] + 0.035 / 2
         r = shelf_front(SHELF['tiers'][tier]) + SHELF['depth'] / 2 + 0.02
         at = (r * math.cos(math.radians(deg)), y, r * math.sin(math.radians(deg)))
         part = parts[kind]
         if shape == 'vidro':
-            ball = 0.05
+            ball = 0.05 * k
             part.merge(sphere_bm(ball, 12, 8), m['bubble'], place((at[0], y + 0.012 + ball * 0.92, at[2])))
             part.merge(tube_bm(circle((at[0], y + 0.008, at[2]), ball * 0.6, 12), 0.005, 4, closed=True), m['brass'])
             air_bubbles(part, m['air'], (at[0], y + 0.012 + ball * 0.92, at[2]), ball * 0.7, 5, seed=seed)
         elif shape == 'poppen':
-            part.merge(lathe_bm(SHAPES[shape], 16), m['bubble'], place((at[0], y + 0.01, at[2])))
-            part.merge(tube_bm(circle((at[0], y + 0.008, at[2]), 0.036, 12), 0.005, 4, closed=True), m['brass'])
-            air_bubbles(part, m['air'], (at[0], y + 0.06, at[2]), 0.035, 4, seed=seed, height=0.02)
+            part.merge(lathe_bm(scaled(SHAPES[shape], k), 16), m['bubble'], place((at[0], y + 0.01, at[2])))
+            part.merge(tube_bm(circle((at[0], y + 0.008, at[2]), 0.036 * k, 12), 0.005, 4, closed=True), m['brass'])
+            air_bubbles(part, m['air'], (at[0], y + 0.06 * k, at[2]), 0.035 * k, 4, seed=seed, height=0.02)
+        elif kind in ('opal', 'clear', 'frosted'):
+            # 二重の壁（S-27）: 乳白は不透明なので内が抜けて見えないように、透明と曇りは内と外の 2 つの縁が見えるように
+            segments = 15 if kind == 'clear' else 16  # 透明の作品 8 点で 3,000 三角形の内
+            part.merge(lathe_bm(shell_profile(scaled(SHAPES[shape], k), 0.005), segments), m[kind], place(at))
         else:
-            part.merge(lathe_bm(SHAPES[shape], 16), m[kind], place(at))
+            part.merge(lathe_bm(scaled(SHAPES[shape], k), 16), m[kind], place(at))
             if kind == 'bubble':
                 air_bubbles(part, m['air'], (at[0], y + 0.1, at[2]), 0.04, 6, seed=seed, height=0.08)
         seed += 1
@@ -1115,6 +1512,69 @@ def shelf_wares(m) -> None:
     build(parts['clear'], 'A0_ware_clear01', origin)
     build(parts['bubble'], 'A0_ware_bubble01', origin)
     build(parts['frosted'], 'A0_ware_frost01', origin)
+    build(parts['opal'], 'A0_ware_opal01', origin)
+
+
+#: 棚の背板（S-27）: 壁のガラスからの隙間、厚み、下と上の縁の高さ
+SHELF_BACK = {'gap': 0.008, 'thick': 0.02, 'from_y': 0.3, 'to_y': SHELF['tiers'][-1] + 0.44}
+
+
+def shelf_back(m) -> None:
+    """作品の棚の背板（S-27）: 段の後ろで傾く壁に沿う、影の青灰の曇りガラスの帯。不透明に描く（透過のガラスは不透明な物しか
+    屈折しないので、透明の作品はこの面を背にして縁と屈折が読める）。上の縁は真鍮。棚が空に見えないように"""
+    a0, a1 = SHELF['from_deg'] - 1.5, SHELF['to_deg'] + 1.5
+    gap, t = SHELF_BACK['gap'], SHELF_BACK['thick']
+    y0, y1 = SHELF_BACK['from_y'], SHELF_BACK['to_y']
+    rc = t / 2 * 0.9
+    # 断面（y, 壁からの距離）: 部屋の側の面を下から上へ、上の縁を丸く回って壁の側の面を下へ、下の縁を丸く回る
+    rows = 9
+    inner = [(y0 + rc + (y1 - y0 - 2 * rc) * i / (rows - 1), gap + t) for i in range(rows)]
+    top = [(y1 - rc + rc * math.sin(math.pi / 2 * k / 3), gap + t / 2 + rc * math.cos(math.pi / 2 * k / 3))
+           for k in range(1, 4)]
+    top += [(y1 - rc + rc * math.cos(math.pi / 2 * k / 3), gap + t / 2 - rc * math.sin(math.pi / 2 * k / 3))
+            for k in range(1, 3)]
+    outer = [(y, gap) for y, _ in inner[::-1]]
+    bottom = [(y0 + rc - rc * math.sin(math.pi / 2 * k / 3), gap + t / 2 - rc * math.cos(math.pi / 2 * k / 3))
+              for k in range(1, 4)]
+    bottom += [(y0 + rc - rc * math.cos(math.pi / 2 * k / 3), gap + t / 2 + rc * math.sin(math.pi / 2 * k / 3))
+               for k in range(1, 3)]
+    section = inner + top + outer + bottom
+    steps = max(2, round((a1 - a0) / 2.5))
+    bm = bmesh.new()
+    loops = []
+    for i in range(steps + 1):
+        a = math.radians(a0 + (a1 - a0) * i / steps)
+        c, s = math.cos(a), math.sin(a)
+        loops.append([bm.verts.new(((wall_r(y) - w) * c, y, (wall_r(y) - w) * s)) for y, w in section])
+    n = len(section)
+    for la, lb in zip(loops, loops[1:]):
+        for j in range(n):
+            bm.faces.new((la[j], la[(j + 1) % n], lb[(j + 1) % n], lb[j]))
+    for lp in (loops[0], loops[-1]):
+        bm.faces.new(lp)
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4])
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    p = Part()
+    p.merge(bm, m['shade'])
+    p.uv_rules['A0_shade'] = lambda co: (abs(((co.x + co.z) * 0.9) % 2.0 - 1.0), (co.y - y0) / (y1 - y0))
+    # 上の縁の真鍮
+    edge = [((wall_r(y1 + 0.004) - gap - t / 2) * math.cos(math.radians(d)), y1 + 0.004,
+             (wall_r(y1 + 0.004) - gap - t / 2) * math.sin(math.radians(d)))
+            for d in [a0 + (a1 - a0) * i / steps for i in range(steps + 1)]]
+    p.merge(tube_bm(edge, 0.011, 6), m['brass'])
+    # 当たり判定: 8 度ずつと、高さで 3 つの帯に分けて包む（背板は球の壁に沿って縦にも曲がるので、高さごと包むと膨らみが部屋の側へ
+    # 見えない壁になる）
+    rows_y = [y for y, _ in inner]
+    edges = [y0 - 0.01, rows_y[3], rows_y[6], y1 + 0.05]
+    hull = bmesh.new()
+    pts = [v.co.copy() for v in p.bm.verts]
+    for lo, hi in zip(edges, edges[1:]):
+        band = [q for q in pts if lo - 1e-4 <= q.y <= hi + 1e-4]
+        for g in angular_slices(band):
+            hull_into(hull, g)
+    mid = math.radians((a0 + a1) / 2)
+    r = wall_r(1.0) - gap - t / 2
+    build(p, 'A0_shlf_back01', (r * math.cos(mid), 0.0, r * math.sin(mid)), hull=hull)
 
 
 # ── 風鈴 ────────────────────────────────────────────────────────────────────
@@ -1206,7 +1666,9 @@ def render_previews(out_dir: str, cams: dict, ref_layer) -> None:
 
 
 PIECES = (bench, bench_wares, tea_cup, stool, furnace, grate, blowpipe_rack, marver, marver_ware, water_tub, annealer,
-          annealer_wares, shelf, shelf_wares, wind_chime)
+          annealer_wares, shelf, shelf_wares, wind_chime,
+          # S-27
+          shelf_back, bench_shelf_wares, bench_tools, marver_tools, pipe_bucket, anneal_cart, anneal_tools, cart_wares)
 
 
 def build_all(only: list[str] | None = None) -> None:
