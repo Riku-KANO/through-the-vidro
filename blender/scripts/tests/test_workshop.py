@@ -142,7 +142,8 @@ class Workshop(unittest.TestCase):
 
     def test_new_furniture_colliders_are_honest_both_ways(self):
         """空間の可読性と導線 4 for furniture added after S-24 (the eight pieces of S-24 are checked in the game's Rapier test,
-        src/game/prologue/physics.test.ts): horizontal rays at body heights from all around. Where a ray meets the piece it
+        src/game/prologue/physics.test.ts; since S-30 that test also takes these, with rays toward one point of each, while
+        this one aims at every 8-degree slice of a long piece): horizontal rays at body heights from all around. Where a ray meets the piece it
         meets the collider no more than 5 cm later; where it meets the collider, the piece no more than 10 cm later. A long piece
         (the shelf's board) is looked at from all around each of its 8-degree slices"""
         checked_in_game = S24_FURNITURE

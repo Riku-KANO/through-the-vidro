@@ -87,6 +87,13 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
     expect(new Set(built.layered.map((l) => l.layer))).toEqual(new Set(['shared']));
   });
 
+  it('the plan names every object of the file, so the checks here and room.ts’s `missing` see them all (S-30)', () => {
+    // S-27 added nine objects that only Blender's own tests saw (process/slices/S-27.md 提案8)
+    const planned = new Set<string>(PIECES.map((p) => p.name));
+    const inFile = built.layered.map((l) => String(l.object.userData.name));
+    expect(inFile.filter((name) => !planned.has(name))).toEqual([]);
+  });
+
   it('each piece stands where layout.ts puts it', () => {
     for (const p of PIECES) {
       const box = boxOf(objectNamed(p.name));
@@ -162,8 +169,10 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
         [z1, seen.max.z],
       ] as const)
         expect(Math.abs(c - v), `${p.name} max`).toBeLessThan(0.08);
-      expect(y0).toBeLessThan(0.05);
-      expect(y1).toBeGreaterThan(Math.min(seen.max.y, 2.2) - 0.08);
+      // from where it is drawn lowest: the floor for what stands on it, 0.29 m for the shelf's back board hung on the
+      // leaning wall (S-27; S-24's check, y0 < 0.05, knew only furniture on the floor)
+      expect(Math.abs(y0 - seen.min.y), `${p.name} bottom`).toBeLessThan(0.05);
+      expect(y1, `${p.name} top`).toBeGreaterThan(Math.min(seen.max.y, 2.2) - 0.08);
     }
   });
 

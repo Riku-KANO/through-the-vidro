@@ -495,6 +495,12 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
   }
   const pieces = Object.values(WORKSHOP_OBJECTS).filter((o) => o.col);
 
+  it('every collider of the workshop’s file is checked both ways (S-30: also the furniture S-27 added)', () => {
+    expect(new Set(pieces.map((p) => `${p.name}_col`))).toEqual(
+      new Set(workshop.colliders.map((c) => c.name)),
+    );
+  });
+
   it('you cannot walk into what you see: a ray that meets a piece meets its collider first (or within 5 cm)', () => {
     const misses: string[] = [];
     for (const piece of pieces)
@@ -517,7 +523,8 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
           walls.push(`${piece.name} h${q.h} a${q.i}: felt ${q.felt.toFixed(2)} seen ${q.seen?.toFixed(2)}`);
       }
     expect(walls).toEqual([]);
-    // the hollows are few rays of a few pieces, not whole pieces (of 8 pieces × 96 rays)
+    // the hollows are few rays of a few pieces, not whole pieces (of 11 pieces × 96 rays since S-30; only the bench, the
+    // annealer and the furnace have hollows, so the S-24 limit still holds)
     expect(skipped).toBeLessThan(80);
   });
 

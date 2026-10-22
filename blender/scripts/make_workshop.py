@@ -22,8 +22,8 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 - A0_tool_bench01          作業台に置いたままの道具（鋏、ピンセット、キャリパー、眼鏡の縁、下の棚の盆とへら。S-27）
 - A0_cup_tea01             飲みかけの湯のみ（曇りガラス、お茶）
 - A0_chr_stool01(+_col)    椅子（曇りガラスの座面、真鍮の脚）
-- A0_frn_furnace01(+_col)  炉（S-27: 熱で煤けた厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、覗き窓（熾火と乳白ガラスの輪）、
-                           真鍮の煙道、口に差したままの吹き竿と受け）
+- A0_frn_furnace01(+_col)  炉（S-27: 厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、覗き窓（熾火と乳白ガラスの輪）、
+                           真鍮の煙道、口に差したままの吹き竿と受け。S-30: 体は煤けた厚い曇りガラスの薄い青灰）
 - A0_grt_floor01           炉の前の真鍮の格子（床。当たり判定なし）
 - A0_pipe_rack01(+_col)    吹き竿の立て掛け（真鍮）
 - A0_mrv_marver01(+_col)   マーバー台（真鍮の板、曇りガラスの脚）
@@ -43,6 +43,8 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 
 材質: ガラスは印（glass_clear / glass_frosted / glass_bubble / glass_milky）でゲームが作り直す。不透明な物（真鍮・曇りガラスの
 天板・炉の体・乳白の作品・棚の背板・水・火・熾火）は 1 枚のアトラス（A0_atlas、512×256px の 4×2 区画）を共有する。泡は A0_air。
+炉の体（S-30）は厚い曇りガラスを不透明に描く（曇りガラスの天板と同じ。印の曇りガラスは 1 つの材質で、桶や徐冷炉の 12mm の
+透過を共有し、煤も厚みも描けない。透過では炉の向こうの壁と空が透け、厚いガラスに見えない: process/slices/S-30.md）。
 乳白ガラスの印（内側から光る灯りの器）は炉の覗き窓だけ。棚の乳白の作品は光らない不透明のオパール（A0_opal）。
 当たり判定（_col）は見た目から作る: 部品ごとの凸包（頭より上 2.2m は除く）、弧の部品は 8 度ごとに分けて包む。
 """
@@ -369,6 +371,15 @@ TILE_PX = 128
 TILES = {'A0_brass': (0, 0), 'A0_frost': (1, 0), 'A0_kiln': (2, 0), 'A0_opal': (3, 0),
          'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_ember': (1, 1), 'A0_shade': (2, 1)}
 TILE_MARGIN = 0.12
+#: 炉の体の色（線形。S-30）: 下の端と上の端、煤。工房の光は青い（空の半球光 0x7890c0、夜明けの空の映り込み）ので、体の色は
+#: 青みを持たない明るい灰に置く（画面では薄い青灰に写る）。見た目の調整 1〜3 巡目で見た絵: 最初の 0.24〜0.46 の青灰は鋼の青に、
+#: 0.46〜0.67 は中ほどの青灰に、0.56〜0.76 の青みのある灰は淡い水色の陶器に写った
+KILN_LOW = (0.6, 0.6, 0.6)
+KILN_HIGH = (0.76, 0.76, 0.76)
+KILN_SOOT = (0.03, 0.029, 0.03)
+#: 煤のいちばん濃い所で、体の色に煤を混ぜる割合。煤の量（1 - u）の平方根で混ぜる（線形の色で半分混ぜても、画面ではほとんど
+#: 暗く見えない: 2巡目は口の際の煤が見えなかった）
+KILN_SOOT_MIX = 0.9
 
 
 def to_srgb(c: np.ndarray) -> np.ndarray:
@@ -378,8 +389,9 @@ def to_srgb(c: np.ndarray) -> np.ndarray:
 
 def atlas_pixels(seed: int = 24) -> np.ndarray:
     """線形の色で描く。真鍮: 下ほど緑青がかって暗く、手の触れる上ほど明るい（真鍮の鈍い金）。曇りガラスの天板: 薄い青灰。
-    炉の体（S-27）: 熱で煤けた厚いガラスの暗い青灰（u は口からの近さ: 0 が口の際の煤、v は高さ）。乳白の作品（S-27）: 光らない
-    乳白（オパール）。棚の背板（S-27）: 影の青灰。水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の橙へ"""
+    炉の体（S-30）: 煤けた厚い曇りガラスの薄い青灰（色の進行: 序章は白、薄い青灰）。u は煤の少なさ（0 が口の際と煙道の根の煤、
+    1 が煤のない所）、v は高さ（上ほど明るい）。乳白の作品（S-27）: 光らない乳白（オパール）。棚の背板（S-27）: 影の青灰。
+    水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の橙へ"""
     cols, rows = ATLAS_GRID
     h = TILE_PX
     rng = np.random.default_rng(seed)
@@ -400,9 +412,13 @@ def atlas_pixels(seed: int = 24) -> np.ndarray:
     dark, mid, bright = (0.16, 0.12, 0.05), (0.434, 0.266, 0.095), (0.56, 0.38, 0.15)
     brass = np.where(v < 0.45, lerp(dark, mid, v / 0.45), lerp(mid, bright, (v - 0.45) / 0.55))
     frost = np.broadcast_to(np.array((0.3, 0.34, 0.4)), (h, h, 3)) * (1 + 0.04 * soft)
-    base = lerp((0.055, 0.062, 0.078), (0.1, 0.11, 0.13), v) * (1 + 0.05 * soft)
-    soot = smooth(0.4, 0.0, u)
-    kiln = lerp(base, (0.03, 0.028, 0.03), soot * 0.85)
+    # S-27 は暗い青灰のつや（0.055〜0.13）で、空を映して紺の薬缶か潜水兜に見えた。S-30: 薄い青灰の曇りガラスで、下ほど少し
+    # 沈み、上ほど白みがかる。煤は黒に近い暖かくない灰（火の赤と紛れない）
+    # the rule's (u, v) as atlas_uv puts them inside the tile's margin (so the clean body is not a little sooty)
+    ku = np.clip((u - TILE_MARGIN) / (1 - 2 * TILE_MARGIN), 0, 1)
+    kv = np.clip((v - TILE_MARGIN) / (1 - 2 * TILE_MARGIN), 0, 1)
+    base = lerp(KILN_LOW, KILN_HIGH, kv) * (1 + 0.04 * soft)
+    kiln = lerp(base, KILN_SOOT, np.sqrt(1.0 - ku) * KILN_SOOT_MIX)
     opal = lerp((0.62, 0.63, 0.62), (0.8, 0.8, 0.78), v) * (1 + 0.025 * soft)
     shade = lerp((0.022, 0.03, 0.046), (0.04, 0.05, 0.072), v) * (1 + 0.04 * soft)
     ripple = 0.5 + 0.5 * np.sin(np.hypot(u - 0.5, v - 0.5) * 70)
@@ -525,9 +541,9 @@ def materials() -> dict:
     out = {
         'brass': textured('A0_brass', atlas, metallic=1.0, roughness=0.38),
         'frost': textured('A0_frost', atlas, roughness=0.5),
-        # S-27: the furnace's body (thick, heat-darkened glass: glossy, so it mirrors the dawn), the unlit milky works of the
-        # shelf (opal), the shelf's back
-        'kiln': textured('A0_kiln', atlas, roughness=0.26),
+        # S-30: the furnace's body, thick sooty frosted glass drawn opaque (曇りガラスの粗さ 0.4〜0.6; S-27's 0.26 mirrored the
+        # dawn sky as a glossy navy). S-27: the unlit milky works of the shelf (opal), the shelf's back
+        'kiln': textured('A0_kiln', atlas, roughness=KILN_ROUGHNESS),
         'opal': textured('A0_opal', atlas, roughness=0.22),
         'shade': textured('A0_shade', atlas, roughness=0.85),
         'water': textured('A0_water', atlas, roughness=0.06),
@@ -544,7 +560,7 @@ def materials() -> dict:
     }
     # ビューポート（と確かめ用の Workbench）での色。書き出しには関わらない
     for key, color in (('brass', (0.69, 0.55, 0.34, 1)), ('frost', (0.66, 0.7, 0.74, 1)),
-                       ('kiln', (0.3, 0.32, 0.36, 1)), ('opal', (0.9, 0.9, 0.88, 1)), ('shade', (0.36, 0.39, 0.44, 1)),
+                       ('kiln', (0.62, 0.66, 0.72, 1)), ('opal', (0.9, 0.9, 0.88, 1)), ('shade', (0.36, 0.39, 0.44, 1)),
                        ('water', (0.12, 0.16, 0.2, 1)), ('fire', (1.0, 0.45, 0.1, 1)),
                        ('ember', (0.9, 0.35, 0.1, 1)), ('air', (1, 1, 1, 1)), ('clear', (0.75, 0.9, 0.86, 0.35)),
                        ('frosted', (0.8, 0.85, 0.9, 0.7)), ('bubble', (0.7, 0.88, 0.8, 0.45)),
@@ -558,6 +574,8 @@ def materials() -> dict:
 FIRE_GLOW = 6.0
 MILKY_GLOW = 1.2
 EMBER_GLOW = 1.4
+#: 炉の体の粗さ（S-30。アートディレクション > ガラスの種類: 曇りガラスは粗さ 0.4〜0.6）
+KILN_ROUGHNESS = 0.58
 
 
 # ── 当たり判定（見た目から） ───────────────────────────────────────────────
@@ -807,6 +825,11 @@ COLLAR_INNER = 0.17
 MOUTH_HOLE = 0.19
 #: 火の洞のいちばん熱い所: 奥の芯からこの距離の輪（m）
 HOT_RING = 0.09
+#: 炉の体の煤（S-30）: 口の際の点からの距離（m）で、この内は煤、この外は煤なし。上へは KILN_SOOT_UP 倍に縮めて測る（煤は上る）。
+#: 煙道の根の周りも同じ（薄く）
+KILN_SOOT_MOUTH = (0.2, 0.55)
+KILN_SOOT_UP = 0.6
+KILN_SOOT_FLUE = (0.06, 0.26)
 
 
 def boolean_difference(bm: bmesh.types.BMesh, cutter: bmesh.types.BMesh) -> None:
@@ -841,8 +864,9 @@ def raycast(bvh: BVHTree, origin, direction):
 
 
 def furnace(m) -> None:
-    """吹きガラスの炉（S-27 で作り直した。S-24 は乳白ガラスの泡で、雲のように見えた）。熱で煤けた厚いガラスの泡の集まり（形のルール:
-    建物は泡の集合）に真鍮の帯を締め、口は部屋の中心へ向く。口の奥は火の洞（奥の壁の輪 HOT_RING ほど橙、縁は暗い深い赤）、口の左右に
+    """吹きガラスの炉（S-27 で作り直した。S-24 は乳白ガラスの泡で、雲のように見えた）。煤けた厚い曇りガラスの泡の集まり（形のルール:
+    建物は泡の集合。S-30: 薄い青灰で、煤は口の際と煙道の根だけ。S-27 の暗い紺のつやは薬缶か潜水兜に見えた）に真鍮の帯を締め、
+    口は部屋の中心へ向く。口の奥は火の洞（奥の壁の輪 HOT_RING ほど橙、縁は暗い深い赤）、口の左右に
     中の火が赤く透ける覗き窓（熾火の材質に、縁の細い乳白ガラスの輪）。口には吹き竿が 1 本差したまま、その先を格子の上の真鍮の受けが
     支える。煙道は真鍮の管で、曲がってドームの壁を抜ける"""
     cx, cz = FURNACE['center']
@@ -877,9 +901,6 @@ def furnace(m) -> None:
     bmesh.ops.delete(blob, geom=[v for v in blob.verts if v.co.y < -0.03], context='VERTS')
     bvh = BVHTree.FromBMesh(blob)
     p.merge(blob, m['kiln'])
-    # 体の色: 口の際ほど煤ける（u）、上ほど明るい（v）
-    soot_c = Vector(f(MOUTH_REACH + 0.25, MOUTH_Y))
-    p.uv_rules['A0_kiln'] = lambda co: ((co - soot_c).length / 1.0, co.y / 1.6)
     # 火の洞: 口の奥の椀。面は内（口）を向く。奥の壁の輪がいちばん熱く（橙）、縁ほど暗い深い赤。中心が FURNACE_MOUTH（S-25 の音源）。
     # 縁は真鍮の筒の内側に 2cm 入る（隙間から体の中が見えない）
     back = MOUTH_REACH - 0.12
@@ -937,6 +958,23 @@ def furnace(m) -> None:
     wall = out * (wall_r(y_wall) + 0.25) + Vector((0.0, y_wall, 0.0))
     flue = fillet([tuple(base), tuple(base + Vector((0.0, 0.5, 0.0))), tuple(wall)], 0.35, 5)
     add(tube_bm(flue, 0.075, 8), m['brass'])
+    # 体の色（S-30）: 薄い青灰の曇りガラスで、煤は口の際（熱と煤は上るので、口の上へ伸びる）と煙道の根だけ（u: 煤の少なさ）、
+    # 上ほど明るい（v）
+    soot_c = Vector(f(MOUTH_REACH + 0.25, MOUTH_Y))
+    flue_root = Vector(base)
+
+    def soot(co) -> float:
+        d = co - soot_c
+        up = max(0.0, d.y) * (1.0 - KILN_SOOT_UP)
+        mouth = math.hypot(d.x, d.z, d.y - up)
+        near, far = KILN_SOOT_MOUTH
+        s_mouth = min(1.0, max(0.0, (far - mouth) / (far - near)))
+        near, far = KILN_SOOT_FLUE
+        s_flue = min(1.0, max(0.0, (far - (co - flue_root).length) / (far - near))) * 0.7
+        s_ = max(s_mouth, s_flue)
+        return s_ * s_ * (3 - 2 * s_)
+
+    p.uv_rules['A0_kiln'] = lambda co: (1.0 - soot(co), co.y / 1.6)
     # 口に差したままの吹き竿と、その受け（格子の上）
     pipe_y = lambda a: MOUTH_Y + 0.02 + (a - 0.55) / (MOUTH_PIPE_REACH - 0.55) * 0.18  # noqa: E731
     add(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])

@@ -57,7 +57,8 @@ export const BENCH = { center: [-1.55, 0, -2.45] as Vec3, size: [2.1, 0.9, 0.8] 
 export const BENCH_ORB: Vec3 = [-1.55, 0.99, -2.28];
 /**
  * The furnace (炉) on the right, the only warm light of the workshop (光と時間帯: 夜明け前の青). Bubbles of thick glass
- * (形のルール: 泡の集合) bound with brass, the fire burning red deep in its mouth (S-27); `radius` is its footprint.
+ * (形のルール: 泡の集合) bound with brass, the fire burning red deep in its mouth (S-27); the glass is sooty frosted glass in
+ * the prologue's pale blue-grey, the soot only about the mouth and the flue (色の進行; S-30). `radius` is its footprint.
  */
 export const FURNACE = { center: [2.35, 0, -1.4] as Vec3, radius: 0.95 };
 /** Unit (x, z) the furnace's mouth faces: the centre of the dome, where the grate is. */
@@ -138,10 +139,21 @@ export const WIND_CHIME: Vec3 = [0, 2.22, -3.22];
 
 /** The workshop's glb (`pnpm assets`, job "workshop"), under the app's base URL. */
 export const WORKSHOP_ASSET = 'assets/workshop/a0.glb';
+/** Where S-27's pipe bucket stands by the marver and the cart by the annealer (make_workshop.py PIPE_BUCKET, ANNEAL_CART). */
+const PIPE_BUCKET_AT = { a: 0.5, s: 0.25 } as const;
+const ANNEAL_CART_AT = { a: 0.06, s: 1.12 } as const;
+/**
+ * The shelf's back board (make_workshop.py SHELF_BOARD): from 0.3 m up to 0.44 m above the top tier, 8 mm off the glass,
+ * 2 cm thick.
+ */
+const SHELF_BOARD_AT = { fromY: 0.3, aboveTop: 0.44, gap: 0.008, thick: 0.02 } as const;
+
 /**
  * The objects of WORKSHOP_ASSET (設計書 命名規則: <area>_<kind>_<id>, A0 = 序章) and where each stands (x, z). `col`: it has a
  * collider (_col) shaped like it (空間の可読性と導線 4); the grate is floor, the chime hangs above the head, the pieces
- * stand on furniture.
+ * stand on furniture. Every object of the file is here (S-30), so the unit tests (place, budget, collider size, the rays
+ * both ways) and room.ts's `missing` see them all: the last nine are what S-27 left about the bench, the marver and the
+ * annealer, and the shelf's back board (世界観 > まだそこで暮らしている気配); make_workshop.py holds where they stand.
  */
 export const WORKSHOP_OBJECTS = {
   bench: { name: 'A0_bnch_work01', at: [BENCH.center[0], BENCH.center[2]], col: true },
@@ -161,6 +173,17 @@ export const WORKSHOP_OBJECTS = {
   chair: { name: 'A0_chr_stool01', at: [CHAIR.center[0], CHAIR.center[2]], col: true },
   cup: { name: 'A0_cup_tea01', at: [TEA_CUP[0], TEA_CUP[2]], col: false },
   chime: { name: 'A0_chim_door01', at: [WIND_CHIME[0], WIND_CHIME[2]], col: false },
+  // S-27 (make_workshop.py bench_tools, bench_shelf_wares, marver_tools, pipe_bucket, anneal_cart, anneal_tools,
+  // cart_wares, shelf_wares, shelf_board)
+  benchTools: { name: 'A0_tool_bench01', at: [BENCH.center[0], BENCH.center[2]], col: false },
+  benchShelfWares: { name: 'A0_ware_bench02', at: [BENCH.center[0], BENCH.center[2]], col: false },
+  marverTools: { name: 'A0_tool_marver01', at: [MARVER.center[0], MARVER.center[2]], col: false },
+  pipeBucket: { name: 'A0_bkt_marver01', at: beside(MARVER.center, PIPE_BUCKET_AT), col: true },
+  cart: { name: 'A0_cart_anneal01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: true },
+  cartTools: { name: 'A0_tool_anneal01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: false },
+  cartWares: { name: 'A0_ware_cart01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: false },
+  shelfOpal: { name: 'A0_ware_opal01', at: shelfPoint(), col: false },
+  shelfBoard: { name: 'A0_shlf_board01', at: shelfBoardPoint(), col: true },
 } as const satisfies Record<string, { name: string; at: readonly [number, number]; col: boolean }>;
 
 /** The middle of the shelf's arc at its lowest tier (x, z). */
@@ -168,6 +191,25 @@ function shelfPoint(): [number, number] {
   const a = (((WORKS_SHELF.fromDeg + WORKS_SHELF.toDeg) / 2) * Math.PI) / 180;
   const r = shelfFrontRadius(WORKS_SHELF.tiers[0] ?? 0) + WORKS_SHELF.depth / 2;
   return [r * Math.cos(a), r * Math.sin(a)];
+}
+
+/** The middle of the shelf's back board (x, z): on the leaning wall at the board's middle height (SHELF_BOARD_AT). */
+function shelfBoardPoint(): [number, number] {
+  const { fromY, aboveTop, gap, thick } = SHELF_BOARD_AT;
+  const a = (((WORKS_SHELF.fromDeg + WORKS_SHELF.toDeg) / 2) * Math.PI) / 180;
+  const y = (fromY + (WORKS_SHELF.tiers[WORKS_SHELF.tiers.length - 1] ?? 0) + aboveTop) / 2;
+  const r = domeWallRadius(y) - gap - thick / 2;
+  return [r * Math.cos(a), r * Math.sin(a)];
+}
+
+/**
+ * A point (x, z) by a piece of furniture standing at `c`: `a` metres toward the centre of the dome and `s` to the right of
+ * that (make_workshop.py Frame).
+ */
+function beside(c: Vec3, { a, s }: { a: number; s: number }): [number, number] {
+  const l = Math.hypot(c[0], c[2]);
+  const [fx, fz] = [-c[0] / l, -c[2] / l];
+  return [c[0] + fx * a - fz * s, c[2] + fz * a + fx * s];
 }
 
 /** The way from the door to the broken edge (一本道). Starts inside the door, under the floor disc. */
