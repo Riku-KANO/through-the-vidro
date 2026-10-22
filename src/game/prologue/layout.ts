@@ -92,6 +92,18 @@ export const MARVER = { center: [2.3, 0, 1.6] as Vec3, size: [0.9, 0.85, 0.5] as
 /** 水桶: a frosted-glass tub with brass hoops, left of the marver (S-25: a drop falls into it). Water surface at `water`. */
 export const WATER_TUB = { center: [1.45, 0, 1.85] as Vec3, radius: 0.33, height: 0.46, water: 0.36 };
 /**
+ * S-25: where a drop falls into the tub — from the wet brass ladle hung on its rim, onto the water. The ladle's bowl
+ * hangs 0.08 m from the tub's middle toward the room's centre and 0.03 m to the right of that (make_workshop.py
+ * water_tub, its Frame); the drop meets the water straight below it.
+ */
+export const TUB_DRIP: Vec3 = (() => {
+  const [cx, , cz] = WATER_TUB.center;
+  const l = Math.hypot(cx, cz);
+  const [fx, fz] = [-cx / l, -cz / l];
+  // make_workshop.py Frame: right of the facing is (-fz, fx)
+  return [cx + fx * 0.08 - fz * 0.03, WATER_TUB.water, cz + fz * 0.08 + fx * 0.03];
+})();
+/**
  * 徐冷炉: a frosted-glass bubble at the back, warm inside (finished pieces cooling), with an arched mouth toward the centre
  * `mouthHalfDeg` either side and `mouthHeight` high.
  */

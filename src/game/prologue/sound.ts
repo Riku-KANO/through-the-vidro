@@ -7,7 +7,10 @@ import {
   AmbiencePlayer,
   type AmbienceSourceState,
   CHIME_SOURCES,
+  DOOR_CHIME_SOURCES,
   DROP_SOURCES,
+  type DraughtLog,
+  FURNACE_SOURCE,
   loadAmbienceBanks,
   WIND_LOOP_SECONDS,
   WIND_SOURCE,
@@ -30,7 +33,7 @@ import { loadBank, scheduleBuffer, startLoop } from '../../core/audio/bank';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import type { GlassStrength } from '../../core/audio/glass';
 import { renderOffline } from '../../core/audio/offline';
-import { mulberry32, type Rng } from '../../core/audio/rng';
+import { mulberry32, randomSeed } from '../../core/audio/rng';
 import type { Vec3 } from '../../layers/footing';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
 import { EYE_HEIGHT, WALK_SPEED } from '../player/constants';
@@ -40,13 +43,16 @@ import {
   DROP,
   EDGE_Z,
   FAR,
-  FURNACE,
+  FURNACE_MOUTH,
   floorAt,
   GATE,
   LAMPS,
   lookDirection,
   PEDESTAL_ORB,
   SPAWNS,
+  type SpawnName,
+  TUB_DRIP,
+  WIND_CHIME,
   WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_TOP,
 } from './layout';
@@ -68,6 +74,8 @@ import type { RoomProbe } from './room';
  *    in a few places (PROLOGUE_AMBIENCE), on the ambience bus, fading in once the room is played (not on the home
  *    screen before the dive). Both are synthesized sounds behind the bank port (src/core/audio/bank.ts), loaded once
  *    the engine is there.
+ *  - S-25: the workshop's own sounds where S-24 drew them (layout.ts): the furnace burning low in its mouth, a drop
+ *    falling from the ladle into the tub, the chime above the door rung by the door's draughts.
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
 
@@ -189,7 +197,10 @@ export interface SoundRoom {
 
 /* ---------- S-22: where the workshop's ambience is placed ---------- */
 
-/** One ambient sound in the room: what, where, and (wind) where in its loop it starts, (drops) on which notes. */
+/**
+ * One ambient sound in the room: what, where, and (wind, fire) where in its loop it starts, (drops) on which notes,
+ * (chimes) which bells and, for the door's, the wind whose draughts ring them.
+ */
 export interface AmbientSpot {
   readonly id: string;
   readonly kind: AmbienceKind;
@@ -197,6 +208,14 @@ export interface AmbientSpot {
   readonly offset?: number;
   /** Indices into DROP_NOTES (src/audio/ambience.ts). */
   readonly notes?: readonly number[];
+  readonly bells?: 'town' | 'door';
+  /** The id of the wind spot a draught swells (the door chime's). */
+  readonly draught?: string;
+  /**
+   * Draws when it strikes from a random stream of its own (S-25), so adding it left the timing of S-22's sounds as it
+   * was — live as in the seeded renders the ear and the sensors were tuned on.
+   */
+  readonly ownStream?: boolean;
 }
 
 const [, LAMP] = LAMPS;
@@ -206,11 +225,17 @@ const [, LAMP] = LAMPS;
  *  - the wind through the glass gaps: the skylight at the top of the dome and the door, and outside, rising from the
  *    valley through the broken glass at the edge of the way (S-06: 割れた破片), so the way and the far shore are not
  *    left without air. Each starts at another point of the loop, so no two gaps breathe in step.
+ *  - 炉 (S-25): burning low in the furnace's mouth, where its fire is drawn (FURNACE_MOUTH): someone keeps it going
+ *    (物語と世界: まだそこで暮らしている気配). Nearer is louder by distance alone.
+ *  - 扉の上の風鈴 (S-25): the bell S-24 hung inside the door (WIND_CHIME), rung now and then by a draught that comes in
+ *    at the door and swells the wind there (wind:door)
  *  - 遠くの風鈴: hung in the town beyond the closed gate, so they are far away from the workshop (about 26 m) and come
  *    closer along the way — the sound of somewhere lived in, ahead (物語と世界: まだそこで暮らしている気配)
- *  - drops: condensation off the skylight's rim onto the glass floor, the quench bucket by the furnace (deeper), and
- *    the milky globe of a lamp onto the stone of the way (higher)
- * None of these is drawn (sounds of what is around, not things to find); the floors they fall on are.
+ *  - drops: condensation off the skylight's rim onto the glass floor, the wet ladle hung on the tub's rim into its
+ *    water (S-25: TUB_DRIP, deeper; S-22 had it over the brass grate, where nothing is drawn), and the milky globe of a
+ *    lamp onto the stone of the way (higher)
+ * The wind's gaps, the far chimes and the dripping skylight and lamp are not drawn (sounds of what is around); the
+ * furnace, the tub and the door's chime are, and their sounds come from where they are drawn.
  */
 export const PROLOGUE_AMBIENCE: readonly AmbientSpot[] = [
   { id: 'wind:skylight', kind: 'wind', position: [0, WORKSHOP_TOP - 0.15, 0], offset: 0 },
@@ -226,14 +251,18 @@ export const PROLOGUE_AMBIENCE: readonly AmbientSpot[] = [
     position: [0, -0.6, (EDGE_Z + FAR.maxZ) / 2],
     offset: WIND_LOOP_SECONDS / 4,
   },
+  { id: 'fire:furnace', kind: 'fire', position: FURNACE_MOUTH },
+  {
+    id: 'chimes:door',
+    kind: 'chimes',
+    bells: 'door',
+    draught: 'wind:door',
+    position: WIND_CHIME,
+    ownStream: true,
+  },
   { id: 'chimes:town', kind: 'chimes', position: [1.6, 3.2, GATE.z - 6.4] },
   { id: 'drops:skylight', kind: 'drops', position: [0.55, 0.02, 0.55], notes: [3, 4, 5] },
-  {
-    id: 'drops:bucket',
-    kind: 'drops',
-    position: [FURNACE.center[0] - 1.0, 0.45, FURNACE.center[2] + 0.9],
-    notes: [0, 1, 2, 3],
-  },
+  { id: 'drops:tub', kind: 'drops', position: TUB_DRIP, notes: [0, 1, 2, 3] },
   {
     id: 'drops:lamp',
     kind: 'drops',
@@ -242,24 +271,60 @@ export const PROLOGUE_AMBIENCE: readonly AmbientSpot[] = [
   },
 ];
 
-/** Emitters for PROLOGUE_AMBIENCE on the ambience bus, and the player that plays into them (live and offline alike). */
+/** A spot of the room's ambience and the emitter it plays from. */
+interface PlacedSpot {
+  spot: AmbientSpot;
+  emitter: Emitter;
+}
+
+/** FNV-1a of a string: a spot's own stream is the seed mixed with its id. */
+function idHash(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193);
+  return h >>> 0;
+}
+
+interface PlaceOptions extends AmbienceOptions {
+  /** Seeds the timing (the sensor's renders); live, a random one. */
+  seed?: number;
+  /** Only the spots of PROLOGUE_AMBIENCE with these ids. */
+  only?: readonly string[];
+}
+
+/**
+ * Emitters for PROLOGUE_AMBIENCE (or only the spots named in `only`) on the ambience bus, and the player that plays
+ * into them (live and offline alike).
+ */
 function placeAmbience(
   engine: AudioEngine,
   banks: AmbienceBanks,
-  rng?: Rng,
-  opts?: AmbienceOptions,
-): { player: AmbiencePlayer; emitters: Emitter[] } {
-  const emitters = PROLOGUE_AMBIENCE.map((s) =>
-    engine.createEmitter('ambience', { x: s.position[0], y: s.position[1], z: s.position[2] }),
-  );
-  const places = PROLOGUE_AMBIENCE.map((s, i) => ({
-    id: s.id,
-    kind: s.kind,
-    input: (emitters[i] as Emitter).input,
-    offset: s.offset,
-    notes: s.notes,
+  opts: PlaceOptions = {},
+): { player: AmbiencePlayer; placed: PlacedSpot[] } {
+  const { only } = opts;
+  const seed = opts.seed ?? randomSeed();
+  const spots = only ? PROLOGUE_AMBIENCE.filter((s) => only.includes(s.id)) : PROLOGUE_AMBIENCE;
+  const placed = spots.map((spot) => ({
+    spot,
+    emitter: engine.createEmitter('ambience', {
+      x: spot.position[0],
+      y: spot.position[1],
+      z: spot.position[2],
+    }),
   }));
-  return { player: new AmbiencePlayer(engine.ctx, banks, places, rng, opts), emitters };
+  const places = placed.map(({ spot, emitter }) => ({
+    id: spot.id,
+    kind: spot.kind,
+    input: emitter.input,
+    offset: spot.offset,
+    notes: spot.notes,
+    bells: spot.bells,
+    draught: spot.draught,
+    rng: spot.ownStream ? mulberry32((seed ^ idHash(spot.id)) >>> 0) : undefined,
+  }));
+  const player = new AmbiencePlayer(engine.ctx, banks, places, mulberry32(seed), {
+    waitForRunning: opts.waitForRunning,
+  });
+  return { player, placed };
 }
 
 /** Everything the room's footsteps and ambience play from (S-22). */
@@ -275,23 +340,30 @@ export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal
 /* ---------- S-22: offline renders for the sensor (OfflineAudioContext, through the game's engine) ---------- */
 
 export type SoundLabSpec =
-  /** One sound of a bank at unity, onto the ambience bus (no emitter), in a room's reverb. */
+  /**
+   * One sound of a bank at unity, onto the ambience bus (no emitter), in a room's reverb. The loops (wind, S-25 fire)
+   * play on from the start.
+   */
   | {
       kind: 'sound';
-      bank: FloorMaterial | 'chimes' | 'drops' | 'wind';
+      bank: FloorMaterial | 'chimes' | 'drops' | 'wind' | 'fire' | 'door-chime';
       index: number;
       seconds: number;
       room?: 'workshop' | 'dome';
     }
   /** `steps` footsteps on a floor at the walking cadence, from the feet below the listener (HRTF), in the workshop. */
   | { kind: 'walk'; material: FloorMaterial; steps: number }
-  /** The room's ambience heard from a spawn (HRTF, the workshop), with a seed and an ambience volume. */
+  /**
+   * The room's ambience heard from a spawn (HRTF, the workshop), with a seed and an ambience volume; `only` keeps the
+   * spots of PROLOGUE_AMBIENCE named (S-25: one sound heard on its own from where you stand).
+   */
   | {
       kind: 'ambience';
       seconds: number;
       seed: number;
-      at: 'bench' | 'path' | 'dead-end' | 'far';
+      at: SpawnName;
       volume?: number;
+      only?: readonly string[];
     };
 
 export interface SoundLabResult {
@@ -300,6 +372,8 @@ export interface SoundLabResult {
   right: Float32Array;
   /** The chimes and drops struck (ambience). */
   hits?: AmbienceHit[];
+  /** S-25: the door's draughts (ambience). */
+  draughts?: DraughtLog[];
 }
 
 const LAB_RATE = 44100;
@@ -310,24 +384,30 @@ const WALK_STEP_SECONDS = 0.5;
 export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult> {
   const seconds = spec.kind === 'walk' ? spec.steps * WALK_STEP_SECONDS + 1 : spec.seconds;
   let hits: AmbienceHit[] | undefined;
+  let draughts: DraughtLog[] | undefined;
   const buffer = await renderOffline(
     { duration: seconds, sampleRate: LAB_RATE, channels: 2 },
     async (ctx) => {
       const room = spec.kind === 'sound' && spec.room === 'dome' ? VIDRO_ROOMS.dome : VIDRO_ROOMS.workshop;
       const engine = await createVidroEngine(ctx, room);
       if (spec.kind === 'sound') {
+        const { bank, index } = spec;
         const source =
-          spec.bank === 'chimes'
-            ? CHIME_SOURCES[spec.index]
-            : spec.bank === 'drops'
-              ? DROP_SOURCES[spec.index]
-              : spec.bank === 'wind'
-                ? WIND_SOURCE
-                : FOOTSTEP_SOURCES[spec.bank][spec.index];
-        if (!source) throw new RangeError(`no sound ${spec.bank} #${spec.index}`);
+          bank === 'chimes'
+            ? CHIME_SOURCES[index]
+            : bank === 'door-chime'
+              ? DOOR_CHIME_SOURCES[index]
+              : bank === 'drops'
+                ? DROP_SOURCES[index]
+                : bank === 'wind'
+                  ? WIND_SOURCE
+                  : bank === 'fire'
+                    ? FURNACE_SOURCE
+                    : FOOTSTEP_SOURCES[bank][index];
+        if (!source) throw new RangeError(`no sound ${bank} #${index}`);
         const [buf] = await loadBank(ctx, [source]);
         if (!buf) throw new Error(`sound ${source.id} did not render`);
-        if (spec.bank === 'wind') startLoop(ctx, engine.bus('ambience'), buf, 0);
+        if (bank === 'wind' || bank === 'fire') startLoop(ctx, engine.bus('ambience'), buf, 0);
         else scheduleBuffer(ctx, engine.bus('ambience'), buf, 0.01);
       } else if (spec.kind === 'walk') {
         engine.setListener({ x: 0, y: EYE_HEIGHT, z: 0 }, { x: 0, y: 0, z: -1 }, { x: 0, y: 1, z: 0 });
@@ -352,10 +432,15 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
         );
         engine.setVolume('ambience', spec.volume ?? VIDRO_VOLUMES.ambience);
         const banks = await loadAmbienceBanks(ctx);
-        const { player } = placeAmbience(engine, banks, mulberry32(spec.seed), { waitForRunning: false });
+        const { player } = placeAmbience(engine, banks, {
+          seed: spec.seed,
+          waitForRunning: false,
+          only: spec.only,
+        });
         player.start(0);
         for (let t = 0; t <= seconds; t += 0.1) player.update(t);
         hits = player.hits;
+        draughts = player.draughts;
       }
       return engine;
     },
@@ -365,6 +450,7 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
     left: buffer.getChannelData(0),
     right: buffer.getChannelData(1),
     hits,
+    draughts,
   };
 }
 
@@ -444,6 +530,15 @@ export interface FootstepsProbe {
   log: FootstepEntry[];
 }
 
+/** S-25: one spot of the ambience as the audio graph has it. */
+export interface AmbiencePlaceProbe {
+  id: string;
+  kind: AmbienceKind;
+  /** Where its emitter's PannerNode stands (read back from the node, not from the table). */
+  position: [number, number, number];
+  panning: string;
+}
+
 export interface AmbienceProbe {
   /** Its sounds are loaded and its emitters placed. */
   ready: boolean;
@@ -452,9 +547,25 @@ export interface AmbienceProbe {
   sources: AmbienceSourceState[];
   /** How loud each kind sounds now, at its source (RMS of the last ~43 ms). */
   levels: Record<AmbienceKind, number>;
+  /** S-25: each spot's emitter, in PROLOGUE_AMBIENCE's order (none before the sounds are loaded). */
+  places: AmbiencePlaceProbe[];
+  /** S-25: the last strikes of chimes and drops (at most 64), oldest first. */
+  hits: AmbienceHit[];
+  /** S-25: the door's last draughts (at most 16), oldest first. */
+  draughts: DraughtLog[];
 }
 
-const SILENT_LEVELS: Readonly<Record<AmbienceKind, number>> = { wind: 0, chimes: 0, drops: 0 };
+const SILENT_LEVELS: Readonly<Record<AmbienceKind, number>> = { wind: 0, fire: 0, chimes: 0, drops: 0 };
+
+/** Where a PannerNode stands (its AudioParams; the old setPosition-only API is not read). */
+function pannerPosition(node: AudioNode): [number, number, number] {
+  const p = node as PannerNode;
+  return [
+    p.positionX?.value ?? Number.NaN,
+    p.positionY?.value ?? Number.NaN,
+    p.positionZ?.value ?? Number.NaN,
+  ];
+}
 const MAX_STEPS_LOGGED = 64;
 
 export interface PrologueSound {
@@ -526,6 +637,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   // S-22: the footsteps and the ambience, once their sounds are loaded
   let steps: { player: Footsteps; feet: Emitter } | null = null;
   let ambience: AmbiencePlayer | null = null;
+  let ambienceSpots: PlacedSpot[] = [];
   const stepLog: FootstepEntry[] = [];
   const stepCounts = { count: 0, refused: 0, skipped: 0, missing: 0, voices: 0 };
   /** Stops the loading of the sounds when the room is left before they are all made. */
@@ -606,10 +718,11 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         if (disposed || engine !== e) return;
         const p = roomProbe.position;
         const feet = e.createEmitter('ambience', { x: p.x, y: p.y, z: p.z });
-        const placed = placeAmbience(e, banks.ambience);
-        live.push(feet, ...placed.emitters);
+        const { player: placedPlayer, placed } = placeAmbience(e, banks.ambience);
+        live.push(feet, ...placed.map((p) => p.emitter));
         steps = { player: new Footsteps(banks.footsteps), feet };
-        ambience = placed.player;
+        ambience = placedPlayer;
+        ambienceSpots = placed;
       },
       (err) => {
         if (!disposed) console.error('S-22: the footsteps and the ambience could not be loaded:', err);
@@ -790,6 +903,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         playing: ambience?.playing ?? false,
         sources: ambience?.sources ?? [],
         levels: ambience?.levels() ?? { ...SILENT_LEVELS },
+        places: ambienceSpots.map(({ spot, emitter }) => ({
+          id: spot.id,
+          kind: spot.kind,
+          position: pannerPosition(emitter.input),
+          panning: (emitter.input as PannerNode).panningModel,
+        })),
+        hits: ambience ? [...ambience.hits] : [],
+        draughts: ambience ? [...ambience.draughts] : [],
       };
     },
   } as Omit<SoundProbe, 'render'> as SoundProbe;
@@ -814,6 +935,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       ambience?.dispose();
       for (const e of live) e.dispose();
       live.length = 0;
+      ambienceSpots = [];
       // a shared engine and its context are its owner's to fade out and close
       if (shared) return;
       const e = engine;
