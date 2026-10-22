@@ -33,7 +33,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 整形 | `pnpm format` |
 | アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ |
 | 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
-| 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop` |
+| 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop`。アトラスの区画を (u, v) の式で描くときは、`atlas_uv` が 0〜1 を区画の 0.12〜0.88（`TILE_MARGIN`）に写す前提で描く（S-30） |
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
@@ -68,6 +68,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **見えることのセンサー（S-27）**: `?debug=1` の `renderer.render` を包んで場面とカメラをつかみ、物を名前で隠した絵と比べて、物の頂点を画面に
   写した範囲のうち変わる画素の割合を測る（`tests/e2e/S-27-workshop-look.spec.ts`）。同じ絵を2枚撮って違う画素は除く。画面全体の割合で測ると、
   物の小ささと画面の揺らぎで余裕がなくなる。
+  物の色だけを見るときは、隠す代わりに平らな色の材質に替えて差を取り、揺れる灯りの雑音は差の大きさで比べ、手の玉の円は除く
+  （`tests/e2e/S-30-furnace-colour.spec.ts`）。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -168,6 +170,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。球の壁に沿って縦にも曲がる部品（棚の背板）は高さでも分けて包む（S-27）。
   家具を足したら、目覚める位置から行ける床が家具の立つ所のほかに減らないことを確かめる（Blender の単体 `test_new_furniture_shuts_no_floor_off`。
   体の直径より広くても、傾く壁で頭がつかえて通れない隙間がある）。
+  家具を足したら `WORKSHOP_OBJECTS`（layout.ts）にも足す（`workshop-asset.test.ts` が glb の物がすべてそこにあること、`physics.test.ts` が glb の
+  `_col` がすべて両向きの検査に入ることを確かめる）。当たり判定の大きさの単体は、見えている物のいちばん低い所から測る（壁に掛かる物がある。S-30）。
 - **GPU を使う検査の間は、同じ機械で CPU を多く使う仕事（Blender、KTX2 の書き出し）を走らせない（S-24）。** S-06 の「最長フレーム 200ms」が
   376ms で落ちた。
 - **表の層にしかない物の当たり判定は、置いた玉の球に丸ごと入った区画だけ切る（S-28）。** `splitSurface`（辺 0.4m 以下）→ `SurfaceColliders`。
