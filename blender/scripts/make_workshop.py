@@ -41,6 +41,12 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 - A0_shlf_board01(+_col)   作品の棚の背板（傾く壁に沿う暗い不透明の板、四隅を丸め、縁を一周する真鍮の枠。S-27）
 - A0_ware_clear01 / A0_ware_bubble01 / A0_ware_frost01 / A0_ware_opal01  棚の瓶・器・ビードロ（材質ごとに一つ。乳白は S-27）
 - A0_chim_door01           扉の上の風鈴（透明ガラス、真鍮の吊り金具、曇りガラスの短冊）
+- A0_flr_floor01           工房の床の円盤（S-26: room-art.ts から移した。曇りガラスのタイルはゲームがコードで描く: 材質の extras の procedural）
+- A0_bld_frame01           ドームの真鍮の枠（S-26: room-art.ts から移した。経線・扉の枠・天窓と裾と中ほどの輪。ドームのガラスはゲームが描く）
+
+焼き込み（S-26）: 書き出さない光の集まり `bake_lights`（太陽・天窓の空の青・炉の火）と世界 `A0_dawn`（夜明け前の空と半球光の
+正距円筒の画像）を置く。値はゲームの実時間の光（src/game/prologue/room-art.ts の WORKSHOP_LIGHTS）と同じ。`pnpm assets` が
+不透明な物の光を 2つ目の UV に焼き、glb の中に KTX2 で入れる（blender/scripts/pipeline.py）。
 
 材質: ガラスは印（glass_clear / glass_frosted / glass_bubble / glass_milky）でゲームが作り直す。不透明な物（真鍮・曇りガラスの
 天板・炉の体・乳白の作品・棚の背板・水・火・熾火）は 1 枚のアトラス（A0_atlas、512×256px の 4×2 区画）を共有する。泡は A0_air。
@@ -514,6 +520,12 @@ def textured(name: str, atlas, *, metallic: float = 0.0, roughness: float = 0.5,
     tex = m.node_tree.nodes.new('ShaderNodeTexImage')
     tex.image = atlas
     tex.location = (-400, 200)
+    # S-26: the atlas always reads the first UV. Without a UV node it reads the UV that renders, which the bake turns to the
+    # second one (common/bake.py), and the fire's emission and the bounce off every piece took the wrong colours
+    uvmap = m.node_tree.nodes.new('ShaderNodeUVMap')
+    uvmap.uv_map = 'UVMap'
+    uvmap.location = (-600, 200)
+    m.node_tree.links.new(uvmap.outputs['UV'], tex.inputs['Vector'])
     if base_black:
         p.inputs['Base Color'].default_value = (0.0, 0.0, 0.0, 1.0)
     else:
@@ -538,6 +550,25 @@ def glass(name: str, *, thickness: float, absorption, distance: float, roughness
     vol.inputs['Density'].default_value = 1.0 / distance
     m.node_tree.links.new(vol.outputs['Volume'], m.node_tree.nodes['Material Output'].inputs['Volume'])
     gltf_output(m, thickness)
+    return m
+
+
+#: 床の曇りガラスのタイル（S-26: room-art.ts の床の円盤から移した。ゲームはこの材質を src/core/glass の createFrostedFloorMaterial
+#: に作り直す: 目地の真鍮と、タイルごとのむらは画面の画素の大きさに合わせてコードで描く）。値は room-art.ts が渡していたもの
+FLOOR_TILE = 0.9
+FLOOR_FROST = '#a7b1bc'
+#: 焼き込みでの床の色（線形）: FLOOR_FROST にタイルのむら（0.94〜1）と中の明るみ（0.92〜1）の平均を掛けた色。目地の真鍮（面積の 5%）は入れない
+FLOOR_BAKE_COLOR = (0.36, 0.41, 0.47)
+
+
+def floor_material():
+    """工房の床（曇りガラスのタイル、歩ける面なので不透明）。extras の procedural をゲームが読んで、コードの床の材質にする"""
+    m, p = principled('A0_floor')
+    p.inputs['Base Color'].default_value = (*FLOOR_BAKE_COLOR, 1.0)
+    p.inputs['Roughness'].default_value = 0.5
+    m['procedural'] = 'frosted_floor'
+    m['tile_size'] = FLOOR_TILE
+    m['frost_color'] = FLOOR_FROST
     return m
 
 
@@ -572,11 +603,16 @@ def materials() -> dict:
                          roughness=0.45),
         'bubble': glass('glass_bubble', thickness=0.05, absorption=(0.8, 0.93, 0.86), distance=0.9),
         'milky': milky,
+        'floor': floor_material(),
     }
+    # S-26: what the bake leaves out (its faces get no room in the lightmap, the game gives them none): the fire and the embers
+    # are their own light, the air bubbles sit inside glass. Exported as the material's extras (`bake: false`)
+    for key in ('fire', 'ember', 'air'):
+        out[key]['bake'] = False
     # ビューポート（と確かめ用の Workbench）での色。書き出しには関わらない
     for key, color in (('brass', (0.69, 0.55, 0.34, 1)), ('frost', (0.66, 0.7, 0.74, 1)),
                        ('kiln', (0.62, 0.66, 0.72, 1)), ('opal', (0.9, 0.9, 0.88, 1)), ('shade', (0.36, 0.39, 0.44, 1)),
-                       ('water', (0.12, 0.16, 0.2, 1)), ('fire', (1.0, 0.45, 0.1, 1)),
+                       ('water', (0.12, 0.16, 0.2, 1)), ('fire', (1.0, 0.45, 0.1, 1)), ('floor', (0.4, 0.44, 0.5, 1)),
                        ('ember', (0.9, 0.35, 0.1, 1)), ('air', (1, 1, 1, 1)), ('clear', (0.75, 0.9, 0.86, 0.35)),
                        ('frosted', (0.8, 0.85, 0.9, 0.7)), ('bubble', (0.7, 0.88, 0.8, 0.45)),
                        ('milky', (0.98, 0.86, 0.72, 1))):
@@ -1691,10 +1727,210 @@ def wind_chime(m) -> None:
     build(p, 'A0_chim_door01', (x, y, z))
 
 
+# ── 工房の殻: 床とドームの真鍮の枠（S-26。room-art.ts のコードの形から移した。ドームのガラスはゲームがコードで描く） ──────────
+#: ドームの列の数と扉の列（src/game/prologue/shapes.ts の DOME_COLUMNS・DOOR_COLUMNS と同じ）
+DOME_COLUMNS = 96
+DOOR_COLUMNS = max(2, 2 * round(math.asin(DOOR['half_width'] / FLOOR_R) / (2 * math.pi / DOME_COLUMNS)))
+THETA_OCULUS = math.asin(OCULUS / DOME_R)
+THETA_FLOOR = math.acos(-DOME_CY / DOME_R)
+THETA_DOOR = math.acos((DOOR['height'] - DOME_CY) / DOME_R)
+
+
+def dome_point(theta: float, phi: float, inset: float = 0.0) -> tuple[float, float, float]:
+    """ドームの球の上の点（shapes.ts の domePoint）。theta は上からの角、phi は +X から +Z への方位"""
+    r = DOME_R - inset
+    return (r * math.sin(theta) * math.cos(phi), DOME_CY + r * math.cos(theta), r * math.sin(theta) * math.sin(phi))
+
+
+def floor(m) -> None:
+    """工房の床（曇りガラス、ドームの裾より 5cm 外まで。room-art.ts の円盤の上の面）。円盤の下と縁は台座の岩（room-art.ts の
+    plinth、上の面は 4mm 下で床より広い）に埋まって見えないので作らない（ライトマップの場所を取らない）"""
+    p = Part()
+    p.merge(lathe_bm([(FLOOR_R + 0.05, FLOOR_TOP), (0.0, FLOOR_TOP)], 72), m['floor'], smooth=False)
+    build(p, 'A0_flr_floor01', (0.0, 0.0, 0.0), sharp_deg=30)
+
+
+def dome_frame(m) -> None:
+    """ドームの真鍮の枠（形のルール: 透明なドームの形は真鍮が与える。room-art.ts と同じ並び）: 扉を避けた 12 本の経線、扉の両側の
+    経線と上の緯線、天窓の輪、裾の輪、中ほどの細い輪。真鍮の色は room-art.ts の真鍮（BRASS_COLOR）と同じアトラスの中ほど"""
+    p = Part()
+    dphi = 2 * math.pi / DOME_COLUMNS
+    door_a = -math.pi / 2 - (DOOR_COLUMNS / 2) * dphi
+    door_b = door_a + DOOR_COLUMNS * dphi
+
+    def meridian(phi: float, t0: float, t1: float) -> None:
+        p.merge(tube_bm([dome_point(t0 + (t1 - t0) * i / 20, phi, 0.02) for i in range(21)], 0.035, 6), m['brass'])
+
+    for i in range(12):
+        meridian(-math.pi / 2 + math.pi / 12 + i * math.pi / 6, THETA_OCULUS, THETA_FLOOR)
+    meridian(door_a, THETA_DOOR, THETA_FLOOR)
+    meridian(door_b, THETA_DOOR, THETA_FLOOR)
+    n = max(6, math.ceil((door_b - door_a) / (2 * math.pi) * 96))
+    p.merge(tube_bm([dome_point(THETA_DOOR, door_a + (door_b - door_a) * i / n, 0.02) for i in range(n + 1)], 0.04, 6),
+            m['brass'])
+    for theta, r in ((THETA_OCULUS, 0.05), (THETA_FLOOR - 0.004, 0.06), ((THETA_OCULUS + THETA_DOOR) / 2, 0.022)):
+        y = DOME_CY + math.cos(theta) * DOME_R
+        p.merge(tube_bm(circle((0.0, y, 0.0), math.sin(theta) * DOME_R, 128), r, 8, closed=True), m['brass'])
+    # BRASS_COLOR (0xb08d57) is the atlas's brass at v = 0.45 (atlas_pixels: mid)
+    p.uv_rules[m['brass'].name] = lambda co: (abs(((co.x + co.z) * 0.9) % 2.0 - 1.0), 0.45)
+    build(p, 'A0_bld_frame01', (0.0, 0.0, 0.0), sharp_deg=0)
+
+
+# ── 焼き込みの光（S-26。書き出さない: ライトと世界はゲームが自分で置く） ─────────────────────────────────
+# 設計書 光と時間帯: 序章は夜明け前の青。太陽1灯＋空からの環境光が基本。静止した光と影はBlenderで焼き込み、動く物だけを実時間で照らす。
+# 焼く光はゲームの実時間の光（src/game/prologue/room-art.ts の WORKSHOP_LIGHTS）と同じ値で置く。ゲームはそれを動く物と、焼いて
+# いない物に当て続ける。三角の単位（three の物理的な光: 平行光は照度、点・スポットは光度 cd、半球光は照度）から Blender へ:
+# 太陽の強さ = 照度、点・スポットの強さ（W）= 4π × 光度、半球光と環境画像は世界の放射輝度（半球光は照度 / π）。
+# 書いた値は書き出しの時に glb の scene の extras（bake.lights）に残り、ゲームの単体テストが room-art.ts の値と照らし合わせる。
+#: 夜明けの方向（room-art.ts DAWN）、太陽（DirectionalLight 0xffbd86、2.5。位置は DAWN × 30 で高さ 7、狙いは扉の外 (0, 0, -8)）
+DAWN = Vector((0.78, 0.0, -0.62)).normalized()
+SUN_COLOR = 'ffbd86'
+SUN_LUX = 2.5
+SUN_FROM = Vector((DAWN.x * 30, 7.0, DAWN.z * 30)).normalized()
+#: 太陽の見かけの角（度）。ゲームの影は 1024px で 30m 四方をぼかした柔らかい影
+SUN_ANGLE_DEG = 1.5
+#: 空の半球光（HemisphereLight 0x7890c0 / 0x181c28、0.8）
+HEMI_SKY = '7890c0'
+HEMI_GROUND = '181c28'
+HEMI_INTENSITY = 0.8
+#: 空（room-art.ts の ZENITH・HORIZON_COOL・HORIZON_WARM。線形）と、反射用の環境の街の帯と夜明けの光の球
+ZENITH = (0.014, 0.03, 0.09)
+HORIZON_COOL = (0.21, 0.28, 0.41)
+HORIZON_WARM = (0.98, 0.6, 0.38)
+ENV_BAND = {'color': (0.05, 0.07, 0.12), 'radius': 40.0, 'from_y': -2.0, 'to_y': 4.0}
+ENV_GLOW = {'color': (5.0, 3.6, 2.4), 'distance': 38.0, 'y': 4.0, 'radius': 3.5}
+#: 天窓から作業台の玉へ落ちる空の青（SpotLight (0.52, 0.66, 1.0)、26、角 0.13、半影 0.75、減衰 1.4。天井の 0.2m 下から玉へ）
+SKYLIGHT_COLOR = (0.52, 0.66, 1.0)
+SKYLIGHT_CD = 26.0
+SKYLIGHT_DECAY = 1.4
+SKYLIGHT_ANGLE = 0.13
+SKYLIGHT_PENUMBRA = 0.75
+#: 炉の口の火（SpotLight 0xff6a2a、7.5、角 1.4、半影 0.6。口の開きの中、火から 0.1m 前・0.1m 横・0.04m 上。狙いは口の向きから
+#: 扉の側へ 0.75 回した床の 1.6m 先）
+FIRE_COLOR = 'ff6a2a'
+FIRE_CD = 7.5
+FIRE_ANGLE = 1.4
+FIRE_PENUMBRA = 0.6
+FIRE_REACH, FIRE_SIDE, FIRE_LIFT = 0.1, 0.1, 0.04
+FIRE_AIM, FIRE_AIM_TURN = 1.6, 0.75
+#: 光の玉の大きさ（m。焼いた影の柔らかさ）
+LIGHT_RADIUS = {'skylight': 0.1, 'fire': 0.06}
+#: 空の画像（正距円筒）の大きさ
+SKY_PX = (512, 256)
+
+
+def srgb_hex(h: str) -> tuple[float, float, float]:
+    """three の Color(0xRRGGBB) と同じ: sRGB の 16 進を線形へ"""
+    c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    return tuple(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c)
+
+
+def furnace_mouth() -> Vector:
+    cx, cz = FURNACE['center']
+    return Vector((cx + FACING[0] * MOUTH_REACH, MOUTH_Y, cz + FACING[1] * MOUTH_REACH))
+
+
+def fire_light() -> tuple[Vector, Vector]:
+    """炉の灯りの位置と狙い（room-art.ts FIRE_LIGHT と fire.target）。three の座標"""
+    mouth = furnace_mouth()
+    fx, fz = FACING
+    at = Vector((mouth.x + fx * FIRE_REACH - fz * FIRE_SIDE, mouth.y + FIRE_LIFT, mouth.z + fz * FIRE_REACH + fx * FIRE_SIDE))
+    c, s = math.cos(FIRE_AIM_TURN), math.sin(FIRE_AIM_TURN)
+    aim = Vector((mouth.x + (fx * c - fz * s) * FIRE_AIM, 0.0, mouth.z + (fz * c + fx * s) * FIRE_AIM))
+    return at, aim
+
+
+def sky_radiance(d: np.ndarray) -> np.ndarray:
+    """方向（three の座標、(..., 3) の単位ベクトル）の空の放射輝度（線形 RGB）: room-art.ts の空と、反射用の環境の街の帯・夜明けの
+    光の球、それに半球光（照度 / π: 上半分は空の色、下半分は地面の色）"""
+    def smooth(e0, e1, x):
+        t = np.clip((x - e0) / (e1 - e0), 0, 1)
+        return t * t * (3 - 2 * t)
+
+    def mix(a, b, t):
+        return np.asarray(a) + (np.asarray(b) - np.asarray(a)) * t[..., None]
+
+    y = d[..., 1]
+    flat = d * np.array([1.0, 0.0, 1.0])
+    flat /= np.maximum(np.linalg.norm(flat, axis=-1, keepdims=True), 1e-9)
+    toward = np.maximum(flat @ np.array([DAWN.x, 0.0, DAWN.z]), 0.0) ** 5
+    horizon = mix(HORIZON_COOL, HORIZON_WARM, toward * (1 - smooth(0.0, 0.28, y)))
+    sky = mix(mix(horizon, ZENITH, smooth(0.0, 0.62, y)), horizon * 0.86, 1 - smooth(-0.12, 0.0, y))
+    # the town's dark band round the horizon (a cylinder about the eye) and the dawn's glow in front of it
+    horiz = np.maximum(np.hypot(d[..., 0], d[..., 2]), 1e-9)
+    at_band = y / horiz * ENV_BAND['radius']
+    sky = np.where(((at_band >= ENV_BAND['from_y']) & (at_band <= ENV_BAND['to_y']))[..., None], ENV_BAND['color'], sky)
+    glow = Vector((DAWN.x * ENV_GLOW['distance'], ENV_GLOW['y'], DAWN.z * ENV_GLOW['distance']))
+    cos_glow = math.cos(math.asin(ENV_GLOW['radius'] / glow.length))
+    sky = np.where((d @ np.array(glow.normalized()) >= cos_glow)[..., None], ENV_GLOW['color'], sky)
+    hemi = np.where((y >= 0)[..., None], srgb_hex(HEMI_SKY), srgb_hex(HEMI_GROUND)) * (HEMI_INTENSITY / math.pi)
+    return sky + hemi
+
+
+def dawn_world() -> bpy.types.World:
+    """世界（焼き込みの空）: 正距円筒の空の画像（Cycles の向き: u = 0.5 − atan2(y, x)/2π、v = 0.5 + asin(z)/π。Blender の座標）"""
+    w, h = SKY_PX
+    u = (np.arange(w) + 0.5) / w
+    v = (np.arange(h) + 0.5) / h
+    phi = np.pi * (1 - 2 * u)[None, :]
+    el = (np.pi * (v - 0.5))[:, None]
+    bx, by, bz = np.cos(el) * np.cos(phi), np.cos(el) * np.sin(phi), np.sin(el) * np.ones_like(phi)
+    d = np.stack([bx, bz, -by], axis=-1)  # Blender (x, y, z) → three (x, z, −y)
+    rgb = sky_radiance(d).astype(np.float32)
+    img = bpy.data.images.new('A0_dawn_sky', w, h, alpha=False, float_buffer=True)
+    img.colorspace_settings.name = 'Linear Rec.709'
+    img.pixels.foreach_set(np.concatenate([rgb, np.ones((h, w, 1), np.float32)], axis=-1).ravel())
+    img.file_format = 'OPEN_EXR'
+    img.pack()
+    world = bpy.data.worlds.new('A0_dawn')
+    nt = world.node_tree
+    env = nt.nodes.new('ShaderNodeTexEnvironment')
+    env.image = img
+    env.location = (-300, 300)
+    nt.links.new(env.outputs['Color'], nt.nodes['Background'].inputs['Color'])
+    nt.nodes['Background'].inputs['Strength'].default_value = 1.0
+    world['about'] = 'S-26: the dawn sky of the prologue for the light bake (room-art.ts: the sky, its env, the hemisphere)'
+    # what the sky is made of, recorded with the bake (pipeline.py) for the game's unit test to check against room-art.ts
+    world['sky'] = {'zenith': list(ZENITH), 'horizon_cool': list(HORIZON_COOL), 'horizon_warm': list(HORIZON_WARM),
+                    'dawn': list(DAWN)}
+    world['hemisphere'] = {'sky': HEMI_SKY, 'ground': HEMI_GROUND, 'intensity': HEMI_INTENSITY}
+    return world
+
+
+def bake_lights(collection) -> dict:
+    """焼き込みの光（ゲームの実時間の光と同じ値）を collection に置き、世界を夜明けの空にする。書き出さない（ライトは書き出しの対象外）"""
+    scene = bpy.context.scene
+    scene.world = dawn_world()
+
+    def light(name: str, kind: str, at, toward, color, energy: float, **extra):
+        data = bpy.data.lights.new(name, kind)
+        data.color = color
+        data.energy = energy
+        for k, val in extra.items():
+            setattr(data, k, val)
+        obj = link(bpy.data.objects.new(name, data), collection)
+        obj.location = B(tuple(at))
+        obj.rotation_euler = (ROT @ Vector(toward).normalized()).to_track_quat('-Z', 'Y').to_euler()
+        return obj
+
+    sun = light('bake_sun', 'SUN', SUN_FROM * 30, -SUN_FROM, srgb_hex(SUN_COLOR), SUN_LUX,
+                angle=math.radians(SUN_ANGLE_DEG))
+    top = Vector((0.0, DOME_CY + DOME_R - 0.2, 0.0))
+    orb = Vector(BENCH_ORB)
+    reach = (orb - top).length
+    # three's decay 1.4 has no match in Blender (always 1/d²): the same light where it lands, on the vidro
+    sky_cd = SKYLIGHT_CD * reach ** (2 - SKYLIGHT_DECAY)
+    sky = light('bake_skylight', 'SPOT', top, orb - top, SKYLIGHT_COLOR, 4 * math.pi * sky_cd,
+                spot_size=2 * SKYLIGHT_ANGLE, spot_blend=SKYLIGHT_PENUMBRA, shadow_soft_size=LIGHT_RADIUS['skylight'])
+    at, aim = fire_light()
+    fire = light('bake_fire', 'SPOT', at, aim - at, srgb_hex(FIRE_COLOR), 4 * math.pi * FIRE_CD,
+                 spot_size=2 * FIRE_ANGLE, spot_blend=FIRE_PENUMBRA, shadow_soft_size=LIGHT_RADIUS['fire'])
+    return {'sun': sun, 'skylight': sky, 'fire': fire}
+
+
 # ── 確かめ用（書き出さない） ─────────────────────────────────────────────────
 def reference(collection) -> None:
-    """床の円盤とドーム（ゲームはコードで描く）。見るためだけ。ビューレイヤーから外して書き出さない"""
-    floor = lathe_bm([(0.0, -0.2), (FLOOR_R + 0.05, -0.2), (FLOOR_R + 0.05, FLOOR_TOP), (0.0, FLOOR_TOP)], 72)
+    """ドームのガラスの殻（ゲームはコードで描く）。見るためだけ。ビューレイヤーから外して書き出さない（S-26: 床は書き出す物になった）"""
     dome = []
     theta0 = math.asin(OCULUS / DOME_R)
     theta1 = math.acos(-DOME_CY / DOME_R)
@@ -1702,7 +1938,7 @@ def reference(collection) -> None:
         t = theta1 + (theta0 - theta1) * k / 16
         dome.append((DOME_R * math.sin(t), DOME_CY + DOME_R * math.cos(t)))
     shell = lathe_bm(dome, 72)
-    for name, bm, color in (('ref_floor', floor, (0.4, 0.44, 0.5, 1)), ('ref_dome', shell, (0.7, 0.8, 0.85, 1))):
+    for name, bm, color in (('ref_dome', shell, (0.7, 0.8, 0.85, 1)),):
         for v in bm.verts:
             v.co = ROT @ v.co
         me = bpy.data.meshes.new(name)
@@ -1764,7 +2000,9 @@ def render_previews(out_dir: str, cams: dict, ref_layer) -> None:
 PIECES = (bench, bench_wares, tea_cup, stool, furnace, grate, blowpipe_rack, marver, marver_ware, water_tub, annealer,
           annealer_wares, shelf, shelf_wares, wind_chime,
           # S-27
-          shelf_board, bench_shelf_wares, bench_tools, marver_tools, pipe_bucket, anneal_cart, anneal_tools, cart_wares)
+          shelf_board, bench_shelf_wares, bench_tools, marver_tools, pipe_bucket, anneal_cart, anneal_tools, cart_wares,
+          # S-26
+          floor, dome_frame)
 
 
 def build_all(only: list[str] | None = None) -> None:
@@ -1774,6 +2012,10 @@ def build_all(only: list[str] | None = None) -> None:
     for piece in PIECES:
         if only is None or piece.__name__ in only:
             piece(m)
+    # 焼き込みの光と空（書き出さない: ライトは書き出しの対象外。ビューレイヤーには入れておく: 焼き込みが使う）
+    lights = bpy.data.collections.new('bake_lights')
+    bpy.context.scene.collection.children.link(lights)
+    bake_lights(lights)
     # 見るための物（書き出さない: ビューレイヤーから外す）
     ref = bpy.data.collections.new('reference')
     bpy.context.scene.collection.children.link(ref)

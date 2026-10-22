@@ -4,12 +4,15 @@ import { type HazeSpec, readsBackdrop } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import { type AssembledAsset, assembleAsset } from './assemble';
 import { type AssetGlassRecord, createAssetMaterialHook } from './glass';
-import type { AssetProblem } from './plan';
+import { type AssetProblem, problemMessage } from './plan';
+import { proceduralMaterial } from './procedural';
 
 /**
  * One area's glb in a game room (S-24, the workshop of the prologue): loaded the way asset-lab loads it (GLTFLoader +
  * meshopt + KTX2; marked glass becomes the library's glass), assembled from its names (layers, colliders, sockets), and
- * its opaque meshes cast and receive shadows (clear glass casts no solid shadow).
+ * its opaque meshes cast and receive shadows (clear glass casts no solid shadow). S-26: materials the game draws in code
+ * (procedural.ts: the workshop's floor) are made here, and the baked pieces draw with their lightmap
+ * (src/core/assets/lightmap.ts: the realtime lights add only their highlights to them).
  *
  * The room then assigns `assembled.layered` to its LayerField, adds `assembled.root` to its scene and the colliders to
  * Rapier (addAssetColliders). The loader is let go once the file is in (its KTX2 workers are not needed afterwards).
@@ -33,7 +36,10 @@ export async function loadAreaAsset(
   const loader = createGltfLoader(renderer);
   try {
     const materials = createAssetMaterialHook(quality, options);
-    const asset = await loader.load(url, { material: materials.hook });
+    const asset = await loader.load(url, {
+      material: (m, mesh) => proceduralMaterial(m) ?? materials.hook(m, mesh),
+      lightmaps: true,
+    });
     const assembled = assembleAsset(asset.scene);
     asset.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;
@@ -47,7 +53,15 @@ export async function loadAreaAsset(
       asset,
       assembled,
       glass: materials.glass,
-      problems: [...assembled.problems, ...materials.problems],
+      problems: [
+        ...assembled.problems,
+        ...materials.problems,
+        ...(asset.lightmaps?.missing ?? []).map((object) => ({
+          object,
+          code: 'lightmap-missing' as const,
+          message: problemMessage('lightmap-missing'),
+        })),
+      ],
       dispose: () => asset.dispose(),
     };
   } finally {

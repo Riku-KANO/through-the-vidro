@@ -2,6 +2,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { type GLTF, GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import type * as THREE from 'three/webgpu';
+import { applyLightmaps, type LightmapReport, loadLightmaps } from './lightmap';
 import { convertMaterials, disposeObject, type MaterialHook, texturesOf } from './materials';
 
 /**
@@ -28,6 +29,11 @@ export interface LoadedAsset {
    */
   textures: THREE.Texture[];
   gltf: GLTF;
+  /**
+   * The baked light (S-26, lightmap.ts), when loaded with `lightmaps: true`: the baked meshes and materials, the lightmaps by
+   * name, the objects whose lightmap is not in the file. null otherwise.
+   */
+  lightmaps: (Omit<LightmapReport, 'replaced'> & { textures: Map<string, THREE.Texture> }) | null;
   /** Releases its geometries, materials and textures. */
   dispose(): void;
 }
@@ -35,6 +41,11 @@ export interface LoadedAsset {
 export interface LoadOptions {
   /** Picks the material of a mesh before the default conversion (e.g. the game's glass for marked materials). */
   material?: MaterialHook;
+  /**
+   * Draws the baked objects with their lightmap (S-26, lightmap.ts: the extras `lightmap` and `lightmap_scale`, the texture
+   * of that name in the file), after the materials are converted. Off by default.
+   */
+  lightmaps?: boolean;
 }
 
 export interface GltfAssetLoader {
@@ -56,7 +67,7 @@ export function createGltfLoader(
   if (options.transcoderPath) ktx2.setTranscoderPath(options.transcoderPath);
   const loader = new GLTFLoader().setKTX2Loader(ktx2).setMeshoptDecoder(MeshoptDecoder);
   return {
-    async load(url, { material } = {}) {
+    async load(url, { material, lightmaps = false } = {}) {
       const gltf = await loader.loadAsync(url);
       const scene = gltf.scene;
       // world matrices first, so a material hook can read the size quantization gave each mesh
@@ -68,6 +79,19 @@ export function createGltfLoader(
       });
       const { replaced } = convertMaterials(scene, material);
       for (const m of replaced) m.dispose();
+      let baked: LoadedAsset['lightmaps'] = null;
+      if (lightmaps) {
+        const maps = await loadLightmaps(gltf);
+        for (const t of maps.values()) textures.add(t);
+        const report = applyLightmaps(scene, maps);
+        for (const m of report.replaced) m.dispose();
+        baked = {
+          meshes: report.meshes,
+          materials: report.materials,
+          missing: report.missing,
+          textures: maps,
+        };
+      }
       const used = (gltf.parser.json as { extensionsUsed?: string[] }).extensionsUsed ?? [];
       return {
         url,
@@ -75,6 +99,7 @@ export function createGltfLoader(
         gltf,
         extensionsUsed: [...used],
         textures: [...textures],
+        lightmaps: baked,
         dispose: () => disposeObject(scene, textures),
       };
     },

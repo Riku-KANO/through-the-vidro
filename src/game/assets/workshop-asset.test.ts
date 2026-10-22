@@ -211,25 +211,40 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
   });
 
   it('props keep to 500–3000 triangles each (小物: アトラスで共有), the interior well inside an area', () => {
-    let total = 0;
-    for (const p of PIECES) {
+    const trianglesOf = (name: string) => {
       let triangles = 0;
-      objectNamed(p.name).traverse((o) => {
+      objectNamed(name).traverse((o) => {
         const mesh = o as THREE.Mesh;
         if (!mesh.isMesh) return;
         const index = mesh.geometry.getIndex();
         triangles += (index ? index.count : mesh.geometry.getAttribute('position').count) / 3;
       });
+      return triangles;
+    };
+    // S-26: the floor and the dome's brass frame (moved from room-art.ts to be baked) are the building, not props
+    const building = new Set<string>([WORKSHOP_OBJECTS.floor.name, WORKSHOP_OBJECTS.frame.name]);
+    let total = 0;
+    for (const p of PIECES) {
+      const triangles = trianglesOf(p.name);
+      total += triangles;
+      if (building.has(p.name)) continue;
       expect(triangles, p.name).toBeGreaterThanOrEqual(500);
       expect(triangles, p.name).toBeLessThanOrEqual(3000);
-      total += triangles;
     }
-    expect(total).toBeLessThan(60_000);
+    // 近景の建物1棟 20,000〜40,000 (the frame is a small part of the workshop's building)
+    expect(trianglesOf(WORKSHOP_OBJECTS.frame.name)).toBeLessThanOrEqual(40_000);
+    expect(trianglesOf(WORKSHOP_OBJECTS.floor.name)).toBeLessThanOrEqual(3000);
+    expect(total).toBeLessThan(80_000);
   });
 
   it('the opaque props share one texture atlas (KTX2), the glass has none', () => {
-    expect(json.images?.length).toBe(1);
-    expect(json.images?.[0]?.mimeType).toBe('image/ktx2');
+    // S-26: the other images are the area's lightmaps (workshop-bake.test.ts), which no material uses
+    const lightmaps = new Set<string>();
+    gltf.scene.traverse((o) => {
+      if (typeof o.userData.lightmap === 'string') lightmaps.add(o.userData.lightmap);
+    });
+    expect(json.images?.length).toBe(1 + lightmaps.size);
+    for (const i of json.images ?? []) expect(i.mimeType).toBe('image/ktx2');
     expect(json.extensionsUsed).toEqual(
       expect.arrayContaining(['KHR_texture_basisu', 'EXT_meshopt_compression']),
     );
@@ -243,7 +258,9 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
       const used = [source(m.pbrMetallicRoughness?.baseColorTexture), source(m.emissiveTexture)].filter(
         (s) => s !== undefined,
       );
-      if (parseGlassMark(name) !== null || name === 'A0_air') expect(used, name).toEqual([]);
+      // the floor's frosted tiles are drawn in code (S-26: src/game/assets/procedural.ts)
+      if (parseGlassMark(name) !== null || name === 'A0_air' || name === 'A0_floor')
+        expect(used, name).toEqual([]);
       else {
         expect(used.length, name).toBeGreaterThan(0);
         for (const s of used) expect(s, name).toBe(0);

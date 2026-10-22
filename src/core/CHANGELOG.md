@@ -3,6 +3,33 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.11.0（案。版は統合のときに親が決める） — 2026-10-22（S-26 焼いた光の受け口）
+
+足しただけ。`load()` の既定の振る舞いは変えていない（焼いた光は `lightmaps: true` のときだけ）。VERSION は親が決めるまで 0.10.0 のまま。
+
+- `assets/lightmap.ts`（新規）: Blender の焼き込み（`blender/scripts/common/bake.py`）の受け口。
+  - glb の書き方: 焼いた物の extras に `lightmap`（glb の中のテクスチャの名前）と `lightmap_scale`（焼いた値を割った倍率）。
+    ライトマップは**どの材質も使わない glb のテクスチャ**（案1は KTX2。名前で探す）。泡沫回廊の「glb の外の PNG（extras の
+    lightmap が場所）」とは置き場所が違う。泡沫回廊で使うなら `loadLightmaps` を外の画像の読み込みに替えるか、glb に入れる
+  - `lightmapOf(extras)`、`lightmapIntensity(scale, gain)`（π × scale × gain。焼いた値は白い拡散面の放射輝度で、three の lightMap は
+    放射照度として足され Lambert で π で割られる）
+  - `loadLightmaps(gltf)`: 焼いた物が名指すテクスチャを `parser.getDependency('texture', i)` で読み、2つ目の UV（`channel = 1`）、
+    sRGB に（KTX2 は自分で sRGB と言う。PNG はここで印をつける。最初に GPU へ上げる前）
+  - `applyLightmaps(root, maps)`: 焼いた物（extras のある物かその下のメッシュ。GLTFLoader が材質ごとに分けた子も）の焼ける材質を
+    `BakedStandardNodeMaterial` にする（元の材質・光の画像・倍率ごとに 1 つ、共有）。焼ける材質 = `bakesMaterial`: 
+    MeshStandardNodeMaterial（物理の材質 = ガラスは除く）、ガラスの印（`userData.mark`）がない、`userData.bake !== false`
+    （材質の extras。光る火・熾火・ガラスの中の泡）、透明でない。パイプラインの `bakeable_material` と同じ規則
+  - `BakedStandardNodeMaterial`（型 `BakedStandardNodeMaterial`: 同じ材質の実時間の版と three が別にコンパイルする）と
+    `BakedLightingModel`（`PhysicalLightingModel` の子）: 拡散の光はライトマップだけ。実時間の光は拡散を足さず鏡面（ハイライト）だけ、
+    場面のほかの放射照度（半球光）と環境画像の拡散も足さない（焼いた光が持っている）。環境画像の映り込みは、金属でない面では
+    焼いた光が開けた空より暗い所で暗くする（作業台の下の棚は空を映さない）。金属は拡散がないので焼いた光は見た目を変えない
+    （映り込みを暗くすると、細い管の画素の足りない所が黒い斑になった）。three の内側（`indirectDiffuse`・`indirectSpecular` が
+    `builder.context` の `irradiance`・`radiance`・`iblIrradiance`・`reflectedLight` を読むこと）に頼る。three を上げたら
+    `src/core/assets/lightmap.test.ts` と S-26 の e2e（実時間の光を消しても焼いた部屋が 8 割以上の明るさを保つ）で確かめる
+- `assets/loader.ts`: `load(url, { lightmaps: true })` で、材質の変換の後に上の 2 つを行う。`LoadedAsset.lightmaps`（焼いたメッシュ・
+  材質・光の画像・ファイルにない光の画像の物）。光の画像は `textures` にも入り、`dispose()` で放す
+- 単体テスト `assets/lightmap.test.ts`（10 件）
+
 ## 0.10.0 — 2026-10-22（S-29 描画先ごとの背景画像）
 
 足しただけで、既存の部品の振る舞いは変えていない。

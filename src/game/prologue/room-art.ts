@@ -30,7 +30,6 @@ import {
 import * as THREE from 'three/webgpu';
 import {
   createBrassMaterial,
-  createFrostedFloorMaterial,
   createGlass,
   createInnerBubbleMaterial,
   type HazeSpec,
@@ -61,11 +60,9 @@ import {
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_ORB,
-  WORKSHOP,
-  WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_TOP,
 } from './layout';
-import { deckMesh, domePoint, domeWall } from './shapes';
+import { deckMesh, domeWall } from './shapes';
 
 /**
  * The look of 序章「工房」 (アートディレクション): 夜明け前の青, almost colourless glass with the green of
@@ -166,6 +163,64 @@ const FIRE_AIM = 1.6;
 const FIRE_AIM_TURN = 0.75;
 const FIRE_ANGLE = 1.4;
 const FIRE_PENUMBRA = 0.6;
+/** Where the fire's light aims (three's coordinates, on the floor). */
+export const FIRE_TARGET: readonly [number, number, number] = (() => {
+  // the mouth's facing turned toward the door's side (its right, looking out of the mouth)
+  const [fx, fz] = FURNACE_FACING;
+  const c = Math.cos(FIRE_AIM_TURN);
+  const sn = Math.sin(FIRE_AIM_TURN);
+  return [
+    FURNACE_MOUTH[0] + (fx * c - fz * sn) * FIRE_AIM,
+    0,
+    FURNACE_MOUTH[2] + (fz * c + fx * sn) * FIRE_AIM,
+  ];
+})();
+/** The dawn sun: its colour, illuminance and the point it shines from (three's coordinates; it aims at the way, (0, 0, -8)). */
+const SUN = {
+  color: 0xffbd86,
+  intensity: 2.5,
+  at: [DAWN.x * 30, 7, DAWN.z * 30 - 8],
+  target: [0, 0, -8],
+} as const;
+/** The sky's light: a hemisphere light (sky, ground, illuminance). */
+const HEMISPHERE = { sky: 0x7890c0, ground: 0x181c28, intensity: 0.8 } as const;
+/**
+ * The workshop's lights, as the realtime room has them and as the Blender bake has them (S-26: make_workshop.py
+ * bake_lights puts the same lights, and the same sky with this hemisphere light in it, into the .blend; the glb records what
+ * was baked in its scene's extras, `bake.lights`, and src/game/assets/workshop-bake.test.ts checks that the two agree).
+ * The baked pieces of the workshop take their diffuse light from the bake; these lights stay for what moves and what is not
+ * baked (the vidro, the glass, the way outside) and give the baked pieces their highlights (src/core/assets/lightmap.ts).
+ */
+export const WORKSHOP_LIGHTS = {
+  /** The sky the environment (and the bake's world) is made of (linear colours; the dawn's direction). */
+  sky: {
+    zenith: [ZENITH.r, ZENITH.g, ZENITH.b],
+    horizonCool: [HORIZON_COOL.r, HORIZON_COOL.g, HORIZON_COOL.b],
+    horizonWarm: [HORIZON_WARM.r, HORIZON_WARM.g, HORIZON_WARM.b],
+    dawn: [DAWN.x, DAWN.y, DAWN.z],
+  },
+  sun: SUN,
+  hemisphere: HEMISPHERE,
+  skylight: {
+    color: [SKYLIGHT_COLOR.r, SKYLIGHT_COLOR.g, SKYLIGHT_COLOR.b],
+    intensity: SKYLIGHT_INTENSITY,
+    angle: SKYLIGHT_ANGLE,
+    penumbra: 0.75,
+    decay: 1.4,
+    at: [0, WORKSHOP_TOP - 0.2, 0],
+    target: BENCH_ORB,
+  },
+  fire: {
+    color: FIRE_COLOR,
+    intensity: FIRE_INTENSITY,
+    angle: FIRE_ANGLE,
+    penumbra: FIRE_PENUMBRA,
+    decay: 2,
+    distance: 7,
+    at: FIRE_LIGHT,
+    target: FIRE_TARGET,
+  },
+} as const;
 /** How much the fire's light breathes (± of its intensity). */
 const FIRE_FLICKER = 0.08;
 /** The valley floor, far below the mist. */
@@ -354,23 +409,20 @@ export function buildRoomArt(
   scene.environment = envTarget.texture;
 
   // ---- lights (one dawn light + the sky; the skylight and the furnace below, the placed orb) ------------
-  const hemi = new THREE.HemisphereLight(0x7890c0, 0x181c28, 0.8);
+  const hemi = new THREE.HemisphereLight(HEMISPHERE.sky, HEMISPHERE.ground, HEMISPHERE.intensity);
   put(hemi, 'shared');
-  const sun = new THREE.DirectionalLight(0xffbd86, 2.5);
-  sun.position
-    .copy(DAWN)
-    .multiplyScalar(30)
-    .setY(7)
-    .add(new THREE.Vector3(0, 0, -8));
-  sun.target.position.set(0, 0, -8);
+  const sun = new THREE.DirectionalLight(SUN.color, SUN.intensity);
+  sun.position.set(...SUN.at);
+  sun.target.position.set(...SUN.target);
   scene.add(sun.target);
   {
-    // 静止した光と影は焼き込み (光と時間帯): until the Blender bake exists, the static room's shadow map is
-    // drawn once (like S-01's gallery). Nothing that moves casts a live shadow here (the vidro, the drop and
-    // the materializing bridge are small or come and go), and a shadow map drawn every frame is a render
-    // nested inside the main one, which trips three r186's WebGL2 timestamp pool (process/slices/S-06.md).
-    // Drawn once, with the layer state of that moment: only shared objects may cast (no sphere exists
-    // yet, so back objects would cast nothing and surface objects would keep casting after they vanish).
+    // 静止した光と影は焼き込み (光と時間帯): the workshop's are baked since S-26 (its pieces take no diffuse light from
+    // here); this shadow map, drawn once (like S-01's gallery), stays for what is not baked (the way, the gate, the
+    // pedestal outside) and for the highlights the baked pieces still take from the sun. Nothing that moves casts a live
+    // shadow here (the vidro, the drop and the materializing bridge are small or come and go), and a shadow map drawn
+    // every frame is a render nested inside the main one, which trips three r186's WebGL2 timestamp pool
+    // (process/slices/S-06.md). Drawn once, with the layer state of that moment: only shared objects may cast (no sphere
+    // exists yet, so back objects would cast nothing and surface objects would keep casting after they vanish).
     const size = quality.dynamicShadowSize || 1024;
     sun.castShadow = true;
     sun.shadow.autoUpdate = false;
@@ -394,7 +446,6 @@ export function buildRoomArt(
   const brass = keep(createBrassMaterial());
   const stone = keep(stoneMaterial(0.62));
   const rock = keep(stoneMaterial(1.4));
-  const frostFloor = keep(createFrostedFloorMaterial({ tileSize: 0.9, frostColor: 0xa7b1bc }));
   const dark = keep(new THREE.MeshStandardNodeMaterial({ color: 0x1b2433, roughness: 1, metalness: 0 }));
   const glass = (
     kind: Parameters<typeof createGlass>[0],
@@ -417,17 +468,21 @@ export function buildRoomArt(
   const cupNode = cupMilk as THREE.MeshPhysicalNodeMaterial;
   cupNode.emissiveNode = (cupNode.emissiveNode as THREE.Node<'vec3'>).add(rimLight(focus.pedestal).mul(1.6));
   const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
-  const fire = new THREE.SpotLight(FIRE_COLOR, FIRE_INTENSITY, 7, FIRE_ANGLE, FIRE_PENUMBRA, 2);
+  const fire = new THREE.SpotLight(
+    WORKSHOP_LIGHTS.fire.color,
+    WORKSHOP_LIGHTS.fire.intensity,
+    WORKSHOP_LIGHTS.fire.distance,
+    WORKSHOP_LIGHTS.fire.angle,
+    WORKSHOP_LIGHTS.fire.penumbra,
+    WORKSHOP_LIGHTS.fire.decay,
+  );
 
   // ---- the workshop (序章「工房」) ---------------------------------------------------------------
   {
-    const floorDisc = mesh(
-      new THREE.CylinderGeometry(WORKSHOP_FLOOR_RADIUS + 0.05, WORKSHOP_FLOOR_RADIUS + 0.05, 0.2, 72),
-      frostFloor,
-    );
-    floorDisc.position.y = -0.096;
-    floorDisc.receiveShadow = true;
-    put(floorDisc, 'shared');
+    // S-26: the floor and the dome's brass frame are the glb's (A0_flr_floor01, A0_bld_frame01: moved into the Blender
+    // workshop to be baked with the rest; the floor's frosted tiles are still drawn by createFrostedFloorMaterial, made from
+    // the floor material's extras: src/game/assets/procedural.ts). The rock under the floor and the dome's glass stay here
+    // (the glass is not baked; the rock is outside).
     const plinth = mesh(new THREE.CylinderGeometry(5.0, 6.2, 7, 64), rock);
     plinth.position.y = -3.504;
     put(plinth, 'shared');
@@ -441,60 +496,19 @@ export function buildRoomArt(
     dome.renderOrder = 2;
     put(dome, 'shared');
 
-    // brass ribs on meridians (clear of the door), the skylight ring, the foot ring and the door frame
-    const ribs: THREE.BufferGeometry[] = [];
-    const { oculus, doorTop, floor: thetaFloor } = wall.theta;
-    const [doorA, doorB] = wall.doorPhi;
-    const tube = (pts: THREE.Vector3[], r: number) =>
-      ribs.push(
-        new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), Math.max(8, pts.length * 2), r, 6, false),
-      );
-    const meridian = (phi: number, from: number, to: number) => {
-      const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= 20; i++)
-        pts.push(new THREE.Vector3(...domePoint(from + ((to - from) * i) / 20, phi, 0.02)));
-      tube(pts, 0.035);
-    };
-    // 12 meridians clear of the door: the glass itself is faint, the brass gives the dome its shape (ルール2)
-    for (let i = 0; i < 12; i++) {
-      const phi = -Math.PI / 2 + Math.PI / 12 + (i * Math.PI) / 6;
-      meridian(phi, oculus, thetaFloor);
-    }
-    meridian(doorA, doorTop, thetaFloor);
-    meridian(doorB, doorTop, thetaFloor);
-    const parallel = (theta: number, from: number, to: number, r: number) => {
-      const pts: THREE.Vector3[] = [];
-      const n = Math.max(6, Math.ceil(((to - from) / (2 * Math.PI)) * 96));
-      for (let i = 0; i <= n; i++)
-        pts.push(new THREE.Vector3(...domePoint(theta, from + ((to - from) * i) / n, 0.02)));
-      tube(pts, r);
-    };
-    parallel(doorTop, doorA, doorB, 0.04);
-    const ringAt = (theta: number, r: number) => {
-      const rr = Math.sin(theta) * WORKSHOP.radius;
-      const ring = new THREE.TorusGeometry(rr, r, 8, 128);
-      ring.rotateX(Math.PI / 2);
-      ring.translate(0, WORKSHOP.sphereCenterY + Math.cos(theta) * WORKSHOP.radius, 0);
-      ribs.push(ring);
-    };
-    ringAt(oculus, 0.05);
-    ringAt(thetaFloor - 0.004, 0.06);
-    ringAt((oculus + doorTop) / 2, 0.022);
-    const frame = mesh(merged(ribs), brass);
-    frame.castShadow = true;
-    put(frame, 'shared');
-
     // The interior (the bench, its vessels, the furnace, the shelf…) is the workshop's glb (S-24, room.ts loads it).
     // Here only its lights, which the game places (the glb carries no lights):
     //  - 光と時間帯 夜明け前の青: the cool light of the sky through the skylight, falling on the vidro on the bench (the
     //    first picture: 目覚めて最初に見る絵)
     //  - the furnace, the only warm light of the workshop: at its mouth, toward the room and the grate
-    const sky = new THREE.SpotLight(SKYLIGHT_COLOR, SKYLIGHT_INTENSITY, 0, SKYLIGHT_ANGLE, 0.75, 1.4);
-    sky.position.set(0, WORKSHOP_TOP - 0.2, 0);
-    sky.target.position.set(...BENCH_ORB);
+    const { skylight: sl, fire: fl } = WORKSHOP_LIGHTS;
+    const sky = new THREE.SpotLight(SKYLIGHT_COLOR, sl.intensity, 0, sl.angle, sl.penumbra, sl.decay);
+    sky.position.set(...sl.at);
+    sky.target.position.set(...sl.target);
     // A shadow drawn once like the sun's, so the bench top keeps the light off its lower shelf (the vidro casts none: it
-    // is taken away). A stand-in until the bake (光と時間帯: 静止した光と影は焼き込み; S-26). A cutoff distance was tried
-    // instead and dropped: its falloff turned the round pool into a lopsided one (review round 2 of S-24).
+    // is taken away). Since S-26 the bake holds the pool and its shadow (the baked bench takes only the highlights from
+    // here); the shadow stays for those. A cutoff distance was tried instead and dropped: its falloff turned the round pool
+    // into a lopsided one (review round 2 of S-24).
     sky.castShadow = true;
     sky.shadow.autoUpdate = false;
     sky.shadow.needsUpdate = true;
@@ -505,18 +519,8 @@ export function buildRoomArt(
     sky.shadow.normalBias = 0.02;
     scene.add(sky.target);
     put(keep(sky), 'shared');
-    fire.position.set(...FIRE_LIGHT);
-    {
-      // the mouth's facing turned toward the door's side (its right, looking out of the mouth)
-      const [fx, fz] = FURNACE_FACING;
-      const c = Math.cos(FIRE_AIM_TURN);
-      const sn = Math.sin(FIRE_AIM_TURN);
-      fire.target.position.set(
-        FURNACE_MOUTH[0] + (fx * c - fz * sn) * FIRE_AIM,
-        0,
-        FURNACE_MOUTH[2] + (fz * c + fx * sn) * FIRE_AIM,
-      );
-    }
+    fire.position.set(...fl.at);
+    fire.target.position.set(...fl.target);
     scene.add(fire.target);
     put(keep(fire), 'shared');
   }

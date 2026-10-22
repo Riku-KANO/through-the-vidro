@@ -28,6 +28,7 @@ import sys
 import zlib
 from typing import Iterable
 
+import bmesh
 import bpy
 import numpy as np
 
@@ -77,8 +78,20 @@ def _ensure_materials(objs: list, tag: str) -> list:
     return mats
 
 
-def _prepare_uv(objs: list, repack: bool, island_margin: float) -> dict:
-    """各物に UV Lightmap を用意し（最初の UV が空なら作り）、重ならないよう展開・配置する。元の render UV を覚えて返す"""
+def _excluded_faces(o, exclude: frozenset) -> list[bool]:
+    """面ごとに、焼かない材質（exclude の名前）か"""
+    names = [s.material.name if s.material else '' for s in o.material_slots]
+    return [bool(names) and names[min(p.material_index, len(names) - 1)] in exclude for p in o.data.polygons]
+
+
+def _prepare_uv(objs: list, repack: bool, island_margin: float, exclude: frozenset = frozenset(),
+                density: dict | None = None) -> dict:
+    """各物に UV Lightmap を用意し（最初の UV が空なら作り）、重ならないよう展開・配置する。元の render UV を覚えて返す。
+
+    exclude の材質の面は展開も配置もせず、UV を (0, 0) の 1 点に潰す（ライトマップの場所を取らない。焼いても画素はほぼ書かない）。
+    density（物の名前 → 倍率）の物は、展開の後、配置の前に島を倍率だけ大きくする（画素の細かさが倍率倍。既定 1）。
+    島の間の余白は island_margin（UV の 0〜1 の割合、FRACTION）で、島の大きさによらない
+    """
     saved = {}
     for o in objs:
         me = o.data
@@ -96,15 +109,43 @@ def _prepare_uv(objs: list, repack: bool, island_margin: float) -> dict:
         o.data.uv_layers.active = lm
         lm.active_render = True
     if repack:
+        skipped = {o.name: _excluded_faces(o, exclude) for o in objs}
         _select(objs, objs[0])
         bpy.ops.object.mode_set(mode='EDIT')
         try:
             bpy.context.tool_settings.use_uv_select_sync = True
             bpy.ops.mesh.select_all(action='SELECT')
+            if exclude:
+                # only the faces to bake are unwrapped and packed (smart project and pack work on the selection)
+                bpy.ops.mesh.select_all(action='DESELECT')
+                for o in objs:
+                    bm = bmesh.from_edit_mesh(o.data)
+                    bm.faces.ensure_lookup_table()
+                    for f, skip in zip(bm.faces, skipped[o.name]):
+                        if not skip:
+                            f.select_set(True)
+                    bmesh.update_edit_mesh(o.data)
             bpy.ops.uv.smart_project(angle_limit=math.radians(66.0), island_margin=island_margin)
-            bpy.ops.uv.pack_islands(margin=island_margin)
+            for o in objs:
+                k = float((density or {}).get(o.name, 1.0))
+                if abs(k - 1.0) < 1e-9:
+                    continue
+                bm = bmesh.from_edit_mesh(o.data)
+                layer = bm.loops.layers.uv[UV_NAME]
+                for f in bm.faces:
+                    if f.select:
+                        for loop in f.loops:
+                            loop[layer].uv = loop[layer].uv * k
+                bmesh.update_edit_mesh(o.data)
+            bpy.ops.uv.pack_islands(margin_method='FRACTION', margin=island_margin)
         finally:
             bpy.ops.object.mode_set(mode='OBJECT')
+        for o in objs:
+            layer = o.data.uv_layers[UV_NAME].data
+            for p, skip in zip(o.data.polygons, skipped[o.name]):
+                if skip:
+                    for li in p.loop_indices:
+                        layer[li].uv = (0.0, 0.0)
     return saved
 
 
@@ -248,14 +289,21 @@ def bake_lightmaps(
     margin: int | None = None,
     split_shared: bool = False,
     percentile: float = PERCENTILE,
+    exclude_materials: Iterable[str] = (),
+    density: dict | None = None,
 ) -> list[dict]:
     """objects の光と影を Lightmap UV に焼き、8bit の PNG を out_dir に書く。
 
     atlas=True なら全部の物で 1 枚（`<name>.png`。name の既定は `<部屋>.lightmap`）、False なら物ごとに 1 枚（`<物の名前>.png`）。
     メッシュを共有する物があると止まる（split_shared=True で単独のコピーにして焼く）。
     percentile は正規化に使う明るさの百分位（既定 99.99）。それより明るい画素は切れる。
+    exclude_materials（材質の名前）の面は焼かない: 展開せず UV を (0, 0) に潰す（repack=True のとき。ガラスや光る面を同じ物に
+    持つ物で、ライトマップの場所を取らない）。光る面は焼かなくても、場面の光としては焼いた物を照らす。
+    density（物の名前 → 倍率、既定 1）は物ごとの画素の細かさ（大きく見える床を細かく、細い管を粗く）。
+    margin は焼いた色を島の外へ伸ばす画素の数で、島の間はその倍（repack のとき）。
     戻り値: [{'object': 物の名前, 'image': PNG の絶対パス, 'scale': lightmap_scale,
-              'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合}, ...]
+              'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合,
+              'device': 焼いた計算機（METAL / CPU …）}, ...]
     """
     objs = [o for o in objects if o.type == 'MESH']
     if not objs:
@@ -293,7 +341,7 @@ def bake_lightmaps(
                 if o.data.users > 1:  # split_shared=True のとき
                     o.data = o.data.copy()
             mats = _ensure_materials(group, gname)
-            saved_uv = _prepare_uv(group, repack, island_margin)
+            saved_uv = _prepare_uv(group, repack, island_margin, frozenset(exclude_materials), density)
             img = bpy.data.images.new(f'{gname}.bake', size, size, alpha=False, float_buffer=True)
             img.colorspace_settings.name = 'Non-Color'  # 焼いた線形の値をそのまま float に残す（色空間の変換を入れない）
             nodes = []
@@ -325,7 +373,8 @@ def bake_lightmaps(
                     u.active_render = u.name == saved_uv[o.name]
                 o[PROP] = os.path.relpath(path, out_dir)
                 o[PROP_SCALE] = scale
-                results.append({'object': o.name, 'image': path, 'scale': scale, 'max_over_scale': stat['max'] / scale, 'clipped_frac': stat['clipped_frac']})
+                results.append({'object': o.name, 'image': path, 'scale': scale, 'max_over_scale': stat['max'] / scale,
+                                'clipped_frac': stat['clipped_frac'], 'device': device})
             print(
                 f'bake: {gname} {size}px {samples}spp {device} 8bit {os.path.getsize(path)}B scale={scale} '
                 f"max/scale={stat['max'] / scale:.2f} clipped={stat['clipped_frac'] * 100:.3f}% -> {path}"

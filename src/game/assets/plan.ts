@@ -35,7 +35,14 @@ export interface AssetProblem {
   /** The object (or the name of a level-of-detail chain) the problem is about. */
   object: string;
   /** The same codes as the lint in Blender (naming_cases.json). */
-  code: NameError | ExtrasError | SetError | GlassMarkError | 'duplicate-name' | 'glass-unmarked';
+  code:
+    | NameError
+    | ExtrasError
+    | SetError
+    | GlassMarkError
+    | 'duplicate-name'
+    | 'glass-unmarked'
+    | 'lightmap-missing';
   message: string;
 }
 
@@ -115,6 +122,8 @@ const MESSAGES: Record<AssetProblem['code'], string> = {
   'glass-format': 'a glass mark is glass_<kind>[_<role>], in lowercase',
   'glass-unmarked':
     'transmissive glass placed far or behind glass needs a glass_<kind> mark: only the library glass turns into the cheap far path',
+  'lightmap-missing':
+    'extras.lightmap names a texture the file does not have (S-26: pnpm assets puts the lightmap in the glb)',
 };
 
 export function problemMessage(code: AssetProblem['code']): string {

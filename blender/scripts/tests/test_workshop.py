@@ -47,9 +47,63 @@ class Workshop(unittest.TestCase):
         report = budget.check(rows)
         for row in report['objects']:
             with self.subTest(name=row['name']):
+                self.assertFalse(row['over'])
+                if row['name'] in BUILDING:
+                    continue
                 self.assertEqual(row['category'], 'prop')
                 self.assertGreaterEqual(row['triangles'], 500)
-                self.assertFalse(row['over'])
+
+    # ── S-26: the floor and the dome's brass moved here to be baked; the light to bake ─────────────────────────────
+
+    def test_the_floor_and_the_dome_frame_are_pieces_to_export(self):
+        """The floor disc and the dome's brass frame (room-art.ts's until S-26) are exported with the rest: the floor's top only
+        (its underside and rim are inside the rock; they would take room in the lightmap), its material drawn in code"""
+        by_name = {o.name: o for o in self.objects}
+        floor = by_name['A0_flr_floor01']
+        self.assertTrue(all(p.normal.z > 0.99 for p in floor.data.polygons))
+        mat = floor.material_slots[0].material
+        self.assertEqual(mat['procedural'], 'frosted_floor')
+        self.assertAlmostEqual(mat['tile_size'], 0.9)
+        frame = by_name['A0_bld_frame01']
+        self.assertEqual({s.material.name for s in frame.material_slots}, {'A0_brass'})
+        # its top ring at the skylight, its foot ring at the floor (three's y)
+        zs = [(frame.matrix_world @ v.co).z for v in frame.data.vertices]
+        self.assertGreater(max(zs), 3.8)
+        self.assertLess(min(zs), 0.1)
+
+    def test_the_atlas_reads_the_first_uv_whatever_uv_renders(self):
+        """The bake makes the second UV the one that renders: an atlas read without a UV node would then take its colours
+        from the lightmap's UV (the fire's emission and the bounce off every piece)"""
+        for m in {s.material for o in self.objects for s in o.material_slots if s.material}:
+            for n in m.node_tree.nodes:
+                if n.type == 'TEX_IMAGE':
+                    with self.subTest(material=m.name):
+                        link = n.inputs['Vector'].links
+                        self.assertTrue(link and link[0].from_node.type == 'UVMAP')
+                        self.assertEqual(link[0].from_node.uv_map, 'UVMap')
+
+    def test_the_light_to_bake_is_the_dawn_of_the_game(self):
+        """光と時間帯: 序章は夜明け前の青、太陽1灯＋空。The lights of the bake (not exported) and the world's sky: the dawn sun low
+        to the right of the way, the skylight's blue on the vidro, the fire in the furnace's mouth (the values and units
+        are checked against room-art.ts on the exported glb: src/game/assets/workshop-bake.test.ts)"""
+        mw = self.mw
+        lights = {o.name: o for o in bpy.context.scene.objects if o.type == 'LIGHT'}
+        self.assertEqual(set(lights), {'bake_sun', 'bake_skylight', 'bake_fire'})
+        for o in lights.values():
+            self.assertNotIn(o.name, {x.name for x in self.objects})
+            self.assertFalse(o.hide_render)
+        world = bpy.context.scene.world
+        self.assertEqual(world.name, 'A0_dawn')
+        env = next(n for n in world.node_tree.nodes if n.type == 'TEX_ENVIRONMENT')
+        # the sky: deep blue overhead, the warm glow of the dawn low toward it, darker than the glow everywhere else
+        up = mw.sky_radiance(np.array([[0.0, 1.0, 0.0]]))[0]
+        self.assertGreater(up[2], up[0])
+        dawn = mw.sky_radiance(np.array([[mw.DAWN.x, 0.105, mw.DAWN.z]]) / np.linalg.norm([mw.DAWN.x, 0.105, mw.DAWN.z]))
+        self.assertGreater(dawn[0][0], 2.0)
+        self.assertEqual(tuple(env.image.size), mw.SKY_PX)
+        fire = lights['bake_fire']
+        at, _ = mw.fire_light()
+        self.assertLess((fire.location - Vector(B(tuple(at)))).length, 1e-4)
 
     def test_furniture_has_a_collider_and_colliders_draw_nothing(self):
         names = {o.name for o in self.objects}
@@ -239,6 +293,8 @@ class Workshop(unittest.TestCase):
 #: The furniture of S-24, whose colliders the game's Rapier test checks (src/game/prologue/physics.test.ts)
 S24_FURNITURE = {'A0_bnch_work01', 'A0_frn_furnace01', 'A0_pipe_rack01', 'A0_mrv_marver01', 'A0_tub_water01',
                  'A0_anl_annealer01', 'A0_shlf_works01', 'A0_chr_stool01'}
+#: The workshop's building (S-26: the floor and the dome's brass, moved from room-art.ts to be baked): not props
+BUILDING = {'A0_flr_floor01', 'A0_bld_frame01'}
 #: The body (src/game/player/constants.ts BODY_RADIUS, BODY_HEIGHT) and the floor grid of the reachability check
 BODY_RADIUS, BODY_HEIGHT = 0.3, 1.75
 GRID = 0.05
