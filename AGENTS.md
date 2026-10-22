@@ -65,6 +65,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **コミットした glb を Node で読むセンサー（S-24）**: `src/game/assets/node-glb.ts`（GLTFLoader ＋ meshopt、KTX2 は空のテクスチャ）で、単体テストが
   ゲームと同じ物・名前・形の位置（`workshop-asset.test.ts`）と当たり判定（Rapier、`physics.test.ts`）を確かめる。当たり判定の正直さは両向きの光線で
   確かめる（見えている物には 5cm 以内で当たる、当たり判定に止められる所には 10cm 以内に見た目がある。体が入れない窪みは名前と理由を挙げて外す）。
+- **見えることのセンサー（S-27）**: `?debug=1` の `renderer.render` を包んで場面とカメラをつかみ、物を名前で隠した絵と比べて、物の頂点を画面に
+  写した範囲のうち変わる画素の割合を測る（`tests/e2e/S-27-workshop-look.spec.ts`）。同じ絵を2枚撮って違う画素は除く。画面全体の割合で測ると、
+  物の小ささと画面の揺らぎで余裕がなくなる。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -162,7 +165,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **層を使うシーンのカメラは `camera.layers.mask = viewMask('main')`（S-23）。** PeekPipeline を使うシーンはそれが設定する。使わないシーンで既定
   （channel 0 だけ）のままだと、表だけ・裏だけの物と透過のガラスが描かれない。
 - **工房の家具の当たり判定は glb の `_col`（S-24）。** 作業台・炉を physics.ts の箱や球で持たない。`_col` は見た目の部品ごとの凸包
-  （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。
+  （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。球の壁に沿って縦にも曲がる部品（棚の背板）は高さでも分けて包む（S-27）。
+  家具を足したら、目覚める位置から行ける床が家具の立つ所のほかに減らないことを確かめる（Blender の単体 `test_new_furniture_shuts_no_floor_off`。
+  体の直径より広くても、傾く壁で頭がつかえて通れない隙間がある）。
 - **GPU を使う検査の間は、同じ機械で CPU を多く使う仕事（Blender、KTX2 の書き出し）を走らせない（S-24）。** S-06 の「最長フレーム 200ms」が
   376ms で落ちた。
 - **表の層にしかない物の当たり判定は、置いた玉の球に丸ごと入った区画だけ切る（S-28）。** `splitSurface`（辺 0.4m 以下）→ `SurfaceColliders`。
@@ -173,6 +178,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   ので、場所を1つ足すとほかの音の打つ時刻が全部入れ替わり、種を決めたオフラインの描画（耳の確認の WAV、e2e）が別の物になる。足す場所には
   `ownStream`（試作部屋の `PROLOGUE_AMBIENCE`）か `AmbiencePlace.rng` を与える。音の e2e は、同じ種類の別の場所（遠くの風鈴と扉の風鈴など）を
   `id` で分けて確かめる。
+- **AgX は明るい赤を桃色へ寄せる（S-27）。** 赤く見せたい光る物（火、熾火）は線形 0.15〜0.5 に抑え、光源として滲ませる芯だけを 0.9 以上にする
+  （線形 (2.4, 0.3, 0) は sRGB (0.93, 0.59, 0.45) のサーモンになる）。
+- **透明の物を見せる背には不透明の面を置く（S-27）。** 透過は不透明な物しか屈折しないので、透明の作品を空や透過のガラスを背に置くと消える。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

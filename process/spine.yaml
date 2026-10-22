@@ -613,7 +613,9 @@ slices:
 
   - id: S-27
     title: 工房の見た目を磨く — 炉らしい炉と光、棚の作品が見えること、物の密度
-    status: todo
+    status: integrated
+    branch: slice/S-27-workshop-polish
+    accepted: 発案者が上限（見た目の調整3巡、レビュー2巡、2巡目の後の再レビューなし）で受け入れ。棚と物の密度は良くなった。炉の体の色は薄い青灰の曇り寄りに直す（S-30）（2026-10-22）
     depends: [S-24]
     parallel: true
     human: 見た目の最終判断は発案者
@@ -671,4 +673,23 @@ slices:
       - 原因を直す。three の不具合なら、公開の API だけで回避し、最小の再現を tools/three-repro に残す（本家への報告は発案者の判断）
       - センサー：大きさの変化を挟んだ着地を両経路で繰り返し、console の error・warning がなく、画面が黒くならないことを e2e で確かめる（S-12・S-14 のセンサーの考え方）
       - S-06・S-16・S-24 の通しの e2e は緑のまま
+
+  - id: S-30
+    title: 炉の体を序章の色に — 薄い青灰の曇りガラス寄りへ。S-27 の新しい9物をゲームの単体に載せる
+    status: todo
+    depends: [S-27]
+    human: 見た目の最終判断は発案者
+    requirements:
+      - アートディレクション（色の進行：序章〜エリア1はほぼ無色、白・薄い青灰・ガラスの縁の緑・真鍮の鈍い金。ガラスの種類）
+    paths:
+      - blender/**（make_workshop.py と workshop.blend）、public/assets/workshop/**
+      - src/game/prologue/room-art.ts（炉の材質の設定が要るとき）
+      - src/game/prologue/layout.ts（WORKSHOP_OBJECTS に S-27 の9物を足す）、src/game/assets/**・src/game/prologue/*.test.ts（その単体）
+      - tests/e2e/S-30-*.spec.ts
+      - process/slices/S-30.md
+    acceptance:
+      - 炉の体を、暗い紺のつやのある不透明から、煤けた厚い曇りガラス寄りの薄い青灰にする（薬缶や潜水兜に見えない）。真鍮の帯、口の奥の赤い火、覗き窓は残し、口の火が工房で一番の暖色であることを保つ（S-27 の火の赤と、扉から見たクリーム色のセンサーは緑のまま）
+      - S-27 の新しい9物を layout.ts の WORKSHOP_OBJECTS に足し、ゲームの単体（予算・位置・当たり判定の大きさ）と room.ts の missing が見るようにする。当たり判定のある3物は physics.test.ts の両向きの検査にも入れる
+      - 4視点の前後を撮り比べ、見た目の最終判断は発案者に仰ぐ。S-24・S-27 の e2e は緑のまま
+      - 静かな計測（QUIET=1）で、扉から振り返る視点と負荷シーンを中品質で比べて記録する（S-27 の判断待ち6）
 

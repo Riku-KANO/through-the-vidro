@@ -56,8 +56,8 @@ export const BENCH = { center: [-1.55, 0, -2.45] as Vec3, size: [2.1, 0.9, 0.8] 
 /** 作業台に一つだけ残っていたビードロ (世界観 > 主人公): where the orb rests on the bench. */
 export const BENCH_ORB: Vec3 = [-1.55, 0.99, -2.28];
 /**
- * The furnace (炉) on the right, the only warm light of the workshop (光と時間帯: 夜明け前の青). A cluster of milky-glass
- * bubbles (形のルール: 泡の集合) glowing from inside; `radius` is its footprint.
+ * The furnace (炉) on the right, the only warm light of the workshop (光と時間帯: 夜明け前の青). Bubbles of thick glass
+ * (形のルール: 泡の集合) bound with brass, the fire burning red deep in its mouth (S-27); `radius` is its footprint.
  */
 export const FURNACE = { center: [2.35, 0, -1.4] as Vec3, radius: 0.95 };
 /** Unit (x, z) the furnace's mouth faces: the centre of the dome, where the grate is. */
