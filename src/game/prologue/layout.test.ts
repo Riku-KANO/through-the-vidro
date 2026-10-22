@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FLOOR_MATERIALS } from '../../audio/footsteps';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
+import { settledAt, sweepFront } from '../../layers/settle';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { PEEK_FOV_DELTA_DEG } from '../orb/peek';
 import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/constants';
@@ -12,6 +13,7 @@ import {
   BENCH_ORB,
   BRIDGE,
   BRIDGE_RISE,
+  BRIDGE_SETTLE,
   bridgeFooting,
   CHAIR,
   DROP,
@@ -27,9 +29,11 @@ import {
   FURNACE_MOUTH,
   floorAt,
   GATE,
+  GATE_OPEN_DEG,
   GRATE,
   GRATE_CENTER,
   LIGHTHOUSE,
+  LOOKOUT,
   lookDirection,
   MARVER,
   MOUTH_PIPE_REACH,
@@ -38,10 +42,12 @@ import {
   PEDESTAL_ORB,
   PEDESTAL_RADIUS,
   REACH,
+  ROAD,
   SPAWNS,
   type SpawnName,
   shelfFrontRadius,
   TEA_CUP,
+  TRIAL_SURFACE_WALL,
   TUB_DRIP,
   WATER_TUB,
   WIND_CHIME,
@@ -304,6 +310,78 @@ describe('the workshop interior (S-24: 職人がついさっきまで仕事を�
     const right = [Math.cos(wake.yaw), 0, -Math.sin(wake.yaw)];
     const toFire = [FURNACE_MOUTH[0] - wake.feet[0], 0, FURNACE_MOUTH[2] - wake.feet[2]];
     expect((right[0] ?? 0) * (toFire[0] ?? 0) + (right[2] ?? 0) * (toFire[2] ?? 0)).toBeGreaterThan(2);
+  });
+});
+
+describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋が定着し、門が開く)', () => {
+  const settledAll = (p: Vec3): boolean => settledAt(p, BRIDGE_SETTLE, sweepFront(BRIDGE_SETTLE, 1));
+
+  it('the light runs from the dead end across the bridge to the far shore', () => {
+    const [x, y, z] = BRIDGE_SETTLE.direction;
+    expect(Math.hypot(x, y, z)).toBeCloseTo(1, 9);
+    // from the pedestal's side (the vidro the drop flew into) toward the far shore
+    expect(z).toBeLessThan(-0.99);
+    for (const seg of bridgeFooting()) {
+      expect(settledAll(seg.min)).toBe(true);
+      expect(settledAll(seg.max)).toBe(true);
+    }
+  });
+
+  it('it fixes the bridge and what hints at it on the lip, not the drop, the pedestal, the far shore or the gate', () => {
+    // the deck is drawn 0.15 m onto each shore, the rails and the lanterns stand on its ends
+    expect(settledAll([0, 0, BRIDGE.max[2] + 0.14])).toBe(true);
+    expect(settledAll([0, 0, BRIDGE.min[2] - 0.14])).toBe(true);
+    expect(settledAll([0.62, 1.3, (BRIDGE.min[2] + BRIDGE.max[2]) / 2])).toBe(true);
+    expect(settledAll(TRIAL_SURFACE_WALL.min)).toBe(true);
+    expect(settledAll(TRIAL_SURFACE_WALL.max)).toBe(true);
+    expect(settledAll(DROP)).toBe(false);
+    expect(settledAll(PEDESTAL_BASE)).toBe(false);
+    expect(settledAll(PEDESTAL_ORB)).toBe(false);
+    expect(settledAll([0, 0, FAR.maxZ - 0.6])).toBe(false);
+    expect(settledAll([0, 1, GATE.z])).toBe(false);
+  });
+
+  it('past the gate a short road (a few metres) ends at the lookout’s railing, the town beyond it (行き止まりの理由: 柵と街の眺め)', () => {
+    expect(ROAD.maxZ).toBe(FAR.minZ);
+    expect(ROAD.minX).toBe(FAR.minX);
+    expect(ROAD.maxX).toBe(FAR.maxX);
+    const pastGate = GATE.z - ROAD.minZ;
+    expect(pastGate).toBeGreaterThan(2.5);
+    expect(pastGate).toBeLessThan(6);
+    // the railing stands on the road, across its end
+    expect(LOOKOUT.z).toBeGreaterThan(ROAD.minZ);
+    expect(LOOKOUT.z - ROAD.minZ).toBeLessThan(0.4);
+    expect(LOOKOUT.height).toBeGreaterThan(0.9);
+    expect(LOOKOUT.height).toBeLessThan(EYE_HEIGHT - 0.3);
+    // ルール6: the town and its lighthouse lie on beyond it, over the mist
+    expect(LIGHTHOUSE[2]).toBeLessThan(ROAD.minZ - 30);
+    expect(floorAt(0, (ROAD.minZ + ROAD.maxZ) / 2)).toEqual({ zone: 'road', material: 'stone' });
+  });
+
+  it('the gate’s leaves swing away from the far shore, out over the road’s edges (out of the way, 形は縁で伝える)', () => {
+    expect(GATE_OPEN_DEG).toBeGreaterThan(80);
+    expect(GATE_OPEN_DEG).toBeLessThan(110);
+    const a = (GATE_OPEN_DEG * Math.PI) / 180;
+    // the right leaf, hinged at the right post: its far end, open
+    const tipX = GATE.halfWidth - GATE.halfWidth * Math.cos(a);
+    const tipZ = GATE.z - GATE.halfWidth * Math.sin(a);
+    expect(tipX).toBeGreaterThanOrEqual(ROAD.maxX - 0.01);
+    expect(tipZ).toBeLessThan(GATE.z - 1);
+    expect(tipZ).toBeGreaterThan(LOOKOUT.z);
+  });
+
+  it('the fixed views of the close look at what they are named for', () => {
+    const eye = (s: (typeof SPAWNS)[SpawnName]): Vec3 => [s.feet[0], EYE_HEIGHT, s.feet[2]];
+    const look = (s: (typeof SPAWNS)[SpawnName]) => lookDirection(s.yaw, s.pitch);
+    // before the gate, the gate ahead; on the road, the railing and the lighthouse beyond it
+    expect(SPAWNS.gate.feet[2]).toBeGreaterThan(GATE.z);
+    expect(angleDeg(eye(SPAWNS.gate), look(SPAWNS.gate), [0, 1.3, GATE.z])).toBeLessThan(15);
+    expect(SPAWNS.road.feet[2]).toBeLessThan(GATE.z);
+    expect(SPAWNS.road.feet[2]).toBeGreaterThan(LOOKOUT.z);
+    expect(angleDeg(eye(SPAWNS.road), look(SPAWNS.road), [0, LOOKOUT.height, LOOKOUT.z])).toBeLessThan(30);
+    expect(angleDeg(eye(SPAWNS.road), look(SPAWNS.road), [LIGHTHOUSE[0], 20, LIGHTHOUSE[2]])).toBeLessThan(
+      30,
+    );
   });
 });
 

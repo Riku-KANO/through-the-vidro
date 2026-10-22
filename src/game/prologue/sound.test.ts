@@ -18,6 +18,7 @@ import {
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
+import type { FinaleEvent } from './session';
 import {
   answer,
   CueLog,
@@ -352,12 +353,17 @@ class FakeEngine {
 /** A room with an event bus and a camera at the player's eye (1.6 m) looking down -z, the vidro in hand. */
 type FakeRoomProbe = SoundRoom['probe'];
 
-function fakeRoom(): SoundRoom & { events: EventBus<PrologueEvent>; probe: FakeRoomProbe } {
+function fakeRoom(): SoundRoom & {
+  events: EventBus<PrologueEvent>;
+  finale: EventBus<FinaleEvent>;
+  probe: FakeRoomProbe;
+} {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1.6, 0);
   camera.updateMatrixWorld();
   return {
     events: new EventBus<PrologueEvent>(),
+    finale: new EventBus<FinaleEvent>(),
     camera,
     probe: {
       orb: 'hand',
@@ -979,6 +985,108 @@ describe('the workshop’s own sounds where S-24 drew them (S-25: 炉の燃え�
     expect(a.places).toEqual([]);
     expect(a.hits).toEqual([]);
     expect(a.draughts).toEqual([]);
+    r.sound.dispose();
+  });
+});
+
+/* ---------- S-34: the close — the bridge settling, the gate opening ---------- */
+
+describe('the close of the prologue sounds (S-34: 橋が定着する音、門が開く音)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const withClose = (): SoundBanks => ({
+    ...fakeBanks(),
+    finale: { settle: fakeBuffer('settle', 3.4), gate: fakeBuffer('gate', 3.6) },
+  });
+  /** The voice the engine started last, and the buffer it plays. */
+  const lastVoice = (r: ReturnType<typeof soundscapeRig>) => ({
+    emitter: r.engine.voiceEmitters.at(-1),
+    tag: tagOf(r.engine.ctx.sources.at(-1)),
+  });
+
+  it('the light settling the bridge sounds once, from the light, and follows it across', async () => {
+    const r = soundscapeRig(false, withClose);
+    await r.begin();
+    r.frame();
+    const before = r.engine.started.length;
+    r.room.probe.finale = { frontZ: -14 };
+    r.room.finale.emit({ type: 'settle' });
+    expect(r.engine.started.length).toBe(before + 1);
+    const v = lastVoice(r);
+    expect(v.tag).toBe('settle');
+    expect(v.emitter?.bus).toBe('sfx');
+    expect(v.emitter?.position.z).toBeCloseTo(-14, 6);
+    expect(Math.abs(v.emitter?.position.x ?? 9)).toBeLessThan(0.5);
+    // the sound goes with the light over the bridge
+    r.room.probe.finale = { frontZ: -16 };
+    r.frame();
+    expect(v.emitter?.position.z).toBeCloseTo(-16, 6);
+    const f = r.sound.probe.finale;
+    expect(f.played.map((p) => p.event)).toEqual(['settle']);
+    expect(f.voicesStarted).toBe(1);
+    r.sound.dispose();
+  });
+
+  it('the gate opening sounds once, from the gate', async () => {
+    const r = soundscapeRig(false, withClose);
+    await r.begin();
+    r.frame();
+    r.room.finale.emit({ type: 'gateOpen' });
+    const v = lastVoice(r);
+    expect(v.tag).toBe('gate');
+    expect(v.emitter?.position.z).toBeCloseTo(GATE.z, 6);
+    expect(v.emitter?.position.y).toBeGreaterThan(0.5);
+    expect(v.emitter?.position.y).toBeLessThan(GATE.height);
+    expect(r.sound.probe.finale.played.map((p) => p.event)).toEqual(['gateOpen']);
+    r.sound.dispose();
+  });
+
+  it('the light across and the gate open are silent (one sound each, when they start)', async () => {
+    const r = soundscapeRig(false, withClose);
+    await r.begin();
+    r.frame();
+    const before = r.engine.started.length;
+    r.room.finale.emit({ type: 'settled' });
+    r.room.finale.emit({ type: 'gateOpened' });
+    expect(r.engine.started.length).toBe(before);
+    expect(r.sound.probe.finale.played).toEqual([]);
+    r.sound.dispose();
+  });
+
+  it('is counted on its own: the cues stay the S-16 table’s, the engine’s whole count takes it in', async () => {
+    const r = soundscapeRig(false, withClose);
+    await r.begin();
+    r.frame();
+    r.room.events.emit({ type: 'dropTaken' });
+    r.room.finale.emit({ type: 'settle' });
+    r.room.finale.emit({ type: 'gateOpen' });
+    const p = r.sound.probe;
+    expect(p.playedCount).toBe(1);
+    expect(p.voicesStarted).toBe(1);
+    expect(p.finale.voicesStarted).toBe(2);
+    expect(p.engineVoices).toBe(p.voicesStarted + p.footsteps.voicesStarted + p.finale.voicesStarted);
+    r.sound.dispose();
+  });
+
+  it('before the audio (or its sounds) are there, the close is refused, and never played later', async () => {
+    const r = soundscapeRig(false, withClose);
+    r.room.finale.emit({ type: 'settle' });
+    expect(r.sound.probe.finale.refused).toEqual(['settle']);
+    await r.begin();
+    for (let i = 0; i < 30; i++) r.frame();
+    expect(r.sound.probe.finale.played).toEqual([]);
+    expect(r.sound.probe.finale.voicesStarted).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('with no close sounds loaded (an older bank, a failed render), it stays silent and says so', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    r.room.finale.emit({ type: 'gateOpen' });
+    expect(r.sound.probe.finale.ready).toBe(false);
+    expect(r.sound.probe.finale.refused).toEqual(['gateOpen']);
     r.sound.dispose();
   });
 });

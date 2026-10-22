@@ -61,6 +61,7 @@ import {
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_ORB,
+  ROAD,
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_TOP,
@@ -279,7 +280,8 @@ export function buildRoomArt(
   renderer: THREE.WebGPURenderer,
   quality: QualityPreset,
   field: LayerField,
-  options: { trialWall?: Box } = {},
+  // gate: false — the gate is drawn elsewhere (S-34: finale.ts, whose leaves open)
+  options: { trialWall?: Box; gate?: boolean } = {},
 ): RoomArt {
   const scene = new THREE.Scene();
   const disposables: { dispose(): void }[] = [];
@@ -537,9 +539,9 @@ export function buildRoomArt(
       return s;
     };
     put(slab(PATH.minX, PATH.maxX, PATH.minZ, PATH.maxZ, 7, stone), 'shared');
-    put(slab(FAR.minX, FAR.maxX, FAR.minZ, FAR.maxZ, 7, stone), 'shared');
-    // beyond the gate the way goes on toward the town (seen, not walked: the gate is closed)
-    put(slab(FAR.minX, FAR.maxX, -46, FAR.minZ - 0.02, 7, stone), 'shared');
+    // the far shore and, past the gate, its road a few metres on to a lookout over the mist and the town: one slab, no
+    // seam to see under the gate (S-34: ROAD, finale.ts)
+    put(slab(FAR.minX, FAR.maxX, ROAD.minZ, FAR.maxZ, 7, stone), 'shared');
     const valley = mesh(new THREE.PlaneGeometry(600, 600), dark);
     valley.rotation.x = -Math.PI / 2;
     valley.position.y = VALLEY_Y;
@@ -561,8 +563,8 @@ export function buildRoomArt(
       );
     lipZ(PATH.minX - 0.01, -4.6, PATH.minZ);
     lipZ(PATH.maxX + 0.01, -4.6, PATH.minZ);
-    lipZ(FAR.minX - 0.01, FAR.maxZ, -40);
-    lipZ(FAR.maxX + 0.01, FAR.maxZ, -40);
+    lipZ(FAR.minX - 0.01, FAR.maxZ, ROAD.minZ);
+    lipZ(FAR.maxX + 0.01, FAR.maxZ, ROAD.minZ);
     lipX(FAR.maxZ + 0.01, FAR.minX, FAR.maxX);
     put(mesh(merged(lips), brass), 'shared');
 
@@ -609,7 +611,7 @@ export function buildRoomArt(
     );
     const gateMesh = mesh(merged(gate), brass);
     gateMesh.castShadow = true;
-    put(gateMesh, 'shared');
+    if (options.gate !== false) put(gateMesh, 'shared');
 
     // the pedestal (台座): brass stem, a milky cup that glows a little (行き止まりには理由を置く)
     const stem = mesh(

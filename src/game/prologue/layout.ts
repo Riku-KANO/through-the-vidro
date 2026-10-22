@@ -1,5 +1,6 @@
 import type { FloorMaterial } from '../../audio/footsteps';
 import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
+import type { SettleSweep } from '../../layers/settle';
 
 /**
  * 序章「工房」 (進行構造とエリア設計): the workshop at the edge of the town, before dawn.
@@ -286,8 +287,46 @@ export const DROP: Vec3 = [-0.2, 1.2, -17.0];
 /**
  * A closed gate at the back of the far shore: the way on, with the town seen through its bars
  * (ルール6: 次に行く場所が先に見えている, ルール9: 理由のない行き止まりは作らない).
+ * S-34: it opens when the light drop is taken — two brass leaves hinged at its posts, swinging away from the far shore
+ * (finale.ts draws them, physics.ts GateLeaves collides as them).
  */
 export const GATE = { z: -20.6, halfWidth: FAR.maxX, height: 2.7, depth: 0.2 };
+/** Height where the gate's arch springs from its posts (the arch rises 0.6 of its half width above it). */
+export const GATE_SPRINGS = GATE.height - GATE.halfWidth * 0.6;
+/**
+ * 仮 (S-34): how far the leaves swing open. A little past square, so that open they lie just outside the road's edges, out of
+ * the way (out over the drop, like a balcony's doors).
+ */
+export const GATE_OPEN_DEG = 96;
+
+/**
+ * S-34: the unit (x, z) along a leaf of the gate from its hinge, `angle` radians from shut; `side` is +1 for the leaf hinged
+ * at the right post (+X), -1 for the left. Shut, the leaves run toward the middle; open, away from the far shore (-Z).
+ */
+export function gateLeafDirection(side: 1 | -1, angle: number): [number, number] {
+  return [-side * Math.cos(angle), -Math.sin(angle)];
+}
+
+/**
+ * 門の先の道 (S-34, 仮): the far shore's stone goes on past the gate for a few metres and ends at a lookout over the mist,
+ * the town and its lighthouse ahead (ルール6). It is where 序章 will join エリア1 (泡の工房街): M1 puts the move to the next
+ * area here (トランジション設計 > エリア間の移動); until then the lookout's railing is the reason the way ends
+ * (ルール9: 行き止まりには理由を置く — 柵と街の眺め, process/slices/S-34.md 判断待ち).
+ */
+export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.minZ };
+/** 仮 (S-34): the lookout's brass railing across the road's end (its rail's height), and the lamps at its two ends. */
+export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROAD.maxX - 0.14 };
+
+/**
+ * 定着 (S-34): what the light of the taken drop fixes onto the surface, and the way it runs — from the vidro on the
+ * dead-end pedestal across the gap to the far shore. The box holds the whole bridge (the deck drawn 0.15 m onto each shore,
+ * its rails, glass and lanterns) and what hints at it on the lip (the shards, the stones, the faint lines and motes over the
+ * gap; S-24's trial wall), and leaves out the pedestal, the far shore and the drop.
+ */
+export const BRIDGE_SETTLE: SettleSweep = {
+  box: { min: [FAR.minX, -0.6, BRIDGE.min[2] - 0.15], max: [FAR.maxX, 2.0, BRIDGE.max[2] + 0.2] },
+  direction: [0, 0, -1],
+};
 
 /** 街灯 (乳白ガラス) along the way, on thin brass posts at its edges. Height of the globe's centre. */
 export const LAMPS: readonly { x: number; z: number }[] = [
@@ -350,6 +389,8 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
     box: { minX: BRIDGE.min[0], maxX: BRIDGE.max[0], minZ: BRIDGE.min[2], maxZ: BRIDGE.max[2] },
   },
   { name: 'far', material: 'stone', box: FAR },
+  // S-34: the road past the gate, the far shore's stone going on
+  { name: 'road', material: 'stone', box: ROAD },
 ];
 
 function inZone(f: FloorZone, x: number, z: number): boolean {
@@ -404,6 +445,10 @@ export const SPAWNS = {
   shelf: { feet: [-0.9, 0, 0.75] as Vec3, yaw: 2.27, pitch: -0.23 },
   /** Just inside the door, looking back into the workshop. */
   door: { feet: [0, 0, -3.75] as Vec3, yaw: Math.PI, pitch: -0.12 },
+  /** S-34: on the far shore before the gate, looking at it (and through it, the road and the town). */
+  gate: { feet: [0.3, 0, -17.4] as Vec3, yaw: 0.05, pitch: 0.02 },
+  /** S-34: on the road past the gate, the lookout's railing ahead and the town beyond it. */
+  road: { feet: [0.3, 0, -21.6] as Vec3, yaw: -0.04, pitch: -0.07 },
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;

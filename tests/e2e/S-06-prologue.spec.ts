@@ -6,6 +6,7 @@ import { expect, type Page, test } from '@playwright/test';
  * S-06: the prologue prototype, played from the home screen to the light drop with real input on both
  * render paths: 潜る → 作業台の玉を手にする → 歩く → 行き止まりで止まる → 覗く → 置く → 渡る → 雫.
  * Also with real input: 置いている間は覗けない, 橋の上では拾えない.
+ * S-34 carries the play-through on to the close: 雫 → 橋を戻る → 玉を拾う (on the settled bridge) → 門をくぐる.
  * Screens → artifacts/screens/S-06/<backend>/, the event log → artifacts/S-06/run-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
@@ -47,11 +48,15 @@ interface RoomProbe {
   triangles: number;
   fallRescues: number;
   autoplay: { step: string; done: boolean } | null;
+  /** S-34: the close (the bridge settled by the drop's light, the gate open). */
+  finale: { settle: number; gate: number; settledSegments: number; gateOpen: boolean };
   layout: {
     edgeZ: number;
     farZ: number;
     pedestalOrb: [number, number, number];
     drop: [number, number, number];
+    gateZ: number;
+    lookoutZ: number;
   };
 }
 
@@ -197,7 +202,7 @@ for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-06', backend);
 
-  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop [${backend}]`, async ({
+  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop → back → pick up → gate [${backend}]`, async ({
     page,
   }) => {
     test.setTimeout(240_000);
@@ -338,6 +343,37 @@ for (const backend of backends) {
     expect(refused.events).toContain('shake:pickup');
     await snap('refused');
 
+    // 罰がない (パズル設計 > 原則 3): back on solid ground the vidro comes back and the bridge goes away. Before the drop:
+    // since S-34 the drop's light settles the bridge, so this is the last time it can go away.
+    await walkTo(page, 0, edgeZ + 0.5, 0.3);
+    await lookAt(page, pedestalOrb);
+    await waitRoom(page, "r.target === 'pedestal'", 5_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, "r.orb === 'hand'", 3_000);
+    // stepping toward the vanishing bridge right away never leaves the shore (落下死はない; parent review P1)
+    await page.keyboard.down('KeyD');
+    const pushed: RoomProbe[] = [];
+    const until = Date.now() + 1500;
+    while (Date.now() < until) {
+      pushed.push(await room(page));
+      await page.waitForTimeout(50);
+    }
+    await page.keyboard.up('KeyD');
+    expect(pushed.length).toBeGreaterThan(10);
+    for (const q of pushed) {
+      expect(q.grounded).toBe(true);
+      expect(Math.abs(q.position.y)).toBeLessThan(0.05);
+      expect(q.position.z).toBeGreaterThan(edgeZ - 0.05);
+    }
+    const restored = await waitRoom(page, 'r.bridgeColliders === 0 && r.sphereRadius === 0', 3_000);
+    expect(restored.events).toContain('pickup:pedestal');
+    expect(restored.finale.settledSegments).toBe(0);
+    // and placed again, for the crossing
+    await lookAt(page, pedestalOrb);
+    await waitRoom(page, "r.target === 'pedestal'", 5_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, 'r.sphereRadius > 3.99 && r.bridgeColliders === r.bridgeSegments', 5_000);
+
     // 渡る: across the bridge to the far shore
     const onBridge = await walkTo(page, 0, edgeZ - 1.4, 0.3);
     expect(onBridge.onBackFooting).toBe(true);
@@ -365,30 +401,41 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     await snap('after');
 
-    // 罰がない (パズル設計 > 原則 3): back on solid ground the vidro comes back and the bridge goes away
-    await walkTo(page, 0, edgeZ + 0.5, 0.3);
+    // S-34: the drop's light settles the bridge and the gate opens (発案者 2026-10-22)
+    const closed = await waitRoom(
+      page,
+      'r.finale.settle === 1 && r.finale.gate === 1 && r.finale.gateOpen',
+      6_000,
+    );
+    expect(closed.finale.settledSegments).toBe(closed.bridgeSegments);
+    // 橋を戻る → 玉を拾う: on the settled bridge the vidro comes (the exception to 橋の上では拾えない)
+    await walkTo(page, 0.1, edgeZ - 0.8, 0.3);
+    await waitRoom(page, 'r.speed < 0.03');
     await lookAt(page, pedestalOrb);
     await waitRoom(page, "r.target === 'pedestal'", 5_000);
     await page.keyboard.press('KeyE');
-    await waitRoom(page, "r.orb === 'hand'", 3_000);
-    // stepping toward the vanishing bridge right away never leaves the shore (落下死はない; parent review P1)
-    await page.keyboard.down('KeyD');
-    const pushed: RoomProbe[] = [];
-    const until = Date.now() + 1500;
-    while (Date.now() < until) {
-      pushed.push(await room(page));
-      await page.waitForTimeout(50);
-    }
-    await page.keyboard.up('KeyD');
-    expect(pushed.length).toBeGreaterThan(10);
-    for (const q of pushed) {
-      expect(q.grounded).toBe(true);
-      expect(Math.abs(q.position.y)).toBeLessThan(0.05);
-      expect(q.position.z).toBeGreaterThan(edgeZ - 0.05);
-    }
-    const restored = await waitRoom(page, 'r.bridgeColliders === 0 && r.sphereRadius === 0', 3_000);
-    expect(restored.events).toContain('pickup:pedestal');
-    expect(restored.dropTaken).toBe(true);
+    const inHand = await waitRoom(page, "r.orb === 'hand'", 3_000);
+    expect(inHand.position.z).toBeLessThan(edgeZ);
+    const kept = await waitRoom(page, 'r.sphereRadius === 0', 3_000);
+    expect(kept.bridgeColliders).toBe(kept.bridgeSegments);
+    expect(kept.grounded).toBe(true);
+    // 門をくぐる: back over the bridge with the vidro in hand, through the open gate, to the lookout's railing
+    await walkTo(page, 0.2, farZ - 0.8, 0.3);
+    const through = await walkTo(page, 0, closed.layout.gateZ - 1.6, 0.3);
+    expect(through.position.z).toBeLessThan(closed.layout.gateZ - 1);
+    expect(through.grounded).toBe(true);
+    await snap('through-gate');
+    await lookAt(page, [0, 1.4, closed.layout.lookoutZ - 30]);
+    const toRail = await pushUntilStopped(page, 'KeyW');
+    const atRail = toRail.at(-1) as RoomProbe;
+    expect(atRail.position.z).toBeGreaterThan(closed.layout.lookoutZ);
+    expect(atRail.position.z).toBeLessThan(closed.layout.lookoutZ + 0.6);
+    await snap('lookout');
+    const end = await room(page);
+    expect(end.events).toEqual(
+      expect.arrayContaining(['pickup:bench', 'place', 'dropTaken', 'pickup:pedestal']),
+    );
+    expect(end.dropTaken).toBe(true);
 
     writeFileSync(
       join(root, `artifacts/S-06/run-${backend}.json`),
@@ -476,7 +523,9 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-06 ?autoplay=1 plays home → dive → the drop by script [${backend}]`, async ({ page }) => {
+  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate by script [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
     const errors = collectErrors(page);
     await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
@@ -486,6 +535,13 @@ for (const backend of backends) {
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
     );
     expect(done.position.z).toBeLessThan(done.layout.farZ);
+    // S-34: the script goes on: back over the settled bridge, the vidro picked up on it, through the open gate
+    expect(done.events).toContain('pickup:pedestal');
+    expect(done.events).not.toContain('shake:pickup');
+    expect(done.orb).toBe('hand');
+    expect(done.finale.gateOpen).toBe(true);
+    expect(done.bridgeColliders).toBe(done.bridgeSegments);
+    expect(done.position.z).toBeLessThan(done.layout.gateZ - 1);
     expect(done.fallRescues, 'the fall guard never had to act').toBe(0);
     // every phase in budget (the frame's all passes), and no compile stall in a transition or in play
     const phases = await page.evaluate(

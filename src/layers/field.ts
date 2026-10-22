@@ -18,6 +18,7 @@ import {
   renderGroup,
   select,
   smoothstep,
+  step,
   uniform,
   vec2,
   vec3,
@@ -27,6 +28,17 @@ import * as THREE from 'three/webgpu';
 import type { Vec3 } from './footing';
 import { clipFor, type LayerKind, layerMask, peekStandInMask, viewMask } from './layers';
 import { MAX_SPHERES } from './materialize';
+import type { SettleSweep } from './settle';
+
+/**
+ * 定着 (S-34, settle.ts) as the renderer sees it: what the sweep fixes, where its front stands (along its direction, as
+ * settle.ts sweepFront measures it) and how bright the band of light at the front is (0 = none).
+ */
+export interface SettledView {
+  sweep: SettleSweep;
+  front: number;
+  glow: number;
+}
 
 /** One materializing sphere as the renderer sees it. */
 export interface FieldSphere {
@@ -47,6 +59,14 @@ const SEAM_INTENSITY = 5;
 const FAR = 1e4;
 /** 仮: how strongly the cheap stand-in of a transmissive object shows in the peek image. */
 const PEEK_STAND_IN_OPACITY = 0.35;
+/**
+ * 仮 (S-34): the settling front drawn like a materializing sphere's wavefront (the seam): a thin bright line of light with a
+ * soft halo before and behind it, in metres, and its HDR strength at glow 1.
+ */
+const SETTLE_LINE = 0.05;
+const SETTLE_HALO = 0.3;
+const SETTLE_HALO_SHARE = 0.08;
+const SETTLE_INTENSITY = 4;
 
 type MaskedMaterial = THREE.NodeMaterial & { emissiveNode: unknown };
 
@@ -74,6 +94,11 @@ const isTransmissive = (m: THREE.Material): boolean => {
  * as a thin luminous film (membrane meshes, main view only).
  *
  * While the peek image is rendered, `setPeekPass(true)` lifts the cut so the whole back layer shows.
+ *
+ * 定着 (S-34): built with `{ settle: true }`, the field also takes one settled region (`setSettled`, settle.ts). Behind its
+ * front and inside its box it is as if a placed orb stood there for good, without the film or the seams: back objects are
+ * drawn, surface objects are not. A band of warm light runs at the front (光が渡っていく). Without the option no material
+ * carries any of it (the other scenes' shaders stay as they were).
  */
 export class LayerField {
   readonly membranes: THREE.Mesh[] = [];
@@ -100,6 +125,13 @@ export class LayerField {
   private readonly warned = new Set<string>();
   private readonly owned: THREE.Material[] = [];
   private readonly membraneGeometry = new THREE.SphereGeometry(1, 72, 36);
+  /** S-34: the settled region's box, its direction and front (xyz, w), and the band's brightness. */
+  private readonly settleMin = uniform(new THREE.Vector3(FAR, FAR, FAR)).setGroup(renderGroup);
+  private readonly settleMax = uniform(new THREE.Vector3(-FAR, -FAR, -FAR)).setGroup(renderGroup);
+  private readonly settleFront = uniform(new THREE.Vector4(0, 0, -1, -FAR)).setGroup(renderGroup);
+  private readonly settleGlow = uniform(0).setGroup(renderGroup);
+  /** vec2(1 where settled else 0, the band's light) at the fragment; null without the option. */
+  private readonly settleNode: THREE.Node<'vec2'> | null;
 
   /** vec2(signed distance to the union of spheres, glow of the nearest sphere) at the fragment. */
   private readonly fieldNode = Fn(() => {
@@ -125,8 +157,21 @@ export class LayerField {
       .mul(float(1).sub(this.peekPassUniform));
   })();
 
-  constructor() {
+  constructor(options: { settle?: boolean } = {}) {
     for (let i = 0; i < MAX_SPHERES; i++) this.membranes.push(this.createMembrane(i));
+    this.settleNode = options.settle
+      ? Fn(() => {
+          const p = positionWorld;
+          const inBox = step(this.settleMin, p).mul(step(p, this.settleMax));
+          const box = inBox.x.mul(inBox.y).mul(inBox.z);
+          const s = dot(this.settleFront.xyz, p);
+          const behind = step(s, this.settleFront.w);
+          const line = s.sub(this.settleFront.w).div(SETTLE_LINE);
+          const halo = s.sub(this.settleFront.w).div(SETTLE_HALO);
+          const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
+          return vec2(box.mul(behind), box.mul(band).mul(this.settleGlow));
+        })()
+      : null;
   }
 
   /**
@@ -188,6 +233,26 @@ export class LayerField {
       }
       this.glowUniform.value.setComponent(i, s && s.radius > 0 ? s.glow : 0);
     }
+  }
+
+  /**
+   * S-34: the settled region now (null: none). Needs `{ settle: true }` at construction; without it this does nothing.
+   * Allocation-free.
+   */
+  setSettled(view: SettledView | null): void {
+    if (!this.settleNode) return;
+    if (!view) {
+      this.settleMin.value.set(FAR, FAR, FAR);
+      this.settleMax.value.set(-FAR, -FAR, -FAR);
+      this.settleFront.value.set(0, 0, -1, -FAR);
+      this.settleGlow.value = 0;
+      return;
+    }
+    const { box, direction } = view.sweep;
+    this.settleMin.value.set(box.min[0], box.min[1], box.min[2]);
+    this.settleMax.value.set(box.max[0], box.max[1], box.max[2]);
+    this.settleFront.value.set(direction[0], direction[1], direction[2], view.front);
+    this.settleGlow.value = view.glow;
   }
 
   /** True while the peek image is drawn: back objects are shown whole and seams are dark. */
@@ -312,22 +377,33 @@ export class LayerField {
     const target = material as MaskedMaterial;
     const clip = clipFor(kind, 'main');
     const d = this.fieldNode.x;
+    // S-34: inside a settled region it is as if a placed orb stood there for good
+    const settled = this.settleNode ? this.settleNode.x.greaterThan(0.5) : null;
+    const outside = settled ? d.greaterThan(0).and(settled.not()) : d.greaterThan(0);
+    const within = settled ? d.lessThan(0).or(settled) : d.lessThan(0);
     const mask =
       clip === 'hide-inside'
-        ? d.greaterThan(0)
+        ? outside
         : clip === 'hide-outside'
-          ? d.lessThan(0).or(this.peekPassUniform.greaterThan(0.5))
+          ? within.or(this.peekPassUniform.greaterThan(0.5))
           : null;
     if (mask)
       target.maskNode = target.maskNode ? bool(target.maskNode as THREE.Node<'bool'>).and(mask) : mask;
     // Shadows always follow the normal view's cut, whichever pass draws the shadow map first.
-    const shadowMask =
-      clip === 'hide-inside' ? d.greaterThan(0) : clip === 'hide-outside' ? d.lessThan(0) : null;
+    const shadowMask = clip === 'hide-inside' ? outside : clip === 'hide-outside' ? within : null;
     if (shadowMask) target.maskShadowNode = shadowMask;
     const hasEmissiveColor = (target as { emissive?: { isColor?: boolean } }).emissive?.isColor === true;
     const base =
       (target.emissiveNode as THREE.Node<'vec3'> | null) ?? (hasEmissiveColor ? materialEmissive : vec3(0));
-    target.emissiveNode = vec3(base).add(this.seamNode);
+    let light: THREE.Node<'vec3'> = this.seamNode;
+    if (this.settleNode) {
+      // nothing is cut on what is settled: no seam there; the band of light runs at the front instead
+      const glow = vec3(GLOW_COLOR.r, GLOW_COLOR.g, GLOW_COLOR.b)
+        .mul(this.settleNode.y.mul(SETTLE_INTENSITY))
+        .mul(float(1).sub(this.peekPassUniform));
+      light = this.seamNode.mul(float(1).sub(this.settleNode.x)).add(glow);
+    }
+    target.emissiveNode = vec3(base).add(light);
     target.needsUpdate = true;
     return target;
   }
