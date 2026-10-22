@@ -36,12 +36,14 @@ import type { GlassStrength } from '../../core/audio/glass';
 import { renderOffline } from '../../core/audio/offline';
 import { mulberry32, randomSeed } from '../../core/audio/rng';
 import type { Vec3 } from '../../layers/footing';
+import { sweepSpan } from '../../layers/settle';
 import { glassEase } from '../../layers/tween';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
 import { EYE_HEIGHT, WALK_SPEED } from '../player/constants';
 import { type EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
+  BRIDGE_SETTLE,
   DROP,
   EDGE_Z,
   FAR,
@@ -216,6 +218,8 @@ export const FINALE_SOURCES = finaleSources({
 });
 /** Where the settling light's sound stands: over the deck, at the front (its z from the room). */
 const SETTLE_SOUND_Y = 0.7;
+/** Where the light starts (world z): the near face of what it settles, along its way (layout.ts BRIDGE_SETTLE). */
+const SETTLE_SOUND_FROM_Z = sweepSpan(BRIDGE_SETTLE)[0] / BRIDGE_SETTLE.direction[2];
 /** The gate's sound: from the middle of the gate, at the height of its hinges' upper knuckles. */
 export const GATE_SOUND: Vec3 = [0, 1.4, GATE.z];
 
@@ -756,12 +760,15 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   // S-34: the close's two sounds, once their buffers are loaded; apart from the cues (S-16's table)
   let finale: { banks: FinaleBanks; settle: Emitter; gate: Emitter } | null = null;
   const finaleLog = { played: [] as FinalePlayed[], refused: [] as string[], voices: 0 };
-  const settleAt = { x: 0, y: SETTLE_SOUND_Y, z: EDGE_Z };
-  /** The settling light's sound goes with its front over the bridge. */
+  const settleAt = { x: 0, y: SETTLE_SOUND_Y, z: SETTLE_SOUND_FROM_Z };
+  /**
+   * The settling light's sound goes with its front over the bridge. The moment the light starts, the room has not drawn
+   * its front yet (the event comes from the session's step): it starts where the light does.
+   */
   const followFront = (): void => {
+    if (!finale) return;
     const z = roomProbe.finale?.frontZ;
-    if (!finale || z === null || z === undefined) return;
-    settleAt.z = z;
+    settleAt.z = z === null || z === undefined ? SETTLE_SOUND_FROM_Z : z;
     finale.settle.setPosition(settleAt);
   };
   /** The light starting across / the gate starting to open: its sound, once, now (or refused, never later). */

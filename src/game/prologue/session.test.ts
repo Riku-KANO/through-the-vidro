@@ -348,6 +348,21 @@ describe('S-34: picking up on the settled bridge (拾う前の確かめ: S-02 �
     expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, [-0.19, 0, 0.1])).toBe('pickup');
   });
 
+  it('standing in a surface-only wall the light has not reached yet, the pickup is still refused (S-28), and allowed once it has', () => {
+    // beside the far part of the bridge (off its footing), wholly inside the placed orb's sphere and the light's box
+    const wall = splitSurface('wall', { min: [1.8, 0, 0.62], max: [2.2, 1, 0.74] }, SURFACE_SEGMENT);
+    const { s } = dropJustTaken({ surface: wall });
+    const inWall: Vec3 = [2.0, 0, 0.68];
+    run(s, SETTLE_SECONDS * 0.3);
+    expect(s.settledSurface()).toEqual([]);
+    const events = record(s);
+    expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, inWall)).toBe('pickup-denied');
+    expect(events).toEqual([{ type: 'shake', reason: 'pickup' }]);
+    run(s, SETTLE_SECONDS);
+    expect(s.settledSurface()).toEqual(wall.map((w) => w.id));
+    expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, inWall)).toBe('pickup');
+  });
+
   it('without a sweep (layers-lab, or a room with nothing to settle) taking the drop settles nothing', () => {
     const s = placed();
     s.interact({ kind: 'drop' }, [2.4, 0, 0]);

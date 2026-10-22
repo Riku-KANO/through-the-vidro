@@ -67,6 +67,8 @@ const SETTLE_LINE = 0.05;
 const SETTLE_HALO = 0.3;
 const SETTLE_HALO_SHARE = 0.08;
 const SETTLE_INTENSITY = 4;
+/** 仮 (S-34): the front's light is gone within the first of these distances from the eye and full beyond the second. */
+const SETTLE_NEAR = [0.8, 2.6] as const;
 
 type MaskedMaterial = THREE.NodeMaterial & { emissiveNode: unknown };
 
@@ -169,7 +171,9 @@ export class LayerField {
           const line = s.sub(this.settleFront.w).div(SETTLE_LINE);
           const halo = s.sub(this.settleFront.w).div(SETTLE_HALO);
           const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
-          return vec2(box.mul(behind), box.mul(band).mul(this.settleGlow));
+          // the light fades where it passes close to the eye, like the film and the lanterns (画面をうるさくしない)
+          const near = smoothstep(SETTLE_NEAR[0], SETTLE_NEAR[1], length(positionView));
+          return vec2(box.mul(behind), box.mul(band).mul(this.settleGlow).mul(near));
         })()
       : null;
   }

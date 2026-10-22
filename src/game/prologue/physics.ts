@@ -37,7 +37,7 @@ const SLAB = 1;
 const ROUND = 0.05;
 /** The gate's posts, as drawn (finale.ts: 6–7 cm). */
 const GATE_POST_RADIUS = 0.07;
-/** S-34: a leaf of the gate as a thin box, a little taller than the body (1.79 m), as thick as the drawn leaf. */
+/** S-34: a leaf of the gate as a thin box, a little taller than the body (BODY_HEIGHT 1.75 m), as thick as the drawn leaf. */
 const LEAF_HALF_HEIGHT = 1.0;
 const LEAF_HALF_DEPTH = 0.03;
 

@@ -120,6 +120,8 @@ export class PrologueSession {
   private sphereCache: { orbs: readonly Orb[]; spheres: OrbSphere[] } | null = null;
   /** S-34: seconds since the drop was taken (null before). */
   private finaleAt: number | null = null;
+  /** Dev hold (holdFinale): the close does not move on. */
+  private finaleHeld = false;
   private settledCache: { front: number; footing: string[]; surface: string[] } | null = null;
 
   constructor(readonly options: SessionOptions) {
@@ -232,13 +234,15 @@ export class PrologueSession {
   }
 
   /**
-   * Dev holds (the room's ?finaleHold): as if the orb had been set on its pedestal, the drop taken and the close played
-   * through. No events; the room draws the moment it holds.
+   * Dev holds (the room's ?finaleHold): as if the drop had been taken `elapsed` seconds ago, and held there (the light, the
+   * settled segments and the gate stop at that moment, for the drawing, the colliders and the pickup alike). No events.
+   * The orb is the caller's to place.
    */
-  jumpToFinale(): void {
+  holdFinale(elapsed: number): void {
     this.dropValue = 'taken';
     this.dropElapsed = DROP_FLIGHT_SECONDS;
-    this.finaleAt = Math.max(SETTLE_SECONDS, GATE_OPEN_SECONDS);
+    this.finaleAt = Math.max(0, elapsed);
+    this.finaleHeld = true;
   }
 
   /** The light drop is real (inside a sphere) and can be touched. */
@@ -272,6 +276,7 @@ export class PrologueSession {
   }
 
   private stepFinale(dt: number): void {
+    if (this.finaleHeld) return;
     const was = this.finaleAt ?? 0;
     const now = was + dt;
     this.finaleAt = now;

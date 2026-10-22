@@ -5,7 +5,6 @@ import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
 import { segmentsUnder, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
-import { settledSegmentIds } from '../../layers/settle';
 import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { glassEase } from '../../layers/tween';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
@@ -199,6 +198,8 @@ export interface PrologueRoom extends DiveWorld {
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
 const DROP_ARRIVAL_GLOW_SECONDS = 0.9;
+/** 仮 (S-34): the keystone lamp is lit by the time the gate is this far (0..1) into its opening. */
+const KEYSTONE_LIGHTS = 0.25;
 const MAX_EVENTS = 40;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
@@ -488,11 +489,15 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
   }
   // S-34 dev hold (?finaleHold=<seconds since the drop was taken>, with a spawn): the orb on its pedestal, the drop taken
-  // and the close played through; what is drawn and collided is held at that moment (like growHold)
+  // that long ago, and the close held at that moment (the light, the settled segments, the gate: drawn, collided and asked
+  // by the pickup alike). &finaleOrb=hand: the vidro then taken back (from where it stands: the light must have fixed the
+  // footing there), so what is left of the bridge is what the light fixed.
   const finaleHold = ctx.params.has('spawn') ? holdSeconds(ctx.params.get('finaleHold')) : null;
   if (finaleHold !== null) {
     if (session.orbPlace !== 'pedestal') session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
-    session.jumpToFinale();
+    session.holdFinale(finaleHold);
+    if (ctx.params.get('finaleOrb') === 'hand')
+      session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
   }
 
   probe.orb = session.orbPlace;
@@ -589,17 +594,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   // S-34: the close as the session says (or as held): the settled bridge and its band of light, the gate
   const settledView = { sweep: BRIDGE_SETTLE, front: 0, glow: 0 };
   const openRad = (GATE_OPEN_DEG * Math.PI) / 180;
-  const heldSettled = (() => {
-    if (finaleHold === null) return null;
-    const front = finaleFront(BRIDGE_SETTLE, finaleHold);
-    return {
-      footing: settledSegmentIds(footing.segments, BRIDGE_SETTLE, front),
-      surface: trial ? settledSegmentIds(trial.segments, BRIDGE_SETTLE, front) : [],
-    };
-  })();
   const close = { settle: 0, gate: 0, angle: 0, front: null as number | null };
   const stageFinale = (): void => {
-    const elapsed = finaleHold ?? session.finaleElapsed;
+    const elapsed = session.finaleElapsed;
     close.settle = elapsed === null ? 0 : progressOf(elapsed, SETTLE_SECONDS);
     close.gate = elapsed === null ? 0 : progressOf(elapsed, GATE_OPEN_SECONDS);
     if (elapsed === null) {
@@ -611,14 +608,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       close.front = settledView.front;
       field.setSettled(settledView);
     }
-    footing.settle(heldSettled?.footing ?? session.settledFooting());
-    if (trial?.settle(heldSettled?.surface ?? session.settledSurface()) && probe.trial)
-      probe.trial.off = trial.cutCount;
+    footing.settle(session.settledFooting());
+    if (trial?.settle(session.settledSurface()) && probe.trial) probe.trial.off = trial.cutCount;
     close.angle = gateAngle(close.gate);
     finaleArt.setGate(close.angle);
     gateLeaves.sync(close.angle);
-    // the keystone lamp lights as the gate starts to open (the light has come to it)
-    finaleArt.setKeystone(close.gate / 0.25);
+    // the keystone lamp lights as the gate starts to open (the light has come to it), on the game's one curve
+    finaleArt.setKeystone(glassEase(Math.min(1, close.gate / KEYSTONE_LIGHTS)));
   };
 
   /** The drop is real where it is drawn (the same as the session's rule, but also under the dev holds). */

@@ -4,10 +4,13 @@ import { glassPitch, VIDRO_SCALE } from '../../audio/tuning';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
+import { sweepSpan } from '../../layers/settle';
 import { EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
+  BRIDGE_SETTLE,
   DROP,
+  EDGE_Z,
   FURNACE_MOUTH,
   floorAt,
   GATE,
@@ -1010,13 +1013,17 @@ describe('the close of the prologue sounds (S-34: 橋が定着する音、門が
     await r.begin();
     r.frame();
     const before = r.engine.started.length;
-    r.room.probe.finale = { frontZ: -14 };
+    // as in the room: the light starts inside the session's step, before the room has drawn (and published) its front
+    r.room.probe.finale = { frontZ: null };
     r.room.finale.emit({ type: 'settle' });
     expect(r.engine.started.length).toBe(before + 1);
     const v = lastVoice(r);
     expect(v.tag).toBe('settle');
     expect(v.emitter?.bus).toBe('sfx');
-    expect(v.emitter?.position.z).toBeCloseTo(-14, 6);
+    // where the light starts: the dead end's side of what it settles
+    const [start] = sweepSpan(BRIDGE_SETTLE);
+    expect(v.emitter?.position.z).toBeCloseTo(start / BRIDGE_SETTLE.direction[2], 6);
+    expect(v.emitter?.position.z).toBeGreaterThan(EDGE_Z - 0.1);
     expect(Math.abs(v.emitter?.position.x ?? 9)).toBeLessThan(0.5);
     // the sound goes with the light over the bridge
     r.room.probe.finale = { frontZ: -16 };

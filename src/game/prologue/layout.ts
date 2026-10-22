@@ -318,13 +318,21 @@ export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.min
 export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROAD.maxX - 0.14 };
 
 /**
+ * Where the light motes over the gap (surface layer, room-art.ts: a hint of the bridge) end their drift: they rise just over
+ * the dead end's lip and fade 1 m out over the far shore.
+ */
+export const MOTES_END_Z = EDGE_Z + 0.2 - (EDGE_Z - FAR.maxZ + 1.2);
+
+/**
  * 定着 (S-34): what the light of the taken drop fixes onto the surface, and the way it runs — from the vidro on the
- * dead-end pedestal across the gap to the far shore. The box holds the whole bridge (the deck drawn 0.15 m onto each shore,
- * its rails, glass and lanterns) and what hints at it on the lip (the shards, the stones, the faint lines and motes over the
- * gap; S-24's trial wall), and leaves out the pedestal, the far shore and the drop.
+ * dead-end pedestal across the gap and on a little over the far shore. The box holds the whole bridge (the deck drawn
+ * 0.15 m onto each shore, its rails, glass and lanterns) and everything that hints at it (the shards and stones on the lip,
+ * the faint lines and the motes all along their drift, so none of them is left coming out of thin air; S-24's trial wall).
+ * It leaves out the pedestal and the rest of the far shore with the gate. The drop hovers inside it, but it is taken by the
+ * time the light runs.
  */
 export const BRIDGE_SETTLE: SettleSweep = {
-  box: { min: [FAR.minX, -0.6, BRIDGE.min[2] - 0.15], max: [FAR.maxX, 2.0, BRIDGE.max[2] + 0.2] },
+  box: { min: [FAR.minX, -0.6, MOTES_END_Z - 0.05], max: [FAR.maxX, 2.0, BRIDGE.max[2] + 0.2] },
   direction: [0, 0, -1],
 };
 

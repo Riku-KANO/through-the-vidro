@@ -36,6 +36,7 @@ import {
   LOOKOUT,
   lookDirection,
   MARVER,
+  MOTES_END_Z,
   MOUTH_PIPE_REACH,
   PATH,
   PEDESTAL_BASE,
@@ -327,18 +328,27 @@ describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋
     }
   });
 
-  it('it fixes the bridge and what hints at it on the lip, not the drop, the pedestal, the far shore or the gate', () => {
+  it('it fixes the bridge and everything that hints at it, not the pedestal, the rest of the far shore or the gate', () => {
     // the deck is drawn 0.15 m onto each shore, the rails and the lanterns stand on its ends
     expect(settledAll([0, 0, BRIDGE.max[2] + 0.14])).toBe(true);
     expect(settledAll([0, 0, BRIDGE.min[2] - 0.14])).toBe(true);
     expect(settledAll([0.62, 1.3, (BRIDGE.min[2] + BRIDGE.max[2]) / 2])).toBe(true);
     expect(settledAll(TRIAL_SURFACE_WALL.min)).toBe(true);
     expect(settledAll(TRIAL_SURFACE_WALL.max)).toBe(true);
-    expect(settledAll(DROP)).toBe(false);
+    // the light motes (a hint of the bridge) all along their drift, up to where they fade over the far shore: none is
+    // left coming out of thin air once the bridge is there (S-34 review)
+    for (const z of [EDGE_Z + 0.2, (EDGE_Z + MOTES_END_Z) / 2, MOTES_END_Z])
+      for (const [x, y] of [
+        [-0.6, 0.1],
+        [0.6, 1.75],
+      ] as const)
+        expect(settledAll([x, y, z]), `a mote at ${x}, ${y}, ${z}`).toBe(true);
     expect(settledAll(PEDESTAL_BASE)).toBe(false);
     expect(settledAll(PEDESTAL_ORB)).toBe(false);
-    expect(settledAll([0, 0, FAR.maxZ - 0.6])).toBe(false);
+    expect(settledAll([0, 0, MOTES_END_Z - 0.3])).toBe(false);
     expect(settledAll([0, 1, GATE.z])).toBe(false);
+    // the drop hovers in the box, but the light only runs once it has been taken
+    expect(DROP[2]).toBeGreaterThan(MOTES_END_Z);
   });
 
   it('past the gate a short road (a few metres) ends at the lookout’s railing, the town beyond it (行き止まりの理由: 柵と街の眺め)', () => {

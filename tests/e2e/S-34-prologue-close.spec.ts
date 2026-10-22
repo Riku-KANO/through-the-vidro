@@ -38,6 +38,7 @@ interface RoomProbe {
   eyeHeight: number;
   yaw: number;
   pitch: number;
+  fov: number;
   locked: boolean;
   orb: 'bench' | 'hand' | 'pedestal';
   sphereRadius: number;
@@ -119,6 +120,88 @@ async function luminance(page: Page, png: Buffer): Promise<{ mean: number; dark:
     }
     return { mean: sum / n, dark: dark / n, white: white / n };
   }, png.toString('base64'));
+}
+
+/** A box on the screen (CSS pixels of the 1280×720 page). */
+interface Region {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * World points on the screen, from the room's camera as its probe tells it (eye at the feet + eye height, yaw, pitch,
+ * vertical FOV; three's frame: yaw 0 looks down -Z), clipped to the page: their bounding box.
+ */
+function screenBox(r: RoomProbe, points: [number, number, number][]): Region {
+  const W = 1280;
+  const H = 720;
+  const e = [r.position.x, r.position.y + r.eyeHeight, r.position.z];
+  const cp = Math.cos(r.pitch);
+  const f = [-Math.sin(r.yaw) * cp, Math.sin(r.pitch), -Math.cos(r.yaw) * cp];
+  const right = [Math.cos(r.yaw), 0, -Math.sin(r.yaw)];
+  // up = right × forward
+  const up = [
+    (right[1] ?? 0) * (f[2] ?? 0) - (right[2] ?? 0) * (f[1] ?? 0),
+    (right[2] ?? 0) * (f[0] ?? 0) - (right[0] ?? 0) * (f[2] ?? 0),
+    (right[0] ?? 0) * (f[1] ?? 0) - (right[1] ?? 0) * (f[0] ?? 0),
+  ];
+  const t = Math.tan((r.fov * Math.PI) / 180 / 2);
+  const dot = (a: number[], b: number[]) =>
+    (a[0] ?? 0) * (b[0] ?? 0) + (a[1] ?? 0) * (b[1] ?? 0) + (a[2] ?? 0) * (b[2] ?? 0);
+  let x0 = W;
+  let y0 = H;
+  let x1 = 0;
+  let y1 = 0;
+  for (const p of points) {
+    const d = [p[0] - (e[0] ?? 0), p[1] - (e[1] ?? 0), p[2] - (e[2] ?? 0)];
+    const depth = dot(d, f);
+    if (depth <= 0.05) continue;
+    const sx = (dot(d, right) / depth / (t * (W / H)) / 2 + 0.5) * W;
+    const sy = (0.5 - dot(d, up) / depth / t / 2) * H;
+    x0 = Math.min(x0, sx);
+    y0 = Math.min(y0, sy);
+    x1 = Math.max(x1, sx);
+    y1 = Math.max(y1, sy);
+  }
+  return {
+    x0: Math.max(0, Math.floor(x0)),
+    y0: Math.max(0, Math.floor(y0)),
+    x1: Math.min(W, Math.ceil(x1)),
+    y1: Math.min(H, Math.ceil(y1)),
+  };
+}
+
+/** Share of the pixels in `region` whose luminance differs by more than 0.06 between two PNGs of the same view. */
+async function changedShare(page: Page, a: Buffer, b: Buffer, region: Region): Promise<number> {
+  return page.evaluate(
+    async ([a64, b64, reg]) => {
+      const pixels = async (b: string) => {
+        const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b}`)).blob());
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = c.getContext('2d');
+        if (!g) throw new Error('no 2d context');
+        g.drawImage(bmp, 0, 0);
+        return { w: bmp.width, d: g.getImageData(0, 0, bmp.width, bmp.height).data };
+      };
+      const A = await pixels(a64 as string);
+      const B = await pixels(b64 as string);
+      const r = reg as { x0: number; y0: number; x1: number; y1: number };
+      const lum = (d: Uint8ClampedArray, i: number) =>
+        (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      let n = 0;
+      let changed = 0;
+      for (let y = r.y0; y < r.y1; y += 2)
+        for (let x = r.x0; x < r.x1; x += 2) {
+          const i = (y * A.w + x) * 4;
+          n++;
+          if (Math.abs(lum(A.d, i) - lum(B.d, i)) > 0.06) changed++;
+        }
+      return n > 0 ? changed / n : 0;
+    },
+    [a.toString('base64'), b.toString('base64'), region] as const,
+  );
 }
 
 const room = (page: Page): Promise<RoomProbe> =>
@@ -234,10 +317,10 @@ for (const backend of backends) {
       [
         // from the far shore looking back: the light half way over the bridge (定着の途中)
         'settle-mid',
-        'spawn=far&finaleHold=0.75',
+        'spawn=far&finaleHold=0.55',
         (r) => {
-          expect(r.finale.settle).toBeGreaterThan(0.4);
-          expect(r.finale.settle).toBeLessThan(0.55);
+          expect(r.finale.settle).toBeGreaterThan(0.3);
+          expect(r.finale.settle).toBeLessThan(0.4);
           expect(r.finale.settledSegments).toBeGreaterThan(0);
           expect(r.finale.settledSegments).toBeLessThan(r.bridgeSegments);
           expect(r.finale.frontZ).not.toBeNull();
@@ -320,6 +403,45 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
+  test(`S-34 with the vidro back in hand, the settled bridge is still drawn where it collides (見えることのセンサー) [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    mkdirSync(shotDir, { recursive: true });
+    const errors = collectErrors(page);
+    // the same view from the far shore, looking back over the gap: before the drop with the vidro in hand (no sphere, so
+    // no bridge), and after the close with the vidro taken back (no sphere either: what is drawn is what the light fixed)
+    await page.goto(`/?scene=prologue-proto&spawn=far${webgl}`);
+    await waitRoom(page, 'r.ready === true', 60_000);
+    await page.waitForTimeout(800);
+    const before = await page.screenshot({ path: join(shotDir, 'no-bridge.png') });
+    await page.goto(`/?scene=prologue-proto&spawn=far&finaleHold=3&finaleOrb=hand${webgl}`);
+    const after = await waitRoom(page, "r.ready && r.orb === 'hand' && r.sphereRadius === 0", 60_000);
+    await page.waitForTimeout(800);
+    const settled = await page.screenshot({ path: join(shotDir, 'settled-no-orb.png') });
+    expect(after.bridgeColliders).toBe(after.bridgeSegments);
+    expect(after.finale.settledSegments).toBe(after.bridgeSegments);
+    // the bridge's deck and rails on the screen: they must show (a missing bridge would leave this as it was before)
+    const { edgeZ, farZ } = after.layout;
+    const corners: [number, number, number][] = [];
+    for (const x of [-0.6, 0.6])
+      for (const y of [0, 0.9]) for (const z of [edgeZ - 0.1, farZ + 0.1]) corners.push([x, y, z]);
+    const bridge = screenBox(after, corners);
+    expect(bridge.x1 - bridge.x0).toBeGreaterThan(100);
+    const shown = await changedShare(page, before, settled, bridge);
+    // and nothing else moved: the sky above the town, off to the left
+    const sky = await changedShare(page, before, settled, { x0: 0, y0: 0, x1: 320, y1: 160 });
+    mkdirSync(join(root, 'artifacts/S-34'), { recursive: true });
+    writeFileSync(
+      join(root, `artifacts/S-34/visible-${backend}.json`),
+      JSON.stringify({ backend, bridge, shown, sky }, null, 2),
+    );
+    expect(shown, 'share of the bridge’s screen box that changed').toBeGreaterThan(0.3);
+    expect(sky, 'share of the sky that changed').toBeLessThan(0.02);
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   test(`S-34 drop → the bridge settles, the gate opens → back over the bridge → pick up on it → through the gate [${backend}]`, async ({
     page,
   }) => {
@@ -363,7 +485,7 @@ for (const backend of backends) {
     const t0 = taken.time;
 
     // 定着: the light crosses the bridge in 1–2 s, segment by segment; the gate opens at the same time
-    const mid = await waitRoom(page, 'r.finale.settle > 0.4', 3_000);
+    const mid = await waitRoom(page, 'r.finale.settle > 0.3', 3_000);
     expect(mid.finale.settledSegments).toBeLessThan(mid.bridgeSegments);
     expect(mid.finale.gate).toBeGreaterThan(0);
     await snap('settle-live');

@@ -25,22 +25,36 @@ export function along(direction: Vec3, p: Vec3): number {
   return direction[0] * p[0] + direction[1] * p[1] + direction[2] * p[2];
 }
 
-/** Where the light meets the box first and leaves it last, along its direction. */
-export function sweepSpan(sweep: SettleSweep): [number, number] {
-  let lo = Number.POSITIVE_INFINITY;
-  let hi = Number.NEGATIVE_INFINITY;
-  const { min, max } = sweep.box;
-  for (const x of [min[0], max[0]])
-    for (const y of [min[1], max[1]])
-      for (const z of [min[2], max[2]]) {
-        const s = along(sweep.direction, [x, y, z]);
-        lo = Math.min(lo, s);
-        hi = Math.max(hi, s);
-      }
-  return [lo + 0, hi + 0];
+/** The span of a sweep, worked out once per sweep (sweeps are fixed data: the room's is layout.ts BRIDGE_SETTLE). */
+const spans = new WeakMap<SettleSweep, readonly [number, number]>();
+
+/** The extremes of the box's corners along `direction` (no allocation). */
+function boxExtent(box: Box, direction: Vec3, wantMax: boolean): number {
+  let out = wantMax ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
+  for (let i = 0; i < 8; i++) {
+    const s =
+      direction[0] * (i & 1 ? box.max[0] : box.min[0]) +
+      direction[1] * (i & 2 ? box.max[1] : box.min[1]) +
+      direction[2] * (i & 4 ? box.max[2] : box.min[2]);
+    out = wantMax ? Math.max(out, s) : Math.min(out, s);
+  }
+  return out + 0;
 }
 
-/** Where the front stands (along the direction) at `progress`: at the first face at 0, past the last one at 1. */
+/** Where the light meets the box first and leaves it last, along its direction. */
+export function sweepSpan(sweep: SettleSweep): readonly [number, number] {
+  let span = spans.get(sweep);
+  if (!span) {
+    span = [boxExtent(sweep.box, sweep.direction, false), boxExtent(sweep.box, sweep.direction, true)];
+    spans.set(sweep, span);
+  }
+  return span;
+}
+
+/**
+ * Where the front stands (along the direction) at `progress`: at the first face at 0, past the last one at 1. No
+ * allocation (it is asked every frame while a settled region is drawn).
+ */
 export function sweepFront(sweep: SettleSweep, progress: number): number {
   const [lo, hi] = sweepSpan(sweep);
   const u = Math.min(1, Math.max(0, progress));
@@ -49,24 +63,22 @@ export function sweepFront(sweep: SettleSweep, progress: number): number {
   return lo + (hi - lo) * u;
 }
 
-function inside(p: Vec3, box: Box): boolean {
+/** A point is settled when it lies in the box and the front has passed it. */
+export function settledAt(p: Vec3, sweep: SettleSweep, front: number): boolean {
+  const { min, max } = sweep.box;
   return (
-    p[0] >= box.min[0] &&
-    p[0] <= box.max[0] &&
-    p[1] >= box.min[1] &&
-    p[1] <= box.max[1] &&
-    p[2] >= box.min[2] &&
-    p[2] <= box.max[2]
+    p[0] >= min[0] &&
+    p[0] <= max[0] &&
+    p[1] >= min[1] &&
+    p[1] <= max[1] &&
+    p[2] >= min[2] &&
+    p[2] <= max[2] &&
+    along(sweep.direction, p) <= front + 1e-9
   );
 }
 
-/** A point is settled when it lies in the box and the front has passed it. */
-export function settledAt(p: Vec3, sweep: SettleSweep, front: number): boolean {
-  return inside(p, sweep.box) && along(sweep.direction, p) <= front + 1e-9;
-}
-
 /**
- * Ids of the segments the light has fixed, in segment order: every corner in the box and behind the front (a segment
+ * Ids of the segments the light has fixed, in segment order: wholly in the box and wholly behind the front (a segment
  * that pokes out of the box never settles).
  */
 export function settledSegmentIds(
@@ -74,12 +86,17 @@ export function settledSegmentIds(
   sweep: SettleSweep,
   front: number,
 ): string[] {
+  const { min, max } = sweep.box;
   return segments
-    .filter((seg) => {
-      for (const x of [seg.min[0], seg.max[0]])
-        for (const y of [seg.min[1], seg.max[1]])
-          for (const z of [seg.min[2], seg.max[2]]) if (!settledAt([x, y, z], sweep, front)) return false;
-      return true;
-    })
+    .filter(
+      (seg) =>
+        seg.min[0] >= min[0] &&
+        seg.max[0] <= max[0] &&
+        seg.min[1] >= min[1] &&
+        seg.max[1] <= max[1] &&
+        seg.min[2] >= min[2] &&
+        seg.max[2] <= max[2] &&
+        boxExtent(seg, sweep.direction, true) <= front + 1e-9,
+    )
     .map((seg) => seg.id);
 }
