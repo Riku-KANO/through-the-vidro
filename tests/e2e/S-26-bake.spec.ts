@@ -48,8 +48,9 @@ interface ViewCounts {
 const root = process.cwd();
 const backends = (process.env.BACKENDS ?? 'webgpu,webgl2').split(',');
 /**
- * `before` (S-31's glb), `after` (the default), or `uastc`: the same bake with its lightmap in UASTC instead of the decided
- * ETC1S (blender/pipeline.json bake.codec), taken to put the two side by side (compare-codec.png, written by `after`).
+ * `before` (S-31's glb), `after` (the default), or `uastc`: the same bake with its lightmap in UASTC, taken to put the two
+ * side by side (compare-codec.png, written by `after`). Since S-26's integration the default (blender/pipeline.json bake.codec)
+ * is UASTC itself (the owner's choice over ETC1S, whose 4×4 blocks showed on smooth surfaces close by), so the two match.
  */
 const PHASES = ['before', 'after', 'uastc'] as const;
 const phase = PHASES.find((p) => p === process.env.S26_PHASE) ?? 'after';
@@ -461,7 +462,7 @@ for (const backend of backends) {
       writeFileSync(
         join(shotDir, 'compare-codec.png'),
         await sideBySide(page, ['wake', 'furnace', 'door'].map(row('after', 'uastc')), [
-          'S-26 lightmap ETC1S (decided)',
+          'S-26 lightmap (the default codec)',
           'S-26 lightmap UASTC (to compare)',
         ]),
       );

@@ -205,7 +205,8 @@ export function addTexture(glb, { name, mimeType, bytes, sampler }) {
  * Arguments of `ktx create` for a baked lightmap (S-26): an 8-bit sRGB PNG (common/bake.py) to KTX2 with its mip levels,
  * marked sRGB. `etc1s` (decided: 色は ETC1S, the high-compression mode the doc gives colour) at the highest quality level
  * (the default 128 drew the 4×4 blocks over the smooth light of the furnace's dome and the bench); `uastc` (the
- * high-quality mode, zstd-supercompressed) to compare.
+ * high-quality mode, zstd-supercompressed). The workshop's lightmap uses `uastc` since S-26's integration (blender/pipeline.json):
+ * even at the highest level ETC1S left its blocks on smooth surfaces close by.
  */
 export function lightmapKtxArgs(png, out, codec = 'etc1s') {
   const encode =
