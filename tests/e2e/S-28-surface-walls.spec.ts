@@ -77,9 +77,41 @@ async function waitRoom(page: Page, fn: string, timeout = 20_000): Promise<RoomP
 const cursor = { x: 640, y: 360 };
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 
+/**
+ * Without the pointer lock the view turns by dragging (input-system.ts: until the lock arrives, or if it never does).
+ * Headless Chromium sometimes never answers a lock request on WebGL2 late in a full check (no pointerlockchange, no
+ * pointerlockerror), so the spec falls back to dragging instead of failing on the lock it does not test.
+ */
+let dragLook = false;
+
 async function look(page: Page, dYaw: number, dPitch: number): Promise<void> {
   const dx = -dYaw / SENSITIVITY;
   const dy = -dPitch / SENSITIVITY;
+  // `cursor` always holds where the mouse is: with the lock the view turns by the movement, so the next move must start
+  // from the real position (a drag's first click can take the lock after all)
+  if (dragLook && !(await room(page)).locked) {
+    // drags from the centre, each short enough to stay inside the 1280×720 view
+    const parts = Math.max(1, Math.ceil(Math.max(Math.abs(dx) / 500, Math.abs(dy) / 280)));
+    for (let i = 0; i < parts; i++) {
+      const sx = dx / parts;
+      const sy = dy / parts;
+      if (i > 0 && (await room(page)).locked) {
+        await look(page, -(dx - sx * i) * SENSITIVITY, -(dy - sy * i) * SENSITIVITY);
+        return;
+      }
+      cursor.x = 640;
+      cursor.y = 360;
+      await page.mouse.move(cursor.x, cursor.y);
+      await page.mouse.down();
+      cursor.x += sx;
+      cursor.y += sy;
+      await page.mouse.move(cursor.x, cursor.y, {
+        steps: Math.max(2, Math.ceil(Math.max(Math.abs(sx), Math.abs(sy)) / 60)),
+      });
+      await page.mouse.up();
+    }
+    return;
+  }
   const steps = Math.max(2, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 60));
   cursor.x += dx;
   cursor.y += dy;
@@ -167,15 +199,20 @@ for (const backend of backends) {
     expect(segments).toBeGreaterThan(0);
     await page.waitForTimeout(500);
     await page.mouse.move(cursor.x, cursor.y);
-    // the pointer lock: a click can land before the page takes it (once in a busy full check on WebGL2), so click again
+    // the pointer lock: a click can land before the page takes it, so click again; if it never comes, turn by dragging
+    dragLook = false;
     for (let attempt = 0; ; attempt++) {
       await page.mouse.down();
       await page.mouse.up();
       try {
         await waitRoom(page, 'r.locked === true', 5_000);
         break;
-      } catch (e) {
-        if (attempt >= 2) throw e;
+      } catch {
+        if (attempt >= 1) {
+          dragLook = true;
+          out.dragLook = true;
+          break;
+        }
         await page.waitForTimeout(1_200);
       }
     }
