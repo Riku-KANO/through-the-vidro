@@ -495,6 +495,12 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
   }
   const pieces = Object.values(WORKSHOP_OBJECTS).filter((o) => o.col);
 
+  it('every collider of the workshop’s file is checked both ways (S-30: also the furniture S-27 added)', () => {
+    expect(new Set(pieces.map((p) => `${p.name}_col`))).toEqual(
+      new Set(workshop.colliders.map((c) => c.name)),
+    );
+  });
+
   it('you cannot walk into what you see: a ray that meets a piece meets its collider first (or within 5 cm)', () => {
     const misses: string[] = [];
     for (const piece of pieces)
