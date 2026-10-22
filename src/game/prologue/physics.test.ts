@@ -523,7 +523,8 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
           walls.push(`${piece.name} h${q.h} a${q.i}: felt ${q.felt.toFixed(2)} seen ${q.seen?.toFixed(2)}`);
       }
     expect(walls).toEqual([]);
-    // the hollows are few rays of a few pieces, not whole pieces (of 8 pieces × 96 rays)
+    // the hollows are few rays of a few pieces, not whole pieces (of 11 pieces × 96 rays since S-30; only the bench, the
+    // annealer and the furnace have hollows, so the S-24 limit still holds)
     expect(skipped).toBeLessThan(80);
   });
 

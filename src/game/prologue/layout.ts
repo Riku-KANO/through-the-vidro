@@ -139,6 +139,10 @@ export const WIND_CHIME: Vec3 = [0, 2.22, -3.22];
 
 /** The workshop's glb (`pnpm assets`, job "workshop"), under the app's base URL. */
 export const WORKSHOP_ASSET = 'assets/workshop/a0.glb';
+/** Where S-27's pipe bucket stands by the marver and the cart by the annealer (make_workshop.py PIPE_BUCKET, ANNEAL_CART). */
+const PIPE_BUCKET_AT = { a: 0.5, s: 0.25 } as const;
+const ANNEAL_CART_AT = { a: 0.06, s: 1.12 } as const;
+
 /**
  * The objects of WORKSHOP_ASSET (設計書 命名規則: <area>_<kind>_<id>, A0 = 序章) and where each stands (x, z). `col`: it has a
  * collider (_col) shaped like it (空間の可読性と導線 4); the grate is floor, the chime hangs above the head, the pieces
@@ -169,12 +173,12 @@ export const WORKSHOP_OBJECTS = {
   benchTools: { name: 'A0_tool_bench01', at: [BENCH.center[0], BENCH.center[2]], col: false },
   benchShelfWares: { name: 'A0_ware_bench02', at: [BENCH.center[0], BENCH.center[2]], col: false },
   marverTools: { name: 'A0_tool_marver01', at: [MARVER.center[0], MARVER.center[2]], col: false },
-  pipeBucket: { name: 'A0_bkt_marver01', at: beside(MARVER.center, 0.5, 0.25), col: true },
-  cart: { name: 'A0_cart_anneal01', at: beside(ANNEALER.center, 0.06, 1.12), col: true },
-  cartTools: { name: 'A0_tool_anneal01', at: beside(ANNEALER.center, 0.06, 1.12), col: false },
-  cartWares: { name: 'A0_ware_cart01', at: beside(ANNEALER.center, 0.06, 1.12), col: false },
+  pipeBucket: { name: 'A0_bkt_marver01', at: beside(MARVER.center, PIPE_BUCKET_AT), col: true },
+  cart: { name: 'A0_cart_anneal01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: true },
+  cartTools: { name: 'A0_tool_anneal01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: false },
+  cartWares: { name: 'A0_ware_cart01', at: beside(ANNEALER.center, ANNEAL_CART_AT), col: false },
   shelfOpal: { name: 'A0_ware_opal01', at: shelfPoint(), col: false },
-  shelfBoard: { name: 'A0_shlf_board01', at: shelfPoint(), col: true },
+  shelfBoard: { name: 'A0_shlf_board01', at: shelfBoardPoint(), col: true },
 } as const satisfies Record<string, { name: string; at: readonly [number, number]; col: boolean }>;
 
 /** The middle of the shelf's arc at its lowest tier (x, z). */
@@ -185,10 +189,21 @@ function shelfPoint(): [number, number] {
 }
 
 /**
- * A point (x, z) by a piece of furniture standing at `c`: `a` metres toward the centre of the dome and `s` to the right of
- * that (make_workshop.py Frame: the pipe bucket is PIPE_BUCKET by the marver, the cart ANNEAL_CART by the annealer).
+ * The middle of the shelf's back board (x, z): on the leaning wall at the board's middle height, the board's own middle
+ * (make_workshop.py SHELF_BOARD: 0.3 m up to 0.44 m above the top tier, 8 mm off the glass, 2 cm thick).
  */
-function beside(c: Vec3, a: number, s: number): [number, number] {
+function shelfBoardPoint(): [number, number] {
+  const a = (((WORKS_SHELF.fromDeg + WORKS_SHELF.toDeg) / 2) * Math.PI) / 180;
+  const y = (0.3 + (WORKS_SHELF.tiers[2] ?? 0) + 0.44) / 2;
+  const r = domeWallRadius(y) - 0.008 - 0.01;
+  return [r * Math.cos(a), r * Math.sin(a)];
+}
+
+/**
+ * A point (x, z) by a piece of furniture standing at `c`: `a` metres toward the centre of the dome and `s` to the right of
+ * that (make_workshop.py Frame).
+ */
+function beside(c: Vec3, { a, s }: { a: number; s: number }): [number, number] {
   const l = Math.hypot(c[0], c[2]);
   const [fx, fz] = [-c[0] / l, -c[2] / l];
   return [c[0] + fx * a - fz * s, c[2] + fz * a + fx * s];

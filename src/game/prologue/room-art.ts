@@ -125,9 +125,11 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
  * vidro; the furnace is the only warm light (the lamp over the bench is gone), flickering a little like a fire.
  * S-27: the fire's light is a deeper orange and a wide spot from the mouth's opening, out over the grate and turned toward
  * the bench, so the first picture still has the furnace's warmth on its right (S-24 受け入れ条件4: 視界の右に炉の暖かい光)
- * while the furnace's own body, behind the light, stays dark (S-24: a point light of 9, 0xff8a3c, 0.38 m out, which lit
- * the inside of the brass collar, the floor to a cream glow and the furnace's front; 画面の仕上げ: ブルームは控えめに —
- * the fire deep in the mouth is the light source that blooms).
+ * while the furnace's own body, behind the light, is not lit by it (S-24: a point light of 9, 0xff8a3c, 0.38 m out, which
+ * lit the inside of the brass collar, the floor to a cream glow and the furnace's front). Since S-30 the body is pale
+ * blue-grey frosted glass (drawn opaque) lit by the dawn and the sky only. 画面の仕上げ: ブルームは控えめに — the fire deep
+ * in the mouth was meant to be the light source that blooms, but its hottest colour is linear luminance about 0.43, under
+ * the bloom's threshold of 0.9 (the atlas tile's margin: process/slices/S-30.md 残件), so the fire does not bloom.
  */
 const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
 const SKYLIGHT_INTENSITY = 26;
