@@ -291,11 +291,12 @@ for (const backend of backends) {
     report.draughts = { draughts, doorHits: doorHits.length, swells, calm };
     if (write) wav(join(wavDir, 'door-draughts-45s.wav'), sr, [rung.left, rung.right]);
 
-    // S-22's sounds as they were: at the bench, the whole ambience against S-22's spots alone (same seed, S-22's 30 s).
-    // The door's chime strikes on a stream of its own, so the far chimes and the drops fall at the same moments; each
-    // far chime stands out above 1 kHz (S-22's measure: the 0.3 s from its strike against the 0.3 s before) about as
-    // much with the fire and the door's wind as without, away from the door's chime and draughts (they ring over it:
-    // those strikes are recorded, not judged)
+    // S-22's sounds as they were: at the bench, the whole ambience against S-22's spots alone (same seed, S-22's 30 s;
+    // S-22's seed 7 and two more). The door's chime strikes on a stream of its own, so the far chimes and the drops fall
+    // at the same moments; each far chime stands out above 1 kHz (S-22's measure: the 0.3 s from its strike against the
+    // 0.3 s before) about as much with the fire and the door's wind as without, once everything has faded in and away
+    // from the door's chime and draughts (they ring over it: those strikes are recorded, not judged). The comparison is
+    // with the same seed's S-22 sounds, so it does not hang on S-22's own 1.4 (判断待ち6).
     const s22 = [
       'wind:skylight',
       'wind:door',
@@ -306,46 +307,55 @@ for (const backend of backends) {
       'drops:lamp',
     ];
     const benchSeconds = 30;
-    const all = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed: 7, at: 'bench' });
-    const old = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed: 7, at: 'bench', only: s22 });
-    // every strike is in the player's log (it keeps the last 64; about 47 here)
-    expect((all.hits ?? []).length).toBeLessThan(56);
-    const strikesOf = (r: LabResult, id: string) =>
-      (r.hits ?? []).filter((h) => h.id === id).map((h) => Math.round(h.at * 1000) / 1000);
-    for (const id of ['chimes:town', 'drops:skylight', 'drops:tub', 'drops:lamp'])
-      expect(strikesOf(all, id), `${id} as in S-22`).toEqual(strikesOf(old, id));
     const hp = (x: Float32Array) => {
       const f = new Biquad(sr).highpass(1000);
       return x.map((v) => f.process(v));
     };
-    const brightAll = hp(all.mono);
-    const brightOld = hp(old.mono);
     const over = (x: Float32Array, t: number) => rmsAt(x, sr, t, t + 0.3) / rmsAt(x, sr, t - 0.35, t - 0.05);
-    const doorStrikes = (all.hits ?? []).filter((h) => h.id === 'chimes:door').map((h) => h.at);
-    const benchDraughts = all.draughts ?? [];
-    const far: { at: number; s22: number; s25: number; door: boolean }[] = [];
-    for (const h of (all.hits ?? []).filter((q) => q.id === 'chimes:town')) {
-      const door =
-        doorStrikes.some((t) => t > h.at - 3 && t < h.at + 0.3) ||
-        benchDraughts.some((d) => h.at > d.at - 0.35 && h.at < d.until + 0.3);
-      far.push({ at: h.at, s22: over(brightOld, h.at), s25: over(brightAll, h.at), door });
-    }
-    const clear = far.filter((f) => !f.door);
-    expect(clear.length).toBeGreaterThan(0);
-    for (const f of clear)
-      expect(f.s25 / f.s22, `far chime at ${f.at.toFixed(2)} s: as heard over S-22's bed`).toBeGreaterThan(
-        0.95,
-      );
-    // and the bed itself (the quietest fifth of 250 ms windows above 1 kHz) is hardly raised
-    const bed = (x: Float32Array): number => {
+    // the bed between draughts (a draught swells the door's wind on purpose): the quietest fifth of 250 ms windows above
+    // 1 kHz, once faded in, away from every draught of the whole ambience
+    const bed = (x: Float32Array, away: readonly Draught[]): number => {
       const w: number[] = [];
-      for (let t = 3; t + 0.25 <= benchSeconds; t += 0.25) w.push(rmsAt(x, sr, t, t + 0.25));
+      for (let t = 3; t + 0.25 <= benchSeconds; t += 0.25)
+        if (!away.some((d) => t + 0.25 > d.at && t < d.until)) w.push(rmsAt(x, sr, t, t + 0.25));
       w.sort((a, b) => a - b);
       return w[Math.floor(w.length * 0.2)] as number;
     };
-    const bedRise = bed(brightAll) / bed(brightOld);
-    expect(bedRise, 'the bed above 1 kHz at the bench, S-25 against S-22').toBeLessThan(1.03);
-    report.bench = { bedRiseAbove1k: bedRise, hits: (all.hits ?? []).length, farChimes: far };
+    const benchReport: Record<string, unknown>[] = [];
+    let judged = 0;
+    for (const seed of [7, 8, 9]) {
+      const all = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed, at: 'bench' });
+      const old = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed, at: 'bench', only: s22 });
+      // every strike is in the player's log (it keeps the last 64: nothing pushed out)
+      expect((all.hits ?? []).length, `seed ${seed}`).toBeLessThan(64);
+      const strikesOf = (r: LabResult, id: string) =>
+        (r.hits ?? []).filter((h) => h.id === id).map((h) => Math.round(h.at * 1000) / 1000);
+      for (const id of ['chimes:town', 'drops:skylight', 'drops:tub', 'drops:lamp'])
+        expect(strikesOf(all, id), `seed ${seed}: ${id} as in S-22`).toEqual(strikesOf(old, id));
+      const brightAll = hp(all.mono);
+      const brightOld = hp(old.mono);
+      const doorStrikes = (all.hits ?? []).filter((h) => h.id === 'chimes:door').map((h) => h.at);
+      const benchDraughts = all.draughts ?? [];
+      const far: { at: number; s22: number; s25: number; judged: boolean }[] = [];
+      for (const h of (all.hits ?? []).filter((q) => q.id === 'chimes:town')) {
+        const door =
+          doorStrikes.some((t) => t > h.at - 3 && t < h.at + 0.3) ||
+          benchDraughts.some((d) => h.at > d.at - 0.35 && h.at < d.until + 0.3);
+        const ok = !door && h.at >= 3;
+        far.push({ at: h.at, s22: over(brightOld, h.at), s25: over(brightAll, h.at), judged: ok });
+        if (!ok) continue;
+        judged++;
+        expect(
+          over(brightAll, h.at) / over(brightOld, h.at),
+          `seed ${seed}: far chime at ${h.at.toFixed(2)} s, as heard over S-22's bed`,
+        ).toBeGreaterThan(0.95);
+      }
+      const bedRise = bed(brightAll, benchDraughts) / bed(brightOld, benchDraughts);
+      expect(bedRise, `seed ${seed}: the bed above 1 kHz at the bench, S-25 against S-22`).toBeLessThan(1.03);
+      benchReport.push({ seed, bedRiseAbove1k: bedRise, hits: (all.hits ?? []).length, farChimes: far });
+    }
+    expect(judged, 'far chimes judged clear of the door, after the fade-in').toBeGreaterThan(1);
+    report.bench = benchReport;
 
     // the whole ambience where you stand, for the ear (and its levels for the record: the bed is the quietest fifth of
     // 250 ms windows, the peak the loudest strike)
