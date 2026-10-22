@@ -20,6 +20,23 @@ export interface FootingSegment extends Box {
 }
 
 /**
+ * A sphere as the colliders see it. With `materialize` (S-02's orb spheres, orbSpheres()), only a sphere whose
+ * orb stands on its pedestal (target 1: growing or grown) holds; one shrinking after a pickup (target 0) is on
+ * its way out. A sphere without it is fixed (the dev holds draw one).
+ */
+export interface FootingSphere extends Sphere {
+  materialize?: { target: 0 | 1 };
+}
+
+/**
+ * Does this sphere hold now — ground to step onto (the fence, S-06) and surface-only walls cut away (S-28)?
+ * Only the sphere of a placed orb does.
+ */
+export function holdsGround(sphere: FootingSphere): boolean {
+  return sphere.materialize === undefined || sphere.materialize.target === 1;
+}
+
+/**
  * Splits a footing box into segments of about `size` metres along its longer horizontal axis
  * (a strip: bridges, stairs). A wide floor would need a grid of segments instead.
  */

@@ -3,8 +3,9 @@ import { readsBackdrop } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
-import { segmentsUnder, splitFooting, type Vec3 } from '../../layers/footing';
+import { segmentsUnder, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
+import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { glassEase } from '../../layers/tween';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
 import type { DiveWorld } from '../dive-world';
@@ -27,7 +28,6 @@ import {
   EDGE_Z,
   FACING_DEG,
   FAR,
-  FOOTING_SEGMENT,
   lookDirection,
   PEDESTAL_ID,
   PEDESTAL_ORB,
@@ -121,8 +121,11 @@ export interface RoomProbe {
   layout: { edgeZ: number; farZ: number; pedestalOrb: Vec3; drop: Vec3 };
   /** The workshop's interior from its glb (S-24), once the room is built. */
   workshop: WorkshopProbe | null;
-  /** S-24's trial of a surface-only wall in the sphere (?trial=surface-wall&surfaceCol=keep|cut), or null. */
-  trial: { mode: 'keep' | 'cut'; segments: number; off: number } | null;
+  /**
+   * The surface-only wall on the dead end's lip (?trial=surface-wall, S-24's trial wall): its segments, and those whose
+   * collider a placed orb has cut away (S-28). null without the wall.
+   */
+  trial: { segments: number; off: number } | null;
 }
 
 /** What the room built from the workshop's glb (tests/e2e/S-24-*.spec.ts). */
@@ -322,16 +325,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   addRoomColliders(R, world);
   const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
   const furniture = addAssetColliders(R, world, workshop.assembled.colliders);
-  // S-24's trial (S-23 判断待ち9, process/slices/S-24.md): a surface-only wall on the dead end's lip, whose collider stays
-  // (keep, as assets do today) or goes while it is wholly inside a placed orb's sphere (cut). Off unless asked for.
+  // A surface-only wall on the dead end's lip (?trial=surface-wall; S-24's trial wall, not in the prologue's design): its
+  // segments lose their collider while wholly inside a placed orb's sphere, and picking the orb up while standing in
+  // one is refused (S-28, process/slices/S-28.md).
   const trialWall = ctx.params.get('trial') === 'surface-wall';
   const trial = trialWall
-    ? new SurfaceColliders(
-        R,
-        world,
-        splitFooting('trial-wall', TRIAL_SURFACE_WALL, FOOTING_SEGMENT),
-        ctx.params.get('surfaceCol') === 'cut' ? 'cut' : 'keep',
-      )
+    ? new SurfaceColliders(R, world, splitSurface('trial-wall', TRIAL_SURFACE_WALL, SURFACE_SEGMENT))
     : null;
   world.step();
 
@@ -355,7 +354,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   });
 
   probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
-  if (trial) probe.trial = { mode: trial.mode, segments: trial.segments.length, off: 0 };
+  if (trial) probe.trial = { segments: trial.segments.length, off: 0 };
   // 技術設計 > 性能の目標と予算: 透過ガラスの同時表示は近景で20個程度まで. On demand for the sensors (not enumerable, so a
   // copied probe does not carry it): the meshes the camera draws now whose material reads the backdrop.
   const frustum = new THREE.Frustum();
@@ -386,6 +385,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     orbStart: opts.orbStart,
     pedestals,
     footing: footing.segments,
+    surface: trial?.segments ?? [],
     drop: DROP,
   });
   const spawn = SPAWNS[opts.spawn];
@@ -564,11 +564,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     }
     field.setSpheres(fieldList);
     // The footing takes the session's spheres as they are (the same array until the orbs change) and decides
-    // the fence itself (physics.holdsGround). The dev hold uses what it draws.
+    // the fence itself (holdsGround), and so does the surface-only wall. The dev hold uses what it draws.
     const footingSpheres =
       opts.growHold === null ? spheres : fieldList.map((s) => ({ center: s.center, radius: s.radius }));
     footing.sync(footingSpheres);
-    if (trial?.sync(footingSpheres) && probe.trial) probe.trial.off = trial.offCount;
+    if (trial?.sync(footingSpheres) && probe.trial) probe.trial.off = trial.cutCount;
 
     const place = session.orbPlace;
     const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;

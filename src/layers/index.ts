@@ -3,13 +3,16 @@
  *  - LayerField.assign(object, 'surface' | 'back' | 'shared') puts objects on a layer and makes their
  *    node materials obey the materialized spheres; add LayerField.membranes to the scene.
  *  - LayerField.setSpheres() each frame from game/orb's orbSpheres() (+ boundaryGlow()).
- *  - activeSegmentIds() tells the physics which back-layer footing colliders to enable.
+ *  - activeSegmentIds() tells the physics which back-layer footing colliders to enable; cutSurfaceIds() which
+ *    surface-only colliders to disable (S-28), and segmentsAroundBody() whether a pickup would shut the body in.
  */
 export { type FieldSphere, LayerField } from './field';
 export {
   activeSegmentIds,
   type Box,
   type FootingSegment,
+  type FootingSphere,
+  holdsGround,
   type Sphere,
   segmentsUnder,
   sphereOverlapsBox,
@@ -37,4 +40,12 @@ export {
   SMALL_ORB_RADIUS,
   stepMaterialization,
 } from './materialize';
+export {
+  type BodyExtent,
+  boxInsideSphere,
+  cutSurfaceIds,
+  SURFACE_SEGMENT,
+  segmentsAroundBody,
+  splitSurface,
+} from './surface';
 export { glassEase, stepTween, type Tween } from './tween';

@@ -1,4 +1,5 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
+import type { BodyExtent } from '../../layers/surface';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
 import {
@@ -10,6 +11,7 @@ import {
   stepPeek,
 } from '../orb/peek';
 import { canPeek, canPickUp, canPlace } from '../orb/rules';
+import { BODY_HEIGHT, BODY_RADIUS, SKIN } from '../player/constants';
 import type { MovementModifier } from '../player/motion';
 import { EventBus, type PrologueEvent } from './events';
 
@@ -27,6 +29,11 @@ export const SHAKE_AMPLITUDE = 0.012;
 export const HAND_SECONDS = PEEK_SECONDS;
 /** 仮: the touched light drop flies into the orb (光の雫の数: 手の玉の中に光の粒として入っていく). */
 export const DROP_FLIGHT_SECONDS = 1.2;
+/**
+ * The body as the pickup check sees it (S-28): S-03's capsule and the gap its controller keeps all round, so a wall
+ * coming back within that gap counts as around the body too.
+ */
+export const PICKUP_BODY: BodyExtent = { radius: BODY_RADIUS + SKIN, height: BODY_HEIGHT + 2 * SKIN };
 
 export type InteractTarget = { kind: 'bench' } | { kind: 'pedestal'; id: string } | { kind: 'drop' };
 
@@ -48,6 +55,8 @@ export interface SessionOptions {
   pedestals: Readonly<Record<string, Vec3>>;
   /** Back-layer footing, for 拾う前に足場の上にいないか (技術設計 > 裏の層の実装 > 安全). */
   footing: readonly FootingSegment[];
+  /** Surface-only walls (S-28): a placed orb cuts them away, so 拾う前に壁の中にいないか too. */
+  surface?: readonly FootingSegment[];
   /** Where the light drop hovers (it is back layer: touchable only inside a sphere). */
   drop: Vec3;
 }
@@ -205,7 +214,13 @@ export class PrologueSession {
       return 'place';
     }
     if (at !== id) return 'nothing';
-    const ctx = { pedestals: this.options.pedestals, footing: this.options.footing, feet };
+    const surface = this.options.surface;
+    const ctx = {
+      pedestals: this.options.pedestals,
+      footing: this.options.footing,
+      surface: surface && surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
+      feet,
+    };
     if (!canPickUp(this.orbsValue, MAIN, ctx)) {
       this.tremble('pickup');
       return 'pickup-denied';
