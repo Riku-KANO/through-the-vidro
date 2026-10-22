@@ -16,6 +16,7 @@ import { FURNACE_FACING, FURNACE_MOUTH, WORKS_SHELF } from '../../src/game/prolo
  *      - 炉が炉に見える: from in front of the furnace, the mouth (its opening projected on the screen) burns red — enough
  *        of it is a fire's red (hue up to 20°, saturated)
  *      - 扉から見てクリーム色に滲みすぎない: from the door, few bright, warm, washed-out (cream) pixels in the picture
+ *      - (S-24 kept) 目覚めて最初の絵の右に炉の暖かい光: the right of the first picture stays about as warm as in S-24
  *      - 作品の棚の作品が見える: within the works' place on the screen (the box round their vertices), hiding the works changes
  *        enough pixels, the clear ones alone too (against the sky, before, they hardly changed it). Pixels that differ
  *        between two pictures of the same thing (the fire's light breathes) are left out
@@ -58,6 +59,12 @@ const LIMITS = {
   furnaceRed: 0.2,
   /** 扉から振り返る: cream pixels (bright, warm, washed out). S-24: 12% (the furnace's milky bubbles and their bloom). */
   doorCream: 0.01,
+  /**
+   * 目覚め: the furnace's warmth in the right of the first picture (S-24 受け入れ条件4: 視界の右に炉の暖かい光): mean red minus
+   * blue (0–255) over its right third, lower 45%. S-24: 25.3–25.4 (review round 2: the first spot of S-27 left 19.1).
+   * Nine tenths of S-24.
+   */
+  wakeWarmth: 22.8,
   /**
    * 作品の棚: share of the works' place that changes when they are hidden — all of them, and the clear ones alone. S-24:
    * 2.34–2.36% and 0.76–0.77% (WebGPU–WebGL2, the same measure on the S-24 glb); twice the higher of the two.
@@ -152,7 +159,10 @@ async function project(page: Page, points: [number, number, number][]): Promise<
   }, points);
 }
 
-/** The furnace's mouth on the screen: a disc over the brass collar's opening (radius 0.2 m, 0.955 m off the centre). */
+/**
+ * The furnace's mouth on the screen: a disc over the brass collar's opening (radius 0.2 m, 0.955 m off the centre: the collar
+ * of blender/scripts/make_workshop.py furnace(); change both together).
+ */
 async function mouthRegion(page: Page): Promise<Region> {
   const [fx, fz] = FURNACE_FACING;
   const reach = 0.335; // from FURNACE_MOUTH (0.62 m off the centre) to the opening
@@ -454,7 +464,35 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-27 the works on the shelf are seen against the sky (作品の棚) [${backend}]`, async ({ page }) => {
+  test(`S-27 waking, the furnace's warm light is still in the right of the view (目覚め) [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    const errors = collectErrors(page);
+    await openView(page, 'bench', webgl);
+    const png = await page.screenshot();
+    const warmth = await page.evaluate(async (b64) => {
+      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+      const bmp = await createImageBitmap(blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = c.getContext('2d');
+      if (!g) throw new Error('no 2d context');
+      g.drawImage(bmp, 0, 0);
+      const x0 = Math.floor((bmp.width * 2) / 3);
+      const y0 = Math.floor(bmp.height * 0.55);
+      const d = g.getImageData(x0, y0, bmp.width - x0, bmp.height - y0).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += (d[i] ?? 0) - (d[i + 2] ?? 0);
+      return sum / (d.length / 4);
+    }, png.toString('base64'));
+    keep('wake', { warmth });
+    expect(warmth, 'red minus blue in the right of the first picture').toBeGreaterThan(LIMITS.wakeWarmth);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-27 the works on the shelf are seen against their back (作品の棚) [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(120_000);
     const errors = collectErrors(page);
     await openView(page, 'shelf', webgl);
