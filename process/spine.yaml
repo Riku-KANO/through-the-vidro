@@ -555,7 +555,9 @@ slices:
 
   - id: S-24
     title: 工房の内装 — 職人がさっきまでいた吹きガラス工房（Blender で造形して試作部屋に置く）
-    status: todo
+    status: integrated
+    branch: slice/S-24-workshop-interior
+    accepted: 発案者が上限（レビュー2巡、2巡目の後の再レビューなし）で受け入れ。配置・当たり判定・書き出しの土台として入れ、炉と棚の見た目は S-27 で磨く。球の中の表だけの壁は切る（S-28）。作業台は曇りガラスと真鍮、吊りランプなしのまま（2026-10-22）
     depends: [S-22, S-23]
     human: 見た目の最終判断は発案者
     requirements:
@@ -569,7 +571,7 @@ slices:
     paths:
       - blender/**（工房の造形スクリプトと .blend。案1だけの規則は blender/scripts/vidro/。共通にするものは scripts/common の VERSION と CHANGELOG）
       - public/assets/**（書き出した glb）
-      - src/game/prologue/room-art.ts、src/game/prologue/room.ts（読み込みと配置の配線）、src/game/prologue/layout.ts（家具の位置と当たり判定、FLOOR_ZONES に真鍮の格子）
+      - src/game/prologue/room-art.ts、src/game/prologue/room.ts（読み込みと配置の配線）、src/game/prologue/layout.ts（家具の位置と当たり判定、FLOOR_ZONES に真鍮の格子）、src/game/prologue/physics.ts（家具の箱と球を外す）
       - src/game/assets/**（工房で要る組み立ての口があれば）
       - tests/e2e/S-24-*.spec.ts
       - process/slices/S-24.md
@@ -601,8 +603,49 @@ slices:
   - id: S-26
     title: 焼き込み — 工房のライトマップと、作品の棚が床に落とす光の模様
     status: todo
-    depends: [S-24]
+    depends: [S-27]
     requirements:
       - Blenderアセットパイプライン > 焼き込み、自動化
       - 空間の可読性と導線（3 床の光で上の形を読ませる）
     note: 受け入れ条件は S-24 の結果を見てから書く（S-23 の記録の「焼き込みの次の手順」、焼き込みの画像を glb に入れるか外に置くか＝S-23 の判断待ち5）
+
+  - id: S-27
+    title: 工房の見た目を磨く — 炉らしい炉と光、棚の作品が見えること、物の密度
+    status: todo
+    depends: [S-24]
+    parallel: true
+    human: 見た目の最終判断は発案者
+    requirements:
+      - アートディレクション（ガラスの種類、形のルール、画面の仕上げ：ブルームは控えめ）
+      - 世界観とストーリー（まだそこで暮らしている気配）
+      - 空間の可読性と導線（2 形は縁で伝える）
+    paths:
+      - blender/**（make_workshop.py と workshop.blend）
+      - public/assets/workshop/**
+      - src/game/prologue/room-art.ts（炉の光、作品の見え方に要る材質の設定）
+      - tests/e2e/S-27-*.spec.ts
+      - process/slices/S-27.md
+    acceptance:
+      - 炉が炉に見える：S-24 の乳白の泡の塊（雲のように見える）を、口の奥が赤く燃える吹きガラスの炉の形にする（泡の形と真鍮の口は残してよい）。扉から見てクリーム色に滲みすぎない（灯りの強さか点光源の位置で収める）
+      - 作品の棚の作品が見える：空を背にしても透明な作品の形が読める（縁の反射、気泡入り・乳白・曇りの作品を混ぜる、棚の後ろに背板を置く、など）。棚が空に見えない
+      - 物の密度：作業台・マーバー台・徐冷炉の周りに道具や作りかけを足し、「さっきまで誰かがいた」気配を強める。歩く線と中央は空けたまま、小物の予算（500〜3000三角形、アトラス共有）と全体の予算の中
+      - S-24 の4視点（目覚め、炉の前、作品の棚、扉から振り返る）を前後で撮り比べて記録し、見た目の最終判断は発案者に仰ぐ。当たり判定の両向きの検査と S-24 の e2e は緑のまま。重さの増分を記録する
+
+  - id: S-28
+    title: 置いた玉の球の中では、表の層にしかない壁を通れるようにする
+    status: todo
+    depends: [S-24]
+    parallel: true
+    requirements:
+      - コアメカニクス > 裏の層のルール（表にしかない壁は消えて通れるようになる）
+      - 空間の可読性と導線（4 当たり判定は見た目に正直に）
+    paths:
+      - src/layers/**、src/game/orb/**（拾う前の確かめ）、src/game/prologue/physics.ts、src/game/prologue/room.ts（配線だけ）
+      - tests/e2e/S-28-*.spec.ts
+      - process/slices/S-28.md
+    acceptance:
+      - 区画が置いた玉の球に丸ごと入っている間だけ、表の層にしかない壁の当たり判定を切る（S-24 の試し `trial=surface-wall&surfaceCol=cut` を正式にする。区画の大きさは 0.4m から）。判定は純粋関数で単体テストする
+      - 拾う前の確かめ：表だけの壁の中に立っているときに玉を拾うと閉じ込められるので、裏の足場と同じく拾えないようにし、玉が震えて知らせる（S-02 の拒否と同じ）
+      - e2e で、置く前は壁で止まり、置くと通り抜けられ、壁の中では拾えず震えることを確かめる。両経路でエラーなし。S-06 の通しは緑のまま
+      - 試しのスイッチ（keep/cut）は外すか、決まった方だけを残す（記録に書く）
+

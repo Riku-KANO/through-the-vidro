@@ -33,6 +33,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 整形 | `pnpm format` |
 | アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ |
 | 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
+| 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop` |
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
@@ -61,6 +62,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   判定する（見逃す）、5秒までに描きもコンパイルもしない世界は見えない。home-dive と prologue-proto では、先頭（sandbox.scene）以外の
   場面に透過を読む材質（core の `readsBackdrop`、安全なものも含む）があることで、玉の中の世界を見ていると判断する（`roots` の根ごとの
   `backdropReaders`、S-15）。世界でない場面が透過を持つと偽の緑、世界から透過がなくなると偽の赤になる。
+- **コミットした glb を Node で読むセンサー（S-24）**: `src/game/assets/node-glb.ts`（GLTFLoader ＋ meshopt、KTX2 は空のテクスチャ）で、単体テストが
+  ゲームと同じ物・名前・形の位置（`workshop-asset.test.ts`）と当たり判定（Rapier、`physics.test.ts`）を確かめる。当たり判定の正直さは両向きの光線で
+  確かめる（見えている物には 5cm 以内で当たる、当たり判定に止められる所には 10cm 以内に見た目がある。体が入れない窪みは名前と理由を挙げて外す）。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -157,6 +161,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   共鳴器）は、パイプラインが書き出しの前に原点を extras の `origin` に書く。メートルで厚みを決めるガラスは拡大率で割る。
 - **層を使うシーンのカメラは `camera.layers.mask = viewMask('main')`（S-23）。** PeekPipeline を使うシーンはそれが設定する。使わないシーンで既定
   （channel 0 だけ）のままだと、表だけ・裏だけの物と透過のガラスが描かれない。
+- **工房の家具の当たり判定は glb の `_col`（S-24）。** 作業台・炉を physics.ts の箱や球で持たない。`_col` は見た目の部品ごとの凸包
+  （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。
+- **GPU を使う検査の間は、同じ機械で CPU を多く使う仕事（Blender、KTX2 の書き出し）を走らせない（S-24）。** S-06 の「最長フレーム 200ms」が
+  376ms で落ちた。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

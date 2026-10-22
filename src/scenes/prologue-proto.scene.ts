@@ -17,7 +17,10 @@ export const title =
  * URL switches:
  *   (none)         the whole prologue: loading → home → dive → the workshop
  *   autoplay=1     the same, played by the script (S-04's home autoplay, then the in-room autopilot)
- *   direct=1       start in the workshop without the home; spawn=bench|path|dead-end|far
+ *   direct=1       start in the workshop without the home; spawn=bench|furnace|shelf|door|path|dead-end|far
+ *                  (furnace/shelf/door: S-24's views of the interior)
+ *   trial=surface-wall&surfaceCol=keep|cut   (S-24 trial) a surface-only wall at the dead end, kept or cut inside
+ *                  a placed orb's sphere
  *   bench=<s>      (sensor) direct at the dead end, the vidro in hand, peeking (the heaviest view; peek=free
  *                  measures it at rest)
  *   peek=hold      keep peeking (the heaviest view, for measuring); peek=toggle: peek toggles per press
