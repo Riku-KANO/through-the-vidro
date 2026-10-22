@@ -1,6 +1,7 @@
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { dot, exp, mix, screenSize, screenUV, smoothstep, uniform, vec2, vec3 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import { ownBackdropImage } from '../../core/glass';
 import type { SandboxScene, SceneContext } from '../../core/scene';
 import { segment } from '../../core/transition';
 import type { DiveWorld } from '../../game/dive-world';
@@ -56,6 +57,10 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     type: THREE.HalfFloatType,
     depthBuffer: true,
   });
+  // The world's glass is drawn here on the home and into the world's own target once landed (or the canvas): with
+  // one shared backdrop record (three r186), a render scale change in between left the second one's backdrop at the
+  // old size; on WebGPU every frame after the dive was black (S-29).
+  ownBackdropImage(innerRT);
 
   // home scene: background, orb (added when compiled), the dive's full-screen image, the fog
   const home = new THREE.Scene();

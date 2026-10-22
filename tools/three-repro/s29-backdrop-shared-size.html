@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>three: per-target transmission backdrops share one size record</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body { margin: 0; font: 13px/1.4 system-ui, sans-serif; background: #111; color: #ddd; }
+      #status { padding: 6px 10px; white-space: pre; }
+    </style>
+    <!--
+      Minimal reproduction for process/slices/S-29.md (three r186): ViewportTextureNode keeps one backdrop
+      (FramebufferTexture) per render target, cloned from one default, and Texture.copy shares the source, so all of them
+      share one { width, height } record. A backdrop is re-made only when that shared record differs from its target's
+      size, so after both targets change size, the one drawn second keeps its old texture:
+        dir=up    (old texture smaller): WebGPU "Texture copy range … touches outside of [Texture …]" and the submit is
+                  dropped; WebGL2 GL_INVALID_VALUE from copyTexSubImage2D. In the game: black after the dive.
+        dir=down  (old texture larger): no message, the backdrop is shifted (counted as stale copies only).
+      Two render targets A and B, the same transmissive sphere drawn into each:
+        A then B at size 1, both targets resized to size 2, B for 10 frames, then A for 30 frames.
+      The glass has a node property (thicknessNode), so the S-12 bug (s12-backdrop-resize.html) does not interfere.
+      URL switches:
+        three=<npm version>|dev|<commit sha>   three build to load (default 0.186.1)
+        webgl=1                                WebGPURenderer with forceWebGL
+        dir=up|down                            size 1 → size 2 grows (default) or shrinks
+        fix=1                                  the game's workaround (src/core/glass/backdrop.ts ownBackdropImage): give
+                                               each target's backdrop its own source before the first draw, as r187 does
+                                               (mrdoob/three.js#34636, FramebufferTexture.copy)
+      Counted: copy errors (console), gl.getError(), and stale copies: a copy into a backdrop whose texture was made at
+      another size (only public fields: the texture's version and image; three re-makes it only on a version change).
+    -->
+    <script>
+      // Import map for the requested three build; added before any module script runs.
+      const v = new URLSearchParams(location.search).get('three') ?? '0.186.1';
+      const base =
+        v === 'dev' || /^[0-9a-f]{7,40}$/.test(v)
+          ? `https://cdn.jsdelivr.net/gh/mrdoob/three.js@${v}/build/`
+          : `https://cdn.jsdelivr.net/npm/three@${v}/build/`;
+      const map = document.createElement('script');
+      map.type = 'importmap';
+      map.textContent = JSON.stringify({
+        imports: {
+          three: `${base}three.webgpu.js`,
+          'three/webgpu': `${base}three.webgpu.js`,
+          'three/tsl': `${base}three.tsl.js`,
+        },
+      });
+      document.currentScript.after(map);
+    </script>
+  </head>
+  <body>
+    <div id="status">loading…</div>
+    <script type="module">
+      import { materialThickness, viewportOpaqueMipTexture } from 'three/tsl';
+      import * as THREE from 'three/webgpu';
+
+      const params = new URLSearchParams(location.search);
+      const forceWebGL = params.get('webgl') === '1';
+      const fix = params.get('fix') === '1';
+      const down = params.get('dir') === 'down';
+      const status = document.getElementById('status');
+
+      const result = {
+        revision: THREE.REVISION,
+        backend: '',
+        fix,
+        dir: down ? 'down' : 'up',
+        done: false,
+        copyErrors: 0,
+        glErrors: 0,
+        stale: 0,
+        phases: {},
+      };
+      window.__repro = result;
+      let phase = 'setup';
+      const count = (key) => {
+        result[key]++;
+        result.phases[phase] = result.phases[phase] ?? { copyErrors: 0, glErrors: 0, stale: 0 };
+        result.phases[phase][key]++;
+      };
+      const original = console.error.bind(console);
+      console.error = (...args) => {
+        if (args.some((a) => /copy range|touches outside/.test(String(a?.message ?? a)))) count('copyErrors');
+        original(...args);
+      };
+
+      const renderer = new THREE.WebGPURenderer({ forceWebGL });
+      renderer.setSize(320, 180);
+      document.body.appendChild(renderer.domElement);
+      await renderer.init();
+      result.backend = renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2';
+      const gl = renderer.backend.gl ?? null;
+
+      // stale copies: three re-makes a backdrop's texture (at its image size) only when its version changed
+      const made = new Map();
+      const copy = renderer.copyFramebufferToTexture.bind(renderer);
+      renderer.copyFramebufferToTexture = (texture, rectangle) => {
+        copy(texture, rectangle);
+        const { width, height } = texture.image;
+        const m = made.get(texture.id);
+        if (!m || m.version !== texture.version) made.set(texture.id, { version: texture.version, width, height });
+        else if (m.width !== width || m.height !== height) count('stale');
+      };
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x335577);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicNodeMaterial({ color: 0xff8800 }));
+      box.position.set(0, 0, -3);
+      scene.add(box);
+      const glass = new THREE.MeshPhysicalNodeMaterial({ transmission: 1, roughness: 0, thickness: 0.5 });
+      glass.thicknessNode = materialThickness; // keeps the S-12 bug out (same value as the default)
+      scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.8, 32, 16), glass));
+      const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 100);
+      camera.position.set(0, 0, 5);
+
+      const [size1, size2] = down ? [[544, 306], [512, 288]] : [[512, 288], [544, 306]];
+      const options = { type: THREE.HalfFloatType };
+      const a = new THREE.RenderTarget(...size1, options);
+      const b = new THREE.RenderTarget(...size1, options);
+      if (fix) {
+        const copies = viewportOpaqueMipTexture();
+        const shared = copies.getTextureForReference(null).source;
+        for (const target of [a, b]) {
+          const own = copies.getTextureForReference(target);
+          if (own.source === shared) own.source = new THREE.TextureSource({ ...own.image });
+        }
+      }
+
+      // [name, frames, target, action at the start]
+      const steps = [
+        ['A at size 1', 5, a, () => {}],
+        ['B at size 1', 5, b, () => {}],
+        ['B at size 2', 10, b, () => { a.setSize(...size2); b.setSize(...size2); }],
+        ['A at size 2', 30, a, () => {}],
+      ];
+      let step = 0;
+      let left = 0;
+      let target = a;
+      const show = () => {
+        status.textContent =
+          `three r${result.revision} · ${result.backend} · dir=${result.dir} · fix=${fix ? 1 : 0} · phase: ${phase}\n` +
+          `copy errors: ${result.copyErrors} · gl.getError() != 0: ${result.glErrors} · stale copies: ${result.stale}` +
+          (result.done ? ' · done' : '');
+      };
+      renderer.setAnimationLoop(() => {
+        if (left === 0) {
+          if (step >= steps.length) {
+            renderer.setAnimationLoop(null);
+            result.done = true;
+            show();
+            return;
+          }
+          const [name, frames, t, action] = steps[step++];
+          phase = name;
+          target = t;
+          action();
+          left = frames;
+        }
+        left--;
+        renderer.setRenderTarget(target);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(null);
+        if (gl) for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) count('glErrors');
+        show();
+      });
+    </script>
+  </body>
+</html>

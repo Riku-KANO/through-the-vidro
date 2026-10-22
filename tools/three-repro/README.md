@@ -7,6 +7,7 @@ URL の `three=` で版を切り替えられる（`0.186.1`、`dev`、コミッ�
 |---|---|---|
 | `s12-backdrop-resize.html` | ノードのない透過の材質の物が、描画の大きさ A → B → A の間に隠れていると、戻ったときに捨てられた背景画像で描かれる | `process/slices/S-12.md` |
 | `s05-transmission-rt-size.html` | 透過の材質を画面と違う大きさの描画先にも描くと、背景画像が毎フレーム作り直される（S-05 の決まりの原因の候補） | `process/slices/S-05.md`、`S-10.md` |
+| `s29-backdrop-shared-size.html` | 2つの描画先に透過を描き、両方の大きさが変わると、後から描いた方の背景画像が古い大きさのまま残る（潜った後の黒い画面） | `process/slices/S-29.md` |
 
 ## 実行
 
@@ -49,3 +50,26 @@ WebGPU と WebGL2 の両方を、ヘッドレスの Chromium で開いて表に�
   `Destroyed texture … used in a submit` になったと考えられる（未確認）。
 - r187 に上げたら、AGENTS.md の「画面と違う大きさの RenderTarget に透過の材質を描かない」と、それに合わせた回避策
   （覗くパスに透過の物を入れない S-02、ホームのシーンに透過を置かない S-04）を外せるかを確かめる。
+
+### S-29: 描画先ごとの背景画像が大きさの記録を共有し、後から描いた方が古い大きさのまま残る
+
+（2026-10-22、Apple M5 Pro、macOS 26.6.2、Chromium ヘッドレス。`CASES=S-29 node tools/three-repro/run.mjs`）
+
+描画先 A と B に同じ透過の玉を描く: A → B を大きさ 1 で、A と B を大きさ 2 にして B を 10 フレーム、その後 A を 30 フレーム。
+`stale` は古い大きさの背景画像へのコピーの数（ページが three の公開の値〈テクスチャの version と image〉で数える）。
+`console copy` は WebGPU の `Texture copy range … touches outside of [Texture …]`（error と warning で 1 フレーム 2 件）と
+WebGL2 の `GL_INVALID_VALUE: glCopyTexSubImage2D: Offset overflows texture dimensions`。
+
+| three | 向き | 経路 | 回避策なし | 回避策あり（`ownBackdropImage` と同じ） |
+|---|---|---|---|---|
+| 0.186.1 | 大きくなる（up） | WebGPU | stale 30、console copy 60 | 0 |
+| 0.186.1 | up | WebGL2 | stale 30、console copy 30、gl.getError 30 | 0 |
+| 0.186.1 | 小さくなる（down） | WebGPU・WebGL2 | stale 30（メッセージなし） | 0 |
+| dev（r187dev、2026-10-22 のビルド） | up・down | WebGPU・WebGL2 | 0 | 0 |
+
+- **開発版では直っている**（#34636。`FramebufferTexture.copy()` が image を写した新しい `TextureSource` を持つ）。S-05 と同じ根
+  （描画先ごとの背景画像が `clone()` で `Source` を共有する）で、S-05 は「違う大きさが交互に描くと毎フレーム作り直し」、
+  S-29 は「同じ大きさへ変わったとき、後から描いた方が作り直されない」。本家に報告する必要はない。
+- ゲームでは `src/core/glass/backdrop.ts` の `ownBackdropImage(target)` が、透過を描く描画先（ホームの玉の中の像、序章の仕上げの
+  パス）に r187 と同じく自分の `TextureSource` を持たせる。three を r187 以上に上げたら、単体テスト
+  （`backdrop.test.ts` の「three r186: the targets share …」）が落ちるので、そのときに外す。

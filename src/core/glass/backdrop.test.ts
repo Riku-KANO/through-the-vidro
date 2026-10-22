@@ -1,8 +1,14 @@
-import { float, materialThickness } from 'three/tsl';
+import { float, materialThickness, viewportOpaqueMipTexture } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { describe, expect, it } from 'vitest';
 import { QUALITY_PRESETS, type QualityLevel } from '../quality';
-import { followBackdropResize, missesBackdropResize, readsBackdrop } from './backdrop';
+import {
+  followBackdropResize,
+  missesBackdropResize,
+  ownBackdropImage,
+  readsBackdrop,
+  sharesBackdropImage,
+} from './backdrop';
 import { GLASS_KINDS } from './kinds';
 import { createGlass } from './materials';
 import type { GlassPlacement, GlassRole } from './policy';
@@ -104,5 +110,115 @@ describe('transmission across render size changes (three r186, S-12)', () => {
         }
       }
     }
+  });
+});
+
+/** The fields of a backdrop copy (FramebufferTexture) that three r186's copy path reads. */
+interface BackdropCopy {
+  id: number;
+  version: number;
+  image: { width: number; height: number };
+}
+
+/**
+ * Draws transmission into a target the way three r186 copies the backdrop before such a draw: three's own
+ * ViewportTextureNode.updateBefore (the node every front-side transmissive material samples), with a stand-in renderer
+ * that only answers which target is current and records the copies. Each draw returns whether its copy went into a
+ * backdrop texture made at another size: three (re)makes a copy's texture at its image size only when the texture's
+ * version changed since its last copy (Textures.updateTexture). If three changes how the node reads the renderer,
+ * this throws or stops matching and the tests below fail: then check S-29's e2e and three's change log.
+ * Not covered here: that transmissive materials sample this node (three's PhysicalLightingModel samples a module-level
+ * node over the same singleton as viewportOpaqueMipTexture()). If three changes that, these tests stay green while the
+ * workaround misses; tests/e2e/S-29-landing-resize.spec.ts (check.sh --full) is what catches it.
+ */
+function backdropDrawer(): (target: THREE.RenderTarget) => boolean {
+  const node = viewportOpaqueMipTexture() as unknown as { updateBefore(frame: unknown): void };
+  const made = new Map<number, { version: number; width: number; height: number }>();
+  let current: THREE.RenderTarget | null = null;
+  let stale = false;
+  const renderer = {
+    getRenderTarget: () => current,
+    getCanvasTarget: () => null,
+    copyFramebufferToTexture(copy: BackdropCopy) {
+      const { width, height } = copy.image;
+      const m = made.get(copy.id);
+      stale = !!m && m.version === copy.version && (m.width !== width || m.height !== height);
+      if (!m || m.version !== copy.version) made.set(copy.id, { version: copy.version, width, height });
+    },
+  };
+  return (target) => {
+    current = target;
+    stale = false;
+    node.updateBefore({ renderer });
+    return stale;
+  };
+}
+
+/**
+ * When the targets get their own record: never, once before the first draw, twice before it, or only right before
+ * landing (after the warm-up, the size change and the home's draws: the shared record is already at the new size).
+ */
+type Own = 'never' | 'early' | 'twice' | 'late';
+
+/**
+ * S-29's shape: the room's scene pass draws once while loading (the warm-up), the home's orb image draws the room
+ * until the dive, the render scale changes on the way (both targets follow the drawing buffer), then only the scene
+ * pass draws (landed). Returns whether each of its two draws after landing copied into a backdrop of another size.
+ */
+function landAfterScaleChange(own: Own, from: [number, number], to: [number, number]): boolean[] {
+  const orb = new THREE.RenderTarget(...from);
+  const scenePass = new THREE.RenderTarget(...from);
+  const separate = () => {
+    ownBackdropImage(orb);
+    ownBackdropImage(scenePass);
+  };
+  if (own === 'early' || own === 'twice') separate();
+  if (own === 'twice') separate();
+  const draw = backdropDrawer();
+  const before = [draw(scenePass), draw(orb), draw(orb)];
+  orb.setSize(...to);
+  scenePass.setSize(...to);
+  const home = [draw(orb), draw(orb)];
+  if (own === 'late') separate();
+  const landed = [draw(scenePass), draw(scenePass)];
+  expect([...before, ...home]).toEqual([false, false, false, false, false]);
+  orb.dispose();
+  scenePass.dispose();
+  return landed;
+}
+
+describe('one backdrop per render target (three r186, S-29)', () => {
+  it('three r186: the targets share one backdrop size record, so the target drawn second keeps its old size', () => {
+    // The precondition of the black screen after the dive. When these fail, three gives each target its own record
+    // (r187, mrdoob/three.js#34636) and ownBackdropImage() does nothing: it can then go, with this test.
+    const target = new THREE.RenderTarget(16, 16);
+    expect(sharesBackdropImage(target)).toBe(true);
+    expect(landAfterScaleChange('never', [1024, 576], [1088, 612])).toEqual([true, true]);
+    expect(landAfterScaleChange('never', [1088, 612], [1024, 576])).toEqual([true, true]);
+    target.dispose();
+  });
+
+  it('ownBackdropImage keeps every target re-made at its own size, up and down, however often and late it is called', () => {
+    for (const own of ['early', 'twice', 'late'] as const) {
+      expect(landAfterScaleChange(own, [1024, 576], [1088, 612]), `${own}, up`).toEqual([false, false]);
+      expect(landAfterScaleChange(own, [1088, 612], [1024, 576]), `${own}, down`).toEqual([false, false]);
+    }
+  });
+
+  it('gives the target its own record at the size it had, and leaves the other targets as they were', () => {
+    const a = new THREE.RenderTarget(32, 16);
+    const b = new THREE.RenderTarget(32, 16);
+    const copies = viewportOpaqueMipTexture() as unknown as {
+      getTextureForReference(t: THREE.RenderTarget | null): THREE.Texture;
+    };
+    const imageBefore = { ...(copies.getTextureForReference(a).image as object) };
+    const sourceOfB = copies.getTextureForReference(b).source;
+    ownBackdropImage(a);
+    expect(sharesBackdropImage(a)).toBe(false);
+    expect(copies.getTextureForReference(a).image).toEqual(imageBefore);
+    expect(copies.getTextureForReference(a).source).not.toBe(copies.getTextureForReference(b).source);
+    expect(copies.getTextureForReference(b).source).toBe(sourceOfB);
+    a.dispose();
+    b.dispose();
   });
 });

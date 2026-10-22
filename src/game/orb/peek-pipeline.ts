@@ -3,6 +3,7 @@ import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
 import { pass, renderOutput, rtt, uniform, uv, vec2, vec4 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
+import { ownBackdropImage } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
@@ -95,6 +96,9 @@ export class PeekPipeline {
     this.backCamera.matrixWorldAutoUpdate = false;
     opts.camera.layers.mask = viewMask('main');
     this.scenePass = pass(opts.scene, opts.camera);
+    // The room's glass is also drawn into the home's orb image before the dive: its own backdrop record keeps the
+    // backdrop of this pass at this pass's size across render scale changes (three r186, S-29).
+    ownBackdropImage(this.scenePass.renderTarget);
     this.composite = new OrbComposite({
       surface: this.scenePass.getTextureNode('output'),
       back: this.backTarget.texture,
