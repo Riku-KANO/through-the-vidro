@@ -127,16 +127,21 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
  * the bench, so the first picture still has the furnace's warmth on its right (S-24 受け入れ条件4: 視界の右に炉の暖かい光)
  * while the furnace's own body, behind the light, is not lit by it (S-24: a point light of 9, 0xff8a3c, 0.38 m out, which
  * lit the inside of the brass collar, the floor to a cream glow and the furnace's front). Since S-30 the body is pale
- * blue-grey frosted glass (drawn opaque) lit by the dawn and the sky only. 画面の仕上げ: ブルームは控えめに — the fire deep
- * in the mouth was meant to be the light source that blooms, but its hottest colour is linear luminance about 0.43, under
- * the bloom's threshold of 0.9 (the atlas tile's margin: process/slices/S-30.md 残件), so the fire does not bloom.
+ * blue-grey frosted glass (drawn opaque) lit by the dawn and the sky; since S-31 it is a low dome whose mouth is an opening
+ * in its front, and the light stands just in front of that opening (its foot beside the mouth catches a little of it).
+ * 画面の仕上げ: ブルームは控えめに — the fire's hot core deep in the mouth is the light source that blooms a little (linear
+ * (2.4, 0.9, 0.15), luminance 1.17 over the threshold of 0.9; until S-30 the atlas tile's margin kept it at 0.24 and it did
+ * not bloom: process/slices/S-31.md), its walls a deep red under it (AgX turns brighter reds pink).
  */
 const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
 const SKYLIGHT_INTENSITY = 26;
 const SKYLIGHT_ANGLE = 0.13;
 const FIRE_COLOR = 0xff6a2a;
 const FIRE_INTENSITY = 7.5;
-/** How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands (the opening of the collar), how much higher. */
+/**
+ * How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands, how much higher: just out of the opening in
+ * the dome's front (0.17 m from the fire; S-31), where until S-30 the brass collar's opening was (0.335 m).
+ */
 const FIRE_REACH = 0.36;
 const FIRE_LIFT = 0.08;
 /**

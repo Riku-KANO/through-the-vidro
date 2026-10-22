@@ -22,8 +22,9 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 - A0_tool_bench01          作業台に置いたままの道具（鋏、ピンセット、キャリパー、眼鏡の縁、下の棚の盆とへら。S-27）
 - A0_cup_tea01             飲みかけの湯のみ（曇りガラス、お茶）
 - A0_chr_stool01(+_col)    椅子（曇りガラスの座面、真鍮の脚）
-- A0_frn_furnace01(+_col)  炉（S-27: 厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、覗き窓（熾火と乳白ガラスの輪）、
-                           真鍮の煙道、口に差したままの吹き竿と受け。S-30: 体は煤けた厚い曇りガラスの薄い青灰）
+- A0_frn_furnace01(+_col)  炉（S-31: 徐冷炉と同じ低く広い泡のドーム。口はドームの前の丸い開口で縁に真鍮の輪、奥に火の洞、
+                           煙突は真鍮の管がまっすぐ上へ、足元の真鍮の輪、横の覗き窓（熾火と乳白ガラスの輪）、口に差したままの
+                           吹き竿と受け。体は S-30 の煤けた厚い曇りガラスの薄い青灰）
 - A0_grt_floor01           炉の前の真鍮の格子（床。当たり判定なし）
 - A0_pipe_rack01(+_col)    吹き竿の立て掛け（真鍮）
 - A0_mrv_marver01(+_col)   マーバー台（真鍮の板、曇りガラスの脚）
@@ -84,7 +85,7 @@ def wall_r(y: float) -> float:
 # ── 家具（layout.ts と同じ値） ─────────────────────────────────────────────
 BENCH = {'center': (-1.55, -2.45), 'size': (2.1, 0.9, 0.8)}
 BENCH_ORB = (-1.55, 0.99, -2.28)
-FURNACE = {'center': (2.35, -1.4), 'radius': 0.95}
+FURNACE = {'center': (2.35, -1.4), 'radius': 1.0}
 MOUTH_REACH = 0.62
 MOUTH_Y = 0.46
 GRATE = {'near': 0.9, 'depth': 1.0, 'width': 1.3}
@@ -371,6 +372,13 @@ TILE_PX = 128
 TILES = {'A0_brass': (0, 0), 'A0_frost': (1, 0), 'A0_kiln': (2, 0), 'A0_opal': (3, 0),
          'A0_water': (0, 1), 'A0_fire': (1, 1), 'A0_ember': (1, 1), 'A0_shade': (2, 1)}
 TILE_MARGIN = 0.12
+
+
+def s27_tile_v(v: float) -> float:
+    """S-27 の熾火の規則の v を、今の火の区画で同じ色になる v へ。S-31 で火の区画を規則の 0〜1 で描くようにしたので（S-30 までは区画の
+    0〜1 で描き、atlas_uv が規則の v を区画の 0.12〜0.88 に写していた）、熾火（徐冷炉、炉の覗き窓）は S-27 の色のままにする"""
+    return TILE_MARGIN + (1 - 2 * TILE_MARGIN) * v
+
 #: 炉の体の色（線形。S-30）: 下の端と上の端、煤。工房の光は青い（空の半球光 0x7890c0、夜明けの空の映り込み）ので、体の色は
 #: 青みを持たない明るい灰に置く（画面では薄い青灰に写る）。見た目の調整 1〜3 巡目で見た絵: 最初の 0.24〜0.46 の青灰は鋼の青に、
 #: 0.46〜0.67 は中ほどの青灰に、0.56〜0.76 の青みのある灰は淡い水色の陶器に写った
@@ -389,9 +397,9 @@ def to_srgb(c: np.ndarray) -> np.ndarray:
 
 def atlas_pixels(seed: int = 24) -> np.ndarray:
     """線形の色で描く。真鍮: 下ほど緑青がかって暗く、手の触れる上ほど明るい（真鍮の鈍い金）。曇りガラスの天板: 薄い青灰。
-    炉の体（S-30）: 煤けた厚い曇りガラスの薄い青灰（色の進行: 序章は白、薄い青灰）。u は煤の少なさ（0 が口の際と煙道の根の煤、
+    炉の体（S-30）: 煤けた厚い曇りガラスの薄い青灰（色の進行: 序章は白、薄い青灰）。u は煤の少なさ（0 が口の縁と煙突の根の煤、
     1 が煤のない所）、v は高さ（上ほど明るい）。乳白の作品（S-27）: 光らない乳白（オパール）。棚の背板（S-27）: 影の青灰。
-    水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の橙へ"""
+    水: 暗い青灰に細い波紋。火: v = 0 の口の縁の深い赤から、v = 1 の奥の熱い橙へ（S-31: 規則の v で描く）"""
     cols, rows = ATLAS_GRID
     h = TILE_PX
     rng = np.random.default_rng(seed)
@@ -424,10 +432,13 @@ def atlas_pixels(seed: int = 24) -> np.ndarray:
     ripple = 0.5 + 0.5 * np.sin(np.hypot(u - 0.5, v - 0.5) * 70)
     water = lerp((0.02, 0.032, 0.045), (0.045, 0.065, 0.085), ripple * 0.6 + 0.2 * soft)
     # 火（発光の色。強さ FIRE_GLOW を材質が掛ける）: v = 0 の暗い深い赤 → 赤 → 橙 → v = 1 の熱い所（炉では奥の壁の輪 HOT_RING）。
-    # AgX は明るい赤を桃色へ寄せるので、赤く見せる所は暗く（線形 0.15〜0.45）、光源として滲む（しきい値 0.9 を超える）のは熱い所だけ
-    fire = np.where(v < 0.55, lerp((0.025, 0.002, 0.0), (0.075, 0.007, 0.001), v / 0.55),
-                    np.where(v < 0.85, lerp((0.075, 0.007, 0.001), (0.12, 0.02, 0.002), (v - 0.55) / 0.3),
-                             lerp((0.12, 0.02, 0.002), (0.4, 0.15, 0.025), (v - 0.85) / 0.15)))
+    # AgX は明るい赤を桃色へ寄せるので、赤く見せる所は暗く（線形 0.15〜0.45）、光源として滲む（しきい値 0.9 を超える）のは熱い所だけ。
+    # S-31: 規則の v（区画の余白の内）で描く。S-30 までは区画の 0〜1 で描いていたので、規則の v = 1 は区画の 0.88 に写り、熱い所の色
+    # （線形 2.4, 0.9, 0.15、輝度 1.17）が使われず、火の芯はしきい値の下だった
+    fv = kv
+    fire = np.where(fv < 0.55, lerp((0.025, 0.002, 0.0), (0.075, 0.007, 0.001), fv / 0.55),
+                    np.where(fv < 0.85, lerp((0.075, 0.007, 0.001), (0.12, 0.02, 0.002), (fv - 0.55) / 0.3),
+                             lerp((0.12, 0.02, 0.002), (0.4, 0.15, 0.025), (fv - 0.85) / 0.15)))
     fire = fire * (1 + 0.05 * soft)
     img = np.zeros((rows * h, cols * h, 3))
     for (col, row), tile in (((0, 0), brass), ((1, 0), frost), ((2, 0), kiln), ((3, 0), opal), ((0, 1), water),
@@ -570,7 +581,8 @@ def materials() -> dict:
 
 
 #: 発光の強さ（仮。発案者の判断待ち）。炉の口の奥の火はブルームのしきい値（線形 0.9）を超えて滲む光源（S-27: 奥ほど橙、縁は
-#: 深い赤）。炉の覗き窓の乳白ガラスはしきい値の下（S-24 は炉の全体が乳白 2.2 で、クリーム色に滲んだ）。徐冷炉の熾火は「ほのか」
+#: 深い赤。S-31: 熱い芯は線形 (2.4, 0.9, 0.15)、輝度 1.17 で少し滲む。S-30 まではアトラスの区画の余白で輝度 0.24 までしか
+#: 届かず滲まなかった）。炉の覗き窓の乳白ガラスはしきい値の下（S-24 は炉の全体が乳白 2.2 で、クリーム色に滲んだ）。徐冷炉の熾火は「ほのか」
 FIRE_GLOW = 6.0
 MILKY_GLOW = 1.2
 EMBER_GLOW = 1.4
@@ -640,7 +652,7 @@ def angular_slices(points, center=(0.0, 0.0), step_deg: float = COL_ARC_DEG, ove
 
 def collider(part: Part, arcs: bool = False) -> bmesh.types.BMesh:
     """部品（つながった形）ごとの凸包。頭より上（COL_MAX_Y）の点は除く。arcs: 部屋の中心の周りに長い部品は
-    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）。凹んだ形（炉の泡）は呼ぶ側が分けて hull_into で包む"""
+    COL_ARC_DEG ごとに分けて包む（棚の板、レールなど）。呼ぶ側が別に包む形（炉のドーム）は hull_into で足す"""
     out = bmesh.new()
     for group in islands(part.bm):
         low = [p for p in group if p.y <= COL_MAX_Y]
@@ -760,76 +772,44 @@ def stool(m) -> None:
 
 
 # ── 炉 ─────────────────────────────────────────────────────────────────────
-#: メタボールの硬さとしきい値。見える半径 ÷ 要素の半径 = sqrt(1 - (しきい値 / 硬さ)^(1/3))（場は 硬さ・(1 - r²/R²)³）。
-#: 硬いほど隣の泡と溶け合う首が細く、泡の一つひとつが読める
-METABALL_STIFFNESS = 4.0
-METABALL_THRESHOLD = 0.6
-METABALL_K = math.sqrt(1 - (METABALL_THRESHOLD / METABALL_STIFFNESS) ** (1 / 3))
-
-
-def metaball_mesh(balls, resolution: float) -> bmesh.types.BMesh:
-    """泡が溶け合った形（設計書: 泡の集合）。balls: (中心 three, 見える半径, 負か)。three の座標の bmesh を返す"""
-    mb = bpy.data.metaballs.new('blob')
-    mb.resolution = resolution
-    mb.render_resolution = resolution
-    mb.threshold = METABALL_THRESHOLD
-    for c, r, negative in balls:
-        e = mb.elements.new()
-        e.co = B(c)
-        e.radius = r / METABALL_K
-        e.stiffness = METABALL_STIFFNESS
-        e.use_negative = negative
-    ob = link(bpy.data.objects.new('blob', mb))
-    deselect_all()
-    ob.select_set(True)
-    bpy.context.view_layer.objects.active = ob
-    bpy.ops.object.convert(target='MESH')
-    mesh_obj = bpy.context.view_layer.objects.active
-    bm = bmesh.new()
-    bm.from_mesh(mesh_obj.data)
-    for v in bm.verts:
-        v.co = ROT_INV @ v.co
-    for o in [o for o in bpy.data.objects if o.name.startswith('blob')]:
-        bpy.data.objects.remove(o)
-    for me in [me for me in bpy.data.meshes if me.users == 0]:
-        bpy.data.meshes.remove(me)
-    for mball in [x for x in bpy.data.metaballs if x.users == 0]:
-        bpy.data.metaballs.remove(mball)
-    return bm
-
-
-def decimate(bm: bmesh.types.BMesh, triangles: int) -> None:
-    """三角形の数を目安まで減らす（折り畳み）"""
-    me = bpy.data.meshes.new('tmp_decimate')
-    bm.to_mesh(me)
-    ob = link(bpy.data.objects.new('tmp_decimate', me))
-    tris = sum(len(f.verts) - 2 for f in bm.faces)
-    mod = ob.modifiers.new('decimate', 'DECIMATE')
-    mod.ratio = min(1.0, triangles / max(tris, 1))
-    deselect_all()
-    ob.select_set(True)
-    bpy.context.view_layer.objects.active = ob
-    bpy.ops.object.modifier_apply(modifier=mod.name)
-    bm.clear()
-    bm.from_mesh(ob.data)
-    bpy.data.objects.remove(ob)
-    bpy.data.meshes.remove(me)
-
-
-#: 炉（S-27）: 泡の形の三角形の目安、口の窪みの大きさ、火の洞の深さ（口の奥の椀。中心が FURNACE_MOUTH）
-FURNACE_BLOB_TRIANGLES = 1100
-FURNACE_RECESS = 0.32
-CAVE_DEPTH = 0.26
-#: 口の真鍮の筒の内の半径と、体に開ける穴の半径（筒の外の半径 0.2 より小さく、筒が穴の縁を隠す）
-COLLAR_INNER = 0.17
-MOUTH_HOLE = 0.19
-#: 火の洞のいちばん熱い所: 奥の芯からこの距離の輪（m）
+#: 炉の体（S-31: 徐冷炉と同じ形の言葉で作り直した）: 低く広い泡のドーム。半径 FURNACE['radius']・高さ height の楕円（power 2）を
+#: 回した形で、裾は床へ少し巻き込む。徐冷炉（半径 0.66m、高さ 1.0m、高さ ÷ 幅 0.76）より大きく、幅に対して低い（0.55）。軸は
+#: FURNACE の中心から壁の側へ back（前の裾が炉の前の格子 GRATE['near'] の手前に収まる）。S-27・S-30 は縦長の泡に、蓋のような上の泡・
+#: 首の帯・突き出した口の筒・曲がった煙道で、色を変えても薬缶に見えた（process/slices/S-31.md）。見た目の調整 2 巡目: 半径 0.95m・
+#: 高さ 1.2m・超楕円 2.2 は、炉の前の立った目からは釣鐘のように縦に見えた
+KILN = {'radius': FURNACE['radius'], 'height': 1.1, 'power': 2.0, 'back': 0.12, 'segments': 36, 'rings': 12}
+#: 口（グローリーホール）: ドームの前の丸い開口の半径（縁は真鍮の輪 MOUTH_RING が取る）、その奥の火の洞の底（FURNACE の中心からの
+#: 距離）と丸い底の深さ。洞の中ほどが FURNACE_MOUTH（S-25 の炉の音の位置）
+MOUTH_HOLE = 0.21
+MOUTH_RING = 0.024
+CAVE_BACK = MOUTH_REACH - 0.22
+CAVE_BOTTOM = 0.16
+#: 火の洞のいちばん熱い所: 奥の底の芯からこの距離までの円（m。口に差した竿が真ん中を縦に隠す）。ブルームで少し滲む（S-31。S-30 までは
+#: アトラスの区画の余白で届かず、熱い所は芯の周りの細い輪だった。立った目の高さからは輪の下の半分の細い弧しか見えず、滲みが小さかった）
 HOT_RING = 0.09
-#: 炉の体の煤（S-30）: 口の際の点からの距離（m）で、この内は煤、この外は煤なし。上へは KILN_SOOT_UP 倍に縮めて測る（煤は上る）。
-#: 煙道の根の周りも同じ（薄く）
-KILN_SOOT_MOUTH = (0.2, 0.55)
-KILN_SOOT_UP = 0.6
-KILN_SOOT_FLUE = (0.06, 0.26)
+#: 煙突: 管の半径、ドームの軸から壁の側への距離、工房のドームのガラスを抜けて外へ出る長さ。まっすぐ上へ（S-30 の曲がった煙道は
+#: 取っ手に見えた）
+CHIMNEY = {'radius': 0.085, 'back': 0.22, 'out': 0.3}
+#: 覗き窓: 口の向きから左右へこの角度、この高さ（口と並ぶと正面から顔に見えるので、横へ回す）
+PEEP = {'deg': 72.0, 'y': 0.56}
+#: 炉の体の煤（S-30）: 口の真ん中（ドームの面の上）からの距離（m）で、この内は煤、この外は煤なし。上へは KILN_SOOT_UP 倍に縮めて
+#: 測る（煤は上る）。煙突の根の周りも同じ（薄く）。S-31 のドームは前の面が広く、S-30 の範囲（0.2〜0.55m、上へ 0.6 倍）では前の面の
+#: 真ん中がほとんど煤けて暗い紺に見えた（見た目の調整 1 巡目）: 口の縁の上を舐める煤にとどめる
+KILN_SOOT_MOUTH = (0.22, 0.42)
+KILN_SOOT_UP = 0.7
+KILN_SOOT_FLUE = (0.09, 0.3)
+
+
+def kiln_profile() -> list[tuple[float, float]]:
+    """炉の体の回転の輪郭（半径, 高さ）。裾の巻き込み → 超楕円（|r/R|^p + |y/H|^p = 1）を角の媒介で → 頂（軸の 1 点）。下から上へ
+    たどるので面は外を向く（lathe_bm）"""
+    rr, hh, pw, n = KILN['radius'], KILN['height'], KILN['power'], KILN['rings']
+    out = [(rr - 0.06, 0.0), (rr - 0.018, 0.04)]
+    for k in range(n + 1):
+        phi = 0.06 + (math.pi / 2 - 0.06) * k / n
+        c, s = math.cos(phi), math.sin(phi)
+        out.append((rr * c ** (2 / pw) if k < n else 0.0, hh * s ** (2 / pw)))
+    return out
 
 
 def boolean_difference(bm: bmesh.types.BMesh, cutter: bmesh.types.BMesh) -> None:
@@ -864,68 +844,93 @@ def raycast(bvh: BVHTree, origin, direction):
 
 
 def furnace(m) -> None:
-    """吹きガラスの炉（S-27 で作り直した。S-24 は乳白ガラスの泡で、雲のように見えた）。煤けた厚い曇りガラスの泡の集まり（形のルール:
-    建物は泡の集合。S-30: 薄い青灰で、煤は口の際と煙道の根だけ。S-27 の暗い紺のつやは薬缶か潜水兜に見えた）に真鍮の帯を締め、
-    口は部屋の中心へ向く。口の奥は火の洞（奥の壁の輪 HOT_RING ほど橙、縁は暗い深い赤）、口の左右に
-    中の火が赤く透ける覗き窓（熾火の材質に、縁の細い乳白ガラスの輪）。口には吹き竿が 1 本差したまま、その先を格子の上の真鍮の受けが
-    支える。煙道は真鍮の管で、曲がってドームの壁を抜ける"""
+    """吹きガラスの炉（S-31 で、奥の徐冷炉と同じ形の言葉で作り直した: 低く広い泡のドーム）。煤けた厚い曇りガラスの泡（形のルール:
+    建物は泡の集合。S-30 の薄い青灰で、煤は口の縁の上と煙突の根だけ）。口は部屋の中心へ向くドームの前の丸い開口（グローリーホール）で、
+    縁を真鍮の輪が取り、奥は火の洞（奥の壁の輪 HOT_RING ほど熱く橙、縁は暗い深い赤）。煙突は頂の少し奥から真鍮の管がまっすぐ上へ、
+    工房のドームのガラスを抜ける。足元に真鍮の輪、左右の横に中の火が赤く透ける覗き窓（熾火の材質に、縁の細い乳白ガラスの輪）。
+    口には吹き竿が 1 本差したまま、その先を格子の上の真鍮の受けが支える"""
     cx, cz = FURNACE['center']
     f = Frame(cx, cz, FACING)
+    axis = Vector((FACING[0], 0.0, FACING[1]))
+    right = Vector((f.r[0], 0.0, f.r[1]))
+    up = Vector((0.0, 1.0, 0.0))
+    # the dome's own upright axis, a little toward the wall from the furnace's centre
+    kx, _, kz = f(-KILN['back'], 0.0)
     p = Part()
-    rest = Part()  # 泡の形と帯と裾の輪のほかの部品（当たり判定は部品ごとに包む）
+    rest = Part()  # ドームと足元の輪のほかの部品（当たり判定は部品ごとに包む）
 
     def add(bm, mat, matrix=None):
         p.merge(bm, mat, matrix)
         rest.merge(bm, mat, matrix)
 
-    balls = [
-        (f(0.0, 0.4, 0.0), 0.74, False),  # 大きな泡（口がある）
-        (f(-0.42, 0.32, 0.5), 0.46, False),  # 奥の右の肩
-        (f(-0.36, 0.3, -0.54), 0.43, False),  # 奥の左の肩
-        (f(-0.1, 1.3, 0.0), 0.3, False),  # 上の泡（煙道の根）
-        (f(0.95, MOUTH_Y, 0.0), FURNACE_RECESS, True),  # 口の窪み
-    ]
-    blob = metaball_mesh(balls, 0.065)
-    decimate(blob, FURNACE_BLOB_TRIANGLES)
-    # 口の穴: 口の軸に沿う円柱で体をくり抜く（火の洞が体の中に見える。穴の縁は口の真鍮の筒が隠す）
-    axis = Vector((FACING[0], 0.0, FACING[1]))
+    # closed at the bottom for the cut (the boolean needs a solid: on the open shell it kept the cutter's wall inside as a tube
+    # of the body's glass, in front of the fire); the bottom goes after the cut (the floor hides it)
+    dome = lathe_bm([(0.0, 0.0)] + kiln_profile(), KILN['segments'])
+    bmesh.ops.translate(dome, vec=Vector((kx, 0.0, kz)), verts=list(dome.verts))
+    bvh = BVHTree.FromBMesh(dome)  # the whole dome (before the mouth is cut): what the mouth's rim and the windows sit on
+    # 口の縁: 口の軸（FURNACE_MOUTH の高さで向きに沿う水平の線）から MOUTH_HOLE 離れた線がドームの面と交わる所（とその面の法線）
+    n_rim = 24
+    rim = []
+    for k in range(n_rim):
+        th = 2 * math.pi * k / n_rim
+        off = right * (MOUTH_HOLE * math.cos(th)) + up * (MOUTH_HOLE * math.sin(th))
+        hit = bvh.ray_cast(Vector(f(KILN['radius'] + 1.0, MOUTH_Y)) + off, -axis)
+        rim.append((Vector(hit[0]), Vector(hit[1]).normalized(), off))
+    # 口の穴: 口の軸に沿う円柱でドームをくり抜く（奥の火の洞が見える。穴の縁は真鍮の輪が隠す）
     cutter = bmesh.new()
-    bmesh.ops.create_cone(cutter, cap_ends=True, segments=16, radius1=MOUTH_HOLE, radius2=MOUTH_HOLE, depth=0.9)
-    # create_cone は z に沿う: z を口の軸へ向け、口の奥 0.4m から外へ
+    bmesh.ops.create_cone(cutter, cap_ends=True, segments=n_rim, radius1=MOUTH_HOLE, radius2=MOUTH_HOLE, depth=0.9)
     turn = Vector((0.0, 0.0, 1.0)).rotation_difference(axis).to_matrix().to_4x4()
-    turn.translation = Vector(f(0.4 + 0.45, MOUTH_Y))
+    turn.translation = Vector(f(0.95, MOUTH_Y))
     bmesh.ops.transform(cutter, matrix=turn, verts=list(cutter.verts))
-    boolean_difference(blob, cutter)
+    boolean_difference(dome, cutter)
     cutter.free()
-    # 床の下は描かない（床の円盤が隠す）
-    bmesh.ops.delete(blob, geom=[v for v in blob.verts if v.co.y < -0.03], context='VERTS')
-    bvh = BVHTree.FromBMesh(blob)
-    p.merge(blob, m['kiln'])
-    # 火の洞: 口の奥の椀。面は内（口）を向く。奥の壁の輪がいちばん熱く（橙）、縁ほど暗い深い赤。中心が FURNACE_MOUTH（S-25 の音源）。
-    # 縁は真鍮の筒の内側に 2cm 入る（隙間から体の中が見えない）
-    back = MOUTH_REACH - 0.12
-    rim = COLLAR_INNER + 0.002
-    cave = [(rim, CAVE_DEPTH), (rim - 0.007, CAVE_DEPTH * 0.6), (rim - 0.022, CAVE_DEPTH * 0.3),
-            (rim - 0.072, CAVE_DEPTH * 0.08), (0.0, 0.0)]
-    add(lathe_bm(cave, 20), m['fire'], place(f(back, MOUTH_Y), axis=tuple(axis)))
-    back_c = Vector(f(back, MOUTH_Y))
-    reach = math.hypot(CAVE_DEPTH, rim)
-    # 熱い所は奥の壁の輪（芯からの距離 HOT_RING）: 口に差した竿が奥の真ん中を隠すので。ただ立った目の高さからは筒の上の縁に隠れ、
-    # 輪の大半は見えない（開きの上の端に橙の帯として見える。レビュー2巡目）
-    p.uv_rules['A0_fire'] = lambda co: (0.5, 1.0 - abs((co - back_c).length - HOT_RING) / (reach - HOT_RING))
-    # 口（グローリーホール）: 体の中から突き出す真鍮の筒（穴の縁と洞の縁を隠す）。外の端は少し開く。開き（0.955m、外の半径 0.2m）は
-    # tests/e2e/S-27-workshop-look.spec.ts の mouthRegion が画面に写す範囲と同じ数。変えたらそちらも
-    start = MOUTH_REACH
-    length = 0.955 - start
-    collar = shell_profile([(0.2, 0.0), (0.2, length - 0.055), (0.228, length)], 0.2 - COLLAR_INNER)
-    add(lathe_bm(collar, 20), m['brass'], place(f(start, MOUTH_Y), axis=tuple(axis)))
-    # 覗き窓: 口の左右の、中の火が赤く透ける小さな窓（熾火の材質）、縁に細い乳白ガラスの輪、外に真鍮の輪。工房で乳白ガラスの印を
-    # 持つのはこの輪だけ（乳白の窓の面は、口の前の灯りを受けてクリーム色の点に見えた: レビュー1巡目）
+    # keep only the dome's own surface: not the cutter's wall inside it, not the bottom
+    gone = [face for face in dome.faces
+            if face.calc_center_median().y < 0.003 or bvh.find_nearest(face.calc_center_median())[3] > 0.004]
+    bmesh.ops.delete(dome, geom=gone, context='FACES')
+    p.merge(dome, m['kiln'])
+    # 火の洞: 口の縁からまっすぐ奥へ（壁）、丸い底へ。面は内（口の軸）を向く。底の芯 B から HOT_RING までの円がいちばん熱い（橙）、縁ほど
+    # 暗い深い赤。洞の中ほどが FURNACE_MOUTH（S-25 の音源）。縁は面の外 1cm から（真鍮の輪の下で穴の縁と重なる）
+    back_c = Vector(f(CAVE_BACK, MOUTH_Y))
+    wall_end = CAVE_BACK + CAVE_BOTTOM
+    phi_hot = math.acos(HOT_RING / MOUTH_HOLE)
+    bottom = [0.0, phi_hot * 0.55, phi_hot, (phi_hot + math.pi / 2) / 2]
+    cave = bmesh.new()
+    columns = []
+
+    def on_axis(a: float) -> Vector:
+        return Vector(f(a, MOUTH_Y))
+
+    for at, _normal, off in rim:
+        a_rim = (at - Vector((cx, 0.0, cz))).dot(axis)
+        col = [on_axis(a_rim + 0.01) + off, on_axis(a_rim - 0.03) + off, on_axis((a_rim - 0.03 + wall_end) / 2) + off]
+        for phi in bottom:
+            col.append(on_axis(CAVE_BACK + CAVE_BOTTOM * (1 - math.sin(phi))) + off * math.cos(phi))
+        columns.append([cave.verts.new(q) for q in col])
+    centre = cave.verts.new(back_c)
+    for k in range(n_rim):
+        c0, c1 = columns[k], columns[(k + 1) % n_rim]
+        for j in range(len(c0) - 1):
+            cave.faces.new((c0[j], c0[j + 1], c1[j + 1], c1[j]))
+        cave.faces.new((c0[-1], centre, c1[-1]))
+    cave.normal_update()
+    for face in cave.faces:  # 内（口の軸）へ、底の真ん中は口へ向ける
+        q = face.calc_center_median() - back_c
+        to_axis = -(q - axis * q.dot(axis))
+        inward = to_axis if to_axis.length > 0.02 else axis
+        if face.normal.dot(inward) < 0:
+            face.normal_flip()
+    add(cave, m['fire'])
+    reach = max((v.co - back_c).length for v in cave.verts)
+    p.uv_rules['A0_fire'] = lambda co: (0.5, 1.0 - max(0.0, (co - back_c).length - HOT_RING) / (reach - HOT_RING))
+    # 口の縁の真鍮の輪: 穴の縁に沿い、ドームの面から少し浮かせる
+    add(tube_bm([tuple(at + normal * 0.008) for at, normal, _ in rim], MOUTH_RING, 6, closed=True), m['brass'])
+    # 覗き窓: 口の左右の横の、中の火が赤く透ける小さな窓（熾火の材質）、縁に細い乳白ガラスの輪、外に真鍮の輪。工房で乳白ガラスの印を
+    # 持つのはこの輪だけ
     for side in (-1, 1):
-        a = math.radians(50.0) * side
+        a = math.radians(PEEP['deg']) * side
         d = Vector((FACING[0] * math.cos(a) + f.r[0] * math.sin(a), 0.0, FACING[1] * math.cos(a) + f.r[1] * math.sin(a)))
-        y = 0.62
-        hit = bvh.ray_cast(Vector((cx, y, cz)) + d * 2.0, -d)
+        hit = bvh.ray_cast(Vector((kx, PEEP['y'], kz)) + d * 2.0, -d)
         if hit[0] is None:
             continue
         at, normal = Vector(hit[0]), Vector(hit[1]).normalized()
@@ -935,38 +940,35 @@ def furnace(m) -> None:
         add(lathe_bm(window, 12), m['ember'], place(at + normal * 0.001, axis=tuple(normal)))
         add(tube_bm(circle(tuple(at + normal * 0.004), 0.053, 12, axis=tuple(normal)), 0.005, 4, closed=True),
             m['milky'])
-    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.88)  # 火の区画の赤橙
-    # 足元の真鍮の輪と、体を締める 2 本の帯（口の窪みの上と、上の泡の首）: 泡の面に沿う
-    def band(y, segments, lift, radius, sides):
-        pts = []
-        for k in range(segments):
-            a = 2 * math.pi * k / segments
-            d = Vector((math.cos(a), 0.0, math.sin(a)))
-            hit = raycast(bvh, Vector((cx, y, cz)) + d * 2.0, -d)
-            r = (Vector(hit) - Vector((cx, y, cz))).length if hit else FURNACE['radius']
-            pts.append((cx + d.x * (r + lift), y, cz + d.z * (r + lift)))
-        return tube_bm(pts, radius, sides, closed=True)
-
-    rings = [band(0.035, 32, 0.012, 0.02, 4), band(0.94, 30, 0.01, 0.017, 4), band(1.12, 24, 0.01, 0.015, 4)]
-    for ring in rings:
-        p.merge(ring, m['brass'])
-    # 煙道: 上の泡の頂から、曲がって壁へ
-    top = raycast(bvh, f(-0.1, 3.0, 0.0), (0.0, -1.0, 0.0)) or Vector(f(-0.1, 1.6, 0.0))
-    out = Vector((-FACING[0], 0.0, -FACING[1]))
-    base = Vector(top) - Vector((0.0, 0.05, 0.0))
-    y_wall = 2.8
-    wall = out * (wall_r(y_wall) + 0.25) + Vector((0.0, y_wall, 0.0))
-    flue = fillet([tuple(base), tuple(base + Vector((0.0, 0.5, 0.0))), tuple(wall)], 0.35, 5)
-    add(tube_bm(flue, 0.075, 8), m['brass'])
-    # 体の色（S-30）: 薄い青灰の曇りガラスで、煤は口の際（熱と煤は上るので、口の上へ伸びる）と煙道の根だけ（u: 煤の少なさ）、
+    p.uv_rules['A0_ember'] = lambda co: (0.5, s27_tile_v(0.88))  # 火の区画の赤橙（S-27 の色のまま）
+    # 足元の真鍮の輪: ドームの裾に沿う
+    foot = []
+    for k in range(KILN['segments']):
+        a = 2 * math.pi * k / KILN['segments']
+        d = Vector((math.cos(a), 0.0, math.sin(a)))
+        hit = raycast(bvh, Vector((kx, 0.035, kz)) + d * 2.0, -d)
+        r = (Vector(hit) - Vector((kx, 0.035, kz))).length if hit else KILN['radius']
+        foot.append((kx + d.x * (r + 0.012), 0.035, kz + d.z * (r + 0.012)))
+    ring = tube_bm(foot, 0.02, 4, closed=True)
+    p.merge(ring, m['brass'])
+    # 煙突: 頂の少し奥から、真鍮の管がまっすぐ上へ工房のドームのガラスを抜ける。根に真鍮の輪。当たり判定は頭の上 COL_MAX_Y までの
+    # 点を包むので、管の途中のその高さにも点を置く
+    chx, _, chz = f(-KILN['back'] - CHIMNEY['back'], 0.0)
+    base = raycast(bvh, (chx, 3.0, chz), (0.0, -1.0, 0.0))
+    base_y = base.y if base is not None else KILN['height'] - 0.02
+    room_glass = DOME_CY + math.sqrt(DOME_R ** 2 - (chx * chx + chz * chz))
+    ys = [base_y - 0.05, COL_MAX_Y - 0.02, room_glass + CHIMNEY['out']]
+    add(tube_bm([(chx, y, chz) for y in ys], CHIMNEY['radius'], 10), m['brass'])
+    add(tube_bm(circle((chx, base_y + 0.012, chz), CHIMNEY['radius'] + 0.02, 16), 0.018, 4, closed=True), m['brass'])
+    # 体の色（S-30）: 薄い青灰の曇りガラスで、煤は口の縁の上（熱と煤は上るので、口の上へ伸びる）と煙突の根だけ（u: 煤の少なさ）、
     # 上ほど明るい（v）
-    soot_c = Vector(f(MOUTH_REACH + 0.25, MOUTH_Y))
-    flue_root = Vector(base)
+    soot_c = Vector(raycast(bvh, f(KILN['radius'] + 1.0, MOUTH_Y), -axis))
+    flue_root = Vector((chx, base_y, chz))
 
     def soot(co) -> float:
         d = co - soot_c
-        up = max(0.0, d.y) * (1.0 - KILN_SOOT_UP)
-        mouth = math.hypot(d.x, d.z, d.y - up)
+        lift = max(0.0, d.y) * (1.0 - KILN_SOOT_UP)
+        mouth = math.hypot(d.x, d.z, d.y - lift)
         near, far = KILN_SOOT_MOUTH
         s_mouth = min(1.0, max(0.0, (far - mouth) / (far - near)))
         near, far = KILN_SOOT_FLUE
@@ -974,7 +976,7 @@ def furnace(m) -> None:
         s_ = max(s_mouth, s_flue)
         return s_ * s_ * (3 - 2 * s_)
 
-    p.uv_rules['A0_kiln'] = lambda co: (1.0 - soot(co), co.y / 1.6)
+    p.uv_rules['A0_kiln'] = lambda co: (1.0 - soot(co), co.y / KILN['height'])
     # 口に差したままの吹き竿と、その受け（格子の上）
     pipe_y = lambda a: MOUTH_Y + 0.02 + (a - 0.55) / (MOUTH_PIPE_REACH - 0.55) * 0.18  # noqa: E731
     add(tube_bm([f(0.55, pipe_y(0.55)), f(MOUTH_PIPE_REACH, pipe_y(MOUTH_PIPE_REACH))], 0.016, 8), m['brass'])
@@ -987,17 +989,11 @@ def furnace(m) -> None:
     u_pts = [f(yoke_a, yy + 0.035 - 0.035 * math.sin(math.pi * k / 8), 0.035 * math.cos(math.pi * k / 8))
              for k in range(9)]
     add(tube_bm(u_pts, 0.008, 6), m['brass'])
-    # 当たり判定: 泡の形は泡ごとに包む（一つの凸包では泡と泡のくびれが埋まり、歩ける床から見えない壁になる）。各頂点を
-    # いちばん近い泡へ（見える半径で割った距離）、境は 14% 重ねて隙間を残さない。輪と帯は炉の周りに 12 度ずつ、ほかは部品ごと
+    # 当たり判定: ドームは一つの凸包（口の穴は包んで埋まる: 体は口に入れない）、足元の輪は炉の周りに 12 度ずつ、ほかは部品ごと
     hull = collider(rest)
-    bubbles = [(Vector(c), r) for c, r, negative in balls if not negative]
-    shape = [v.co.copy() for v in blob.verts if v.co.y <= COL_MAX_Y]
-    dists = [[(q - c).length / r for c, r in bubbles] for q in shape]
-    for i in range(len(bubbles)):
-        hull_into(hull, [q for q, d in zip(shape, dists) if d[i] <= min(d) * 1.14])
-    for ring in rings:
-        for g in angular_slices([v.co.copy() for v in ring.verts], (cx, cz), 12.0, 1.0):
-            hull_into(hull, g)
+    hull_into(hull, [v.co.copy() for v in dome.verts if v.co.y <= COL_MAX_Y])
+    for g in angular_slices([v.co.copy() for v in ring.verts], (kx, kz), 12.0, 1.0):
+        hull_into(hull, g)
     build(p, 'A0_frn_furnace01', (cx, 0.0, cz), sharp_deg=80.0, hull=hull)
 
 
@@ -1154,7 +1150,7 @@ def annealer(m) -> None:
         p.merge(tube_bm([f(-math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s),
                          f(math.sqrt(0.36 ** 2 - s * s), FLOOR_TOP + 0.22, s)], 0.008, 6), m['brass'])
     # 熾火は火の区画の赤から橙の間（S-27 で火の区画の縁を暗い深い赤にした。熾火は弱い発光のまま見えるように）
-    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.62 + 0.26 * min(1.0, max(0.0, (co.y - FLOOR_TOP) / 0.55)))
+    p.uv_rules['A0_ember'] = lambda co: (0.5, s27_tile_v(0.62 + 0.26 * min(1.0, max(0.0, (co.y - FLOOR_TOP) / 0.55))))
     build(p, 'A0_anl_annealer01', (cx, 0.0, cz), col=True)
 
 

@@ -203,6 +203,35 @@ class Workshop(unittest.TestCase):
                 open_sky.append(f'{name} at {tuple(round(x, 2) for x in c)}')
         self.assertEqual(open_sky, [])
 
+    # ── S-31: the furnace made again (徐冷炉と同じ低く広い泡のドーム) ─────────────────────────────────────────
+
+    def test_the_fire_core_blooms_a_little_and_its_walls_stay_red(self):
+        """画面の仕上げ (ブルームは控えめにし、強い光源だけが滲む) and AGENTS.md「何が光るかは美術で決める」: the hottest colour the
+        furnace's fire shows (the atlas at its UVs × FIRE_GLOW, linear) is above the bloom's threshold (linear luminance 0.9,
+        src/game/orb/peek-pipeline.ts) but not far (a little: under 1.6); the walls at the mouth's rim stay a deep red, every
+        channel under 0.5 (AgX turns brighter reds pink: S-27). S-30 found the core at 0.43: the tile's margin kept the hot
+        end of the atlas from being used"""
+        mw = self.mw
+        furnace = next(o for o in self.objects if o.name == 'A0_frn_furnace01')
+        atlas = mw.atlas_pixels()
+        rows_px, cols_px = atlas.shape[:2]
+        uv = furnace.data.uv_layers['UVMap'].data
+        colours = []
+        for poly in furnace.data.polygons:
+            if furnace.material_slots[poly.material_index].material.name != 'A0_fire':
+                continue
+            for li in poly.loop_indices:
+                u, v = uv[li].uv
+                px = min(cols_px - 1, max(0, int(u * cols_px)))
+                py = min(rows_px - 1, max(0, int(v * rows_px)))
+                colours.append((float(v), atlas[py, px] * mw.FIRE_GLOW))
+        self.assertGreater(len(colours), 0)
+        lum = [0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] for _, c in colours]
+        self.assertGreater(max(lum), 0.9)
+        self.assertLess(max(lum), 1.6)
+        rim = min(colours, key=lambda vc: vc[0])[1]
+        self.assertLess(float(max(rim)), 0.5, f'the rim of the fire: {rim}')
+
 
 # ── helpers (three's coordinates: y up, the door at -Z) ──────────────────────────────────────────────────
 #: The furniture of S-24, whose colliders the game's Rapier test checks (src/game/prologue/physics.test.ts)
