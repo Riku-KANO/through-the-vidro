@@ -161,9 +161,18 @@ for (const backend of backends) {
     expect(segments).toBeGreaterThan(0);
     await page.waitForTimeout(500);
     await page.mouse.move(cursor.x, cursor.y);
-    await page.mouse.down();
-    await page.mouse.up();
-    await waitRoom(page, 'r.locked === true');
+    // the pointer lock: a click can land before the page takes it (once in a busy full check on WebGL2), so click again
+    for (let attempt = 0; ; attempt++) {
+      await page.mouse.down();
+      await page.mouse.up();
+      try {
+        await waitRoom(page, 'r.locked === true', 5_000);
+        break;
+      } catch (e) {
+        if (attempt >= 2) throw e;
+        await page.waitForTimeout(1_200);
+      }
+    }
 
     // 1. before the orb is placed: the wall stops you (the body's radius in front of it, short of the edge)
     await lookAt(page, [WALL_X, 0.5, WALL_NEAR_Z]);
