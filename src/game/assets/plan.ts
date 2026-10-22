@@ -42,7 +42,8 @@ export interface AssetProblem {
     | GlassMarkError
     | 'duplicate-name'
     | 'glass-unmarked'
-    | 'lightmap-missing';
+    | 'lightmap-missing'
+    | 'lightmap-material';
   message: string;
 }
 
@@ -122,6 +123,8 @@ const MESSAGES: Record<AssetProblem['code'], string> = {
   'glass-format': 'a glass mark is glass_<kind>[_<role>], in lowercase',
   'glass-unmarked':
     'transmissive glass placed far or behind glass needs a glass_<kind> mark: only the library glass turns into the cheap far path',
+  'lightmap-material':
+    'a baked material the game cannot draw with its lightmap (a physical material: clearcoat, sheen…); it stays lit in real time',
   'lightmap-missing':
     'extras.lightmap names a texture the file does not have (S-26: pnpm assets puts the lightmap in the glb)',
 };

@@ -89,6 +89,7 @@ export function createGltfLoader(
           meshes: report.meshes,
           materials: report.materials,
           missing: report.missing,
+          unsupported: report.unsupported,
           textures: maps,
         };
       }

@@ -38,8 +38,6 @@ interface Light {
 interface Bake {
   size: number;
   samples: number;
-  seconds: number;
-  device: string;
   world: {
     name: string;
     sky: { zenith: number[]; horizon_cool: number[]; horizon_warm: number[]; dawn: number[] };
@@ -107,6 +105,12 @@ const linear = (hex: number) => {
   const c = new THREE.Color(hex);
   return [c.r, c.g, c.b];
 };
+/**
+ * Cycles' spot_blend for a three SpotLight's penumbra: three is at full strength within angle × (1 − penumbra), Cycles within
+ * cos θ ≥ cos A + (1 − cos A) × blend (its smoothstep runs over the cosine). The same edge of full strength.
+ */
+const spotBlend = (angle: number, penumbra: number) =>
+  (Math.cos(angle * (1 - penumbra)) - Math.cos(angle)) / (1 - Math.cos(angle));
 
 describe('S-26 the workshop’s light, baked into the glb', () => {
   it('the opaque pieces carry one lightmap of the area and its scale; the glass and the colliders none', () => {
@@ -147,7 +151,9 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     const sampler = json.samplers?.[texture?.sampler ?? -1];
     expect(sampler?.wrapS).toBe(33071);
     expect(sampler?.wrapT).toBe(33071);
-    expect(sampler?.minFilter).toBe(9987);
+    // with mip levels (a mipmap filter: 9984–9987)
+    expect(sampler?.minFilter).toBeGreaterThanOrEqual(9984);
+    expect(sampler?.minFilter).toBeLessThanOrEqual(9987);
     // no material points at it: the game finds it by name
     const text = JSON.stringify(json.materials);
     expect(text).not.toMatch(new RegExp(`"index":${index}[,}]`));
@@ -215,10 +221,11 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
       expect(m).not.toBeInstanceOf(BakedStandardNodeMaterial);
   });
 
-  it('records how it was baked: the size, the samples, the seconds, on the GPU', () => {
+  it('records how it was baked (only what decides the light: the same bake writes the same glb)', () => {
     expect(bake.size).toBeGreaterThanOrEqual(1024);
     expect(bake.samples).toBeGreaterThanOrEqual(128);
-    expect(bake.seconds).toBeGreaterThan(0);
+    expect(Object.keys(bake)).not.toContain('seconds');
+    expect(Object.keys(bake)).not.toContain('device');
     expect(bake.world.name).toBe('A0_dawn');
     expect(bake.images.map((i) => i.name)).toEqual(['A0_lightmap']);
     expect(bake.images[0]?.excluded_materials).toEqual(
@@ -246,7 +253,7 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     const reach = Math.hypot(...k.target.map((t, i) => t - (k.at[i] ?? 0)));
     expect(sky.energy).toBeCloseTo(4 * Math.PI * k.intensity * reach ** (2 - k.decay), 1);
     expect(sky.spot_size).toBeCloseTo(2 * k.angle, 4);
-    expect(sky.spot_blend).toBeCloseTo(k.penumbra, 4);
+    expect(sky.spot_blend).toBeCloseTo(spotBlend(k.angle, k.penumbra), 4);
 
     const fire = byType('bake_fire');
     if (!fire) throw new Error('no fire baked');
@@ -256,7 +263,7 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     // a point or spot light's candela × 4π: Blender's watts
     expect(fire.energy).toBeCloseTo(4 * Math.PI * f.intensity, 2);
     expect(fire.spot_size).toBeCloseTo(2 * f.angle, 4);
-    expect(fire.spot_blend).toBeCloseTo(f.penumbra, 4);
+    expect(fire.spot_blend).toBeCloseTo(spotBlend(f.angle, f.penumbra), 4);
     for (const l of bake.lights) expect(l.shadow, l.name).toBe(true);
   });
 

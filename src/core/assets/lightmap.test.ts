@@ -1,7 +1,7 @@
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { color, float } from 'three/tsl';
+import { color, float, materialLightMap, uniform, vec2, vec3 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   applyLightmaps,
   BakedLightingModel,
@@ -59,6 +59,9 @@ describe('bakesMaterial (the pipeline’s bakeable_material)', () => {
     expect(bakesMaterial(new THREE.MeshStandardNodeMaterial({ transparent: true }))).toBe(false);
     expect(bakesMaterial(new THREE.MeshBasicNodeMaterial())).toBe(false);
   });
+  it('an opaque physical material is baked by the pipeline (the game reports it cannot draw it so: applyLightmaps)', () => {
+    expect(bakesMaterial(new THREE.MeshPhysicalNodeMaterial({ clearcoat: 1 }))).toBe(true);
+  });
 });
 
 describe('toBakedMaterial', () => {
@@ -77,6 +80,10 @@ describe('toBakedMaterial', () => {
     expect(out.name).toBe('A0_frost');
     expect(out.map).toBe(map);
     expect(out.roughness).toBe(0.5);
+    // values copied, not shared with the source (changing one does not change the other)
+    expect(out.color).not.toBe(src.color);
+    expect(out.color.equals(src.color)).toBe(true);
+    expect(out.userData).not.toBe(src.userData);
     expect(out.colorNode).toBe(src.colorNode);
     expect(out.roughnessNode).toBe(src.roughnessNode);
     expect(out.userData.bake).toBe(true);
@@ -86,10 +93,107 @@ describe('toBakedMaterial', () => {
   });
   it('is a type of its own (three compiles it apart from the same material lit in real time)', () => {
     const out = toBakedMaterial(new THREE.MeshStandardNodeMaterial(), new THREE.Texture(), 1);
-    expect(out.type).toBe('BakedStandardNodeMaterial');
     expect(out.type).not.toBe(new THREE.MeshStandardNodeMaterial().type);
     expect(out.setupLightingModel()).toBeInstanceOf(BakedLightingModel);
     expect(new THREE.MeshStandardNodeMaterial().setupLightingModel()).not.toBeInstanceOf(BakedLightingModel);
+  });
+});
+
+/**
+ * The lighting of a baked surface, on three r186's own PhysicalLightingModel: what each part of the light is added to.
+ * A watch for three upgrades too (src/core/CHANGELOG.md 0.11.0): BakedLightingModel relies on three's lighting model
+ * reading `builder.context` and adding the environment's diffuse share in `indirectSpecular`. The nodes are built, not run:
+ * the test follows which inputs each addition is made of.
+ */
+describe('BakedLightingModel (the realtime lights are not counted twice)', () => {
+  /** Whether a node is made of `target` (follows the node's fields; nodes form a graph without cycles of fields). */
+  const dependsOn = (node: unknown, target: unknown, seen = new Set<unknown>()): boolean => {
+    if (node === target) return true;
+    if (!node || typeof node !== 'object' || seen.has(node)) return false;
+    seen.add(node);
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        if (v.some((x) => dependsOn(x, target, seen))) return true;
+      } else if (v && typeof v === 'object' && (v as { isNode?: boolean }).isNode) {
+        if (dependsOn(v, target, seen)) return true;
+      }
+    }
+    return false;
+  };
+  /** A stand-in for the lighting context's sums: records what is added to each. */
+  const sums = () => {
+    const added: Record<string, unknown[]> = {};
+    const sum = (name: string) => ({
+      addAssign: (n: unknown) => {
+        added[name] = [...(added[name] ?? []), n];
+      },
+      mulAssign: () => {},
+    });
+    return {
+      added,
+      reflectedLight: {
+        directDiffuse: sum('directDiffuse'),
+        directSpecular: sum('directSpecular'),
+        indirectDiffuse: sum('indirectDiffuse'),
+        indirectSpecular: sum('indirectSpecular'),
+      },
+    };
+  };
+  // three warns that the sink's assignment is outside a shader function: the test builds nodes outside one
+  const quiet = <T>(f: () => T): T => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      return f();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  };
+
+  it('a realtime light adds its highlight, not its diffuse light', () => {
+    const s = sums();
+    const model = new BakedLightingModel();
+    quiet(() =>
+      model.direct(
+        {
+          lightDirection: vec3(0, 1, 0),
+          lightColor: vec3(1, 1, 1),
+          reflectedLight: s.reflectedLight,
+        } as never,
+        {} as never,
+      ),
+    );
+    expect(Object.keys(s.added)).toEqual(['directSpecular']);
+  });
+
+  it('the diffuse light is the lightmap alone; the environment adds its reflection, its diffuse share goes nowhere', () => {
+    const s = sums();
+    const irradiance = uniform(new THREE.Vector3(1, 1, 1));
+    const iblIrradiance = uniform(new THREE.Vector3(2, 2, 2));
+    const radiance = uniform(new THREE.Vector3(3, 3, 3));
+    const model = new BakedLightingModel() as BakedLightingModel & { dfg: unknown };
+    model.dfg = vec2(0.9, 0.05); // what start() sets up from the view (DFG lookup)
+    quiet(() =>
+      model.indirect({
+        context: {
+          irradiance,
+          iblIrradiance,
+          radiance,
+          ambientOcclusion: float(1),
+          reflectedLight: s.reflectedLight,
+        },
+      } as never),
+    );
+    const diffuse = s.added.indirectDiffuse ?? [];
+    expect(diffuse).toHaveLength(1);
+    expect(dependsOn(diffuse[0], materialLightMap)).toBe(true);
+    // neither the scene's other irradiance (a hemisphere light) nor the environment's
+    expect(dependsOn(diffuse[0], irradiance)).toBe(false);
+    expect(dependsOn(diffuse[0], iblIrradiance)).toBe(false);
+    const specular = s.added.indirectSpecular ?? [];
+    expect(specular).toHaveLength(1);
+    expect(dependsOn(specular[0], radiance)).toBe(true);
   });
 });
 
@@ -143,6 +247,16 @@ describe('applyLightmaps', () => {
     // the brass is still used outside: nothing to dispose
     expect(report.replaced).toEqual([]);
     expect(report.missing).toEqual([]);
+    expect(report.unsupported).toEqual([]);
+  });
+
+  it('leaves a baked physical material lit in real time and says so', () => {
+    const s = build();
+    const lacquer = new THREE.MeshPhysicalNodeMaterial({ name: 'A0_lacquer', clearcoat: 1 });
+    s.body.material = lacquer;
+    const report = applyLightmaps(s.root, new Map([['A0_lightmap', new THREE.Texture()]]));
+    expect(s.body.material).toBe(lacquer);
+    expect(report.unsupported).toEqual(['A0_frn_furnace01/A0_lacquer']);
   });
 
   it('reports the source materials no mesh uses any more, and pieces whose lightmap is not in the file', () => {

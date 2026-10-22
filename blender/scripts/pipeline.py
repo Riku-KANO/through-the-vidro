@@ -101,8 +101,9 @@ LIGHTMAP_NAME = '{area}_lightmap'
 #: 焼いた画像を置く --out の下の場所
 LIGHTMAP_DIR = 'lightmaps'
 #: 焼く間の Cycles の設定: 光の模様（コースティクス）は焼かない（S-32 で別に描く。ガラスの器の下に雲のような粒が出た）、
-#: 間接光のまれな強い標本を切る（ちらつく点）
-CYCLES_BAKE = {'caustics_reflective': False, 'caustics_refractive': False, 'sample_clamp_indirect': 4.0}
+#: 間接光のまれな強い標本を切る（ちらつく点）、透明の面をいくつ抜けても止めない（棚の作品の二重の壁: BakeScene はガラスを透明にする）
+CYCLES_BAKE = {'caustics_reflective': False, 'caustics_refractive': False, 'sample_clamp_indirect': 4.0,
+               'transparent_max_bounces': 64}
 
 
 def bakeable_material(material) -> bool:
@@ -116,57 +117,90 @@ def bakeable_material(material) -> bool:
 
 
 def bake_targets(objects: list, named: dict) -> list:
-    """焼く物: 名前のある見た目の物（当たり判定でない）のメッシュで、焼ける材質の面を持つもの"""
+    """焼く物: 名前のある見た目の物（当たり判定でも、詳細度 1 以上でもない）のメッシュで、焼ける材質の面を持つもの。
+    詳細度 1 以上（_LOD1・_LOD2）は同じ所に重なる粗い形で、細かい形と一緒には焼けないので、今は焼かずに実時間で照らす
+    （まだ詳細度のある物はない。焼くなら段ごとにほかの段を隠して焼く）"""
     out = []
     for o in objects:
         owner = owner_of(o, named)
         if o.type != 'MESH' or owner is None or named[owner.name]['role'] == 'col':
+            continue
+        if (named[owner.name]['lod'] or 0) >= 1:
             continue
         if any(bakeable_material(s.material) for s in o.material_slots):
             out.append(o)
     return out
 
 
+def emits(material) -> bool:
+    """光る材質か（Principled の発光が 0 でない: 火・熾火・乳白の灯りの器）"""
+    if material is None or material.node_tree is None:
+        return False
+    for n in material.node_tree.nodes:
+        if n.type == 'BSDF_PRINCIPLED':
+            strength = n.inputs['Emission Strength']
+            colour = n.inputs['Emission Color']
+            lit = colour.is_linked or any(c > 0 for c in colour.default_value[:3])
+            if lit and (strength.is_linked or strength.default_value > 0):
+                return True
+    return False
+
+
+def clear_in_bake(material) -> bool:
+    """焼く間は光をそのまま通す材質: 透過のガラスと、焼かない光らない材質（ガラスの中の泡）。ゲームのガラスは影を落とさず
+    光を通す（src/game/assets/area.ts）。光る物（火、熾火、乳白の灯りの器）は場面の光として残す"""
+    if material is None:
+        return False
+    return is_transmissive(material) or (not bakeable_material(material) and not emits(material))
+
+
 class BakeScene:
     """焼く間だけ場面を焼き込み用に変え、終わったら元に戻す（.blend は保存しないが、書き出しは元の材質で行う）。
 
-    - 透過の材質は、影の光線にだけ透明（Light Path の Is Shadow Ray で Transparent に混ぜる）。ゲームのガラスは影を落とさず、
-      光を通す（src/game/assets/area.ts）。Cycles の屈折では日と空の光がガラスの奥へほとんど届かない（工房の物が暗く、粒が荒れる）。
-      吸収（ボリューム）も外す
+    - ガラス（透過の材質）とガラスの中の泡（焼かない光らない材質）は、すべての光線に透明（Transparent BSDF）。ゲームのガラスは
+      影を落とさず光を通す。影の光線だけ透明にした版（S-26 のレビュー1巡目まで）では、拡散の光線がガラスで屈折し、コースティクスを
+      切っているので先の空が数えられず、泡入りの瓶やガラス棒の下が暗いしみになった。吸収（ボリューム）も外す
     - 焼く材質の金属を 0 にする: 拡散の焼き込み（色を含めない）は金属の面では 0 になる。真鍮の面にも、そこに届く光を焼く
-      （ゲームは真鍮の映り込みの暗さにそれを使う）。跳ね返りは真鍮の色の拡散になる
+      （ゲームは金属の見た目に使わないが、跳ね返りは真鍮の色の拡散になる）
+    - 当たり判定（_col）と詳細度 1 以上（_LOD1・_LOD2）は焼く間だけ隠す（描かれない物・同じ所にある粗い形が光を遮らない。
+      工房の _col は make_workshop.py が hide_render にしてあるが、手で作る .blend でも同じになるように）
     """
 
-    def __init__(self, materials):
+    def __init__(self, materials, hidden=()):
         self.materials = [m for m in materials if m is not None and m.node_tree is not None]
+        self.hidden = list(hidden)
         self.undo = []
 
     def __enter__(self):
-        # no caustics (light through the glass onto the pieces: S-32's, drawn on its own; here they were noisy clouds on the
-        # bench and its shelf), and the rare very bright indirect sample clamped (fireflies)
+        # no caustics (light through the glass onto the pieces: S-32's, drawn on its own), the rare very bright indirect
+        # sample clamped (fireflies), and room for a ray through many clear surfaces (the double walls of the works on the
+        # shelf)
         cycles = bpy.context.scene.cycles
         for key, value in CYCLES_BAKE.items():
             was = getattr(cycles, key)
             setattr(cycles, key, value)
             self.undo.append(lambda key=key, was=was: setattr(cycles, key, was))
+        for o in self.hidden:
+            if not o.hide_render:
+                o.hide_render = True
+                self.undo.append(lambda o=o: setattr(o, 'hide_render', False))
         for m in self.materials:
             nt = m.node_tree
             out = next((n for n in nt.nodes if n.type == 'OUTPUT_MATERIAL' and n.is_active_output), None)
             if out is None:
                 continue
-            if is_transmissive(m):
+            if clear_in_bake(m):
                 surface = out.inputs['Surface']
-                if surface.is_linked:
-                    src = surface.links[0].from_socket
-                    path = nt.nodes.new('ShaderNodeLightPath')
-                    clear = nt.nodes.new('ShaderNodeBsdfTransparent')
-                    mix = nt.nodes.new('ShaderNodeMixShader')
-                    nt.links.new(path.outputs['Is Shadow Ray'], mix.inputs['Fac'])
-                    nt.links.new(src, mix.inputs[1])
-                    nt.links.new(clear.outputs['BSDF'], mix.inputs[2])
-                    nt.links.new(mix.outputs['Shader'], surface)
-                    self.undo.append(lambda nt=nt, src=src, surface=surface, made=(path, clear, mix): (
-                        nt.links.new(src, surface), [nt.nodes.remove(n) for n in made]))
+                was = surface.links[0].from_socket if surface.is_linked else None
+                clear = nt.nodes.new('ShaderNodeBsdfTransparent')
+                nt.links.new(clear.outputs['BSDF'], surface)
+
+                def back(nt=nt, was=was, surface=surface, clear=clear):
+                    nt.nodes.remove(clear)
+                    if was is not None:
+                        nt.links.new(was, surface)
+
+                self.undo.append(back)
                 volume = out.inputs['Volume']
                 if volume.is_linked:
                     vsrc = volume.links[0].from_socket
@@ -230,9 +264,19 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
         print(f'WARNING: bake density names objects that are not baked here (renamed?): {", ".join(unknown)}')
     used = {s.material for o in bpy.context.view_layer.objects if o.type == 'MESH' for s in o.material_slots}
     lights = [o for o in bpy.context.view_layer.objects if o.type == 'LIGHT' and not o.hide_render]
+    hidden = []
+    for o in objects:
+        owner = owner_of(o, named)
+        if owner is not None and (named[owner.name]['role'] == 'col' or (named[owner.name]['lod'] or 0) >= 1):
+            hidden.append(o)
+    # the game reads which materials of a baked object were left out from their extras (src/core/assets/lightmap.ts)
+    for o in targets:
+        for slot in o.material_slots:
+            if slot.material is not None and not bakeable_material(slot.material):
+                slot.material['bake'] = False
     started = time.monotonic()
     images = []
-    with BakeScene(used):
+    with BakeScene(used, hidden):
         for group, objs in sorted(by_group.items()):
             name = LIGHTMAP_NAME.format(area=group.upper())
             excluded = sorted({s.material.name for o in objs for s in o.material_slots
@@ -250,21 +294,22 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
                            'device': first.get('device'), 'seconds': round(seconds, 1),
                            'objects': sorted(o.name for o in objs), 'excluded_materials': excluded})
     seconds = time.monotonic() - started
+    # what was baked, into the glb (scene extras): only what decides the light, so the same bake writes the same glb
     record = {
         'size': size,
         'samples': samples,
         'percentile': percentile,
         'margin': margin,
         'density': density,
-        'seconds': round(seconds, 1),
-        'device': ', '.join(sorted({str(i['device']) for i in images})),
         'world': {'name': scene.world.name, **{k: plain(v) for k, v in scene.world.items() if k != 'about'}}
         if scene.world else None,
         'lights': [light_record(o) for o in sorted(lights, key=lambda o: o.name)],
-        'images': [{k: v for k, v in i.items() if k != 'png'} for i in images],
+        'images': [{k: v for k, v in i.items() if k not in ('png', 'seconds', 'device')} for i in images],
     }
     scene['bake'] = record
-    return {**record, 'images': images}
+    # and for the report: how long it took, on what
+    return {**record, 'images': images, 'seconds': round(seconds, 1),
+            'device': ', '.join(sorted({str(i['device']) for i in images}))}
 
 
 def run(out_dir: str, report_path: str, bake_settings: dict | None = None) -> int:

@@ -58,6 +58,8 @@ const UASTC_SLOTS = '{normalTexture,thicknessTexture}';
  * every error of its normals as distortion (設計書 Blenderアセットパイプライン > 造形 > 法線). 仮.
  */
 const MESHOPT_LEVEL = 'medium';
+/** Bits of the UVs of a baked job (S-26): a texel of a 2048 px lightmap is 1/2048; 12 bits would round to half of one. */
+const BAKED_TEXCOORD_BITS = 14;
 
 const argv = process.argv.slice(2).filter((a) => a !== '--');
 const onlyJob = argv.includes('--job') ? argv[argv.indexOf('--job') + 1] : null;
@@ -156,7 +158,15 @@ for (const job of jobs) {
       current = etc1s;
     }
     const final = join(out, `${g.group}.glb`);
-    gltfTransform(['meshopt', current, final, '--level', MESHOPT_LEVEL]);
+    // a baked job: the second UV at 14 bits (the default 12 is half a texel of a 2048 px lightmap)
+    gltfTransform([
+      'meshopt',
+      current,
+      final,
+      '--level',
+      MESHOPT_LEVEL,
+      ...(bake ? ['--quantize-texcoord', String(BAKED_TEXCOORD_BITS)] : []),
+    ]);
     const before = statSync(raw).size;
     // the area's lightmap, last: gltf-transform would drop a texture no material uses
     for (const image of (result.bake?.images ?? []).filter((i) => i.group === g.group)) {

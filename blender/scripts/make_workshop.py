@@ -1825,6 +1825,16 @@ def srgb_hex(h: str) -> tuple[float, float, float]:
     return tuple(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in c)
 
 
+def spot_blend(angle: float, penumbra: float) -> float:
+    """three の SpotLight の半影（angle × (1 − penumbra) の内は全強度、外へ角の余弦で smoothstep）を Cycles の spot_blend へ。
+    Cycles は余弦の幅 (1 − cos 半角) × blend で smoothstep する（全強度は cos θ ≥ cos A + (1 − cos A) × blend）ので、
+    全強度の縁を三と同じ角に置く: blend = (cos(A (1 − p)) − cos A) / (1 − cos A)。炉 0.6 → 0.82、天窓 0.75 → 0.94
+    （S-26 のレビュー1巡目まで penumbra をそのまま渡していて、全強度の円が三の倍ほど広かった）"""
+    inner = math.cos(angle * (1 - penumbra))
+    outer = math.cos(angle)
+    return (inner - outer) / (1 - outer)
+
+
 def furnace_mouth() -> Vector:
     cx, cz = FURNACE['center']
     return Vector((cx + FACING[0] * MOUTH_REACH, MOUTH_Y, cz + FACING[1] * MOUTH_REACH))
@@ -1921,10 +1931,12 @@ def bake_lights(collection) -> dict:
     # three's decay 1.4 has no match in Blender (always 1/d²): the same light where it lands, on the vidro
     sky_cd = SKYLIGHT_CD * reach ** (2 - SKYLIGHT_DECAY)
     sky = light('bake_skylight', 'SPOT', top, orb - top, SKYLIGHT_COLOR, 4 * math.pi * sky_cd,
-                spot_size=2 * SKYLIGHT_ANGLE, spot_blend=SKYLIGHT_PENUMBRA, shadow_soft_size=LIGHT_RADIUS['skylight'])
+                spot_size=2 * SKYLIGHT_ANGLE, spot_blend=spot_blend(SKYLIGHT_ANGLE, SKYLIGHT_PENUMBRA),
+                shadow_soft_size=LIGHT_RADIUS['skylight'])
     at, aim = fire_light()
     fire = light('bake_fire', 'SPOT', at, aim - at, srgb_hex(FIRE_COLOR), 4 * math.pi * FIRE_CD,
-                 spot_size=2 * FIRE_ANGLE, spot_blend=FIRE_PENUMBRA, shadow_soft_size=LIGHT_RADIUS['fire'])
+                 spot_size=2 * FIRE_ANGLE, spot_blend=spot_blend(FIRE_ANGLE, FIRE_PENUMBRA),
+                 shadow_soft_size=LIGHT_RADIUS['fire'])
     return {'sun': sun, 'skylight': sky, 'fire': fire}
 
 

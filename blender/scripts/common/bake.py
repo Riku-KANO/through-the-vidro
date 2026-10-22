@@ -229,8 +229,54 @@ def _despike(peak: np.ndarray) -> np.ndarray:
     return np.where(spike, around, peak)
 
 
-def _save_normalized(img, path: str, percentile: float = PERCENTILE) -> dict:
-    """焼いた float 画像を、高い百分位で割って 8bit の sRGB PNG にする。
+def _pin_image_uvs(group: list, mats: list, saved_uv: dict) -> list:
+    """UV のノードを持たない画像のノードに、その材質を使う物の元の描画用の UV（saved_uv）をつなぐ。足したノードを返す"""
+    uv_of = {}
+    for o in group:
+        for slot in o.material_slots:
+            if slot.material is not None:
+                uv_of.setdefault(slot.material, saved_uv[o.name])
+    pinned = []
+    for m in mats:
+        nt = m.node_tree
+        for node in list(nt.nodes):
+            if node.type != 'TEX_IMAGE' or node.name == _NODE or node.inputs['Vector'].is_linked:
+                continue
+            uvmap = nt.nodes.new('ShaderNodeUVMap')
+            uvmap.uv_map = uv_of.get(m, 'UVMap')
+            nt.links.new(uvmap.outputs['UV'], node.inputs['Vector'])
+            pinned.append((m, uvmap))
+    return pinned
+
+
+def _fill_gutters(rgb: np.ndarray, mask: np.ndarray) -> None:
+    """焼いていない画素（mask が False）を近くの焼いた画素の色で埋める（押し引き: 半分ずつの大きさで焼いた画素の平均を作り、
+    粗い段から細かい段へ戻しながら、空いた所だけを埋める）。rgb（高さ, 幅, 3）を書き換える"""
+    levels = []
+    c = np.where(mask[..., None], rgb, 0).astype(np.float32)
+    wgt = mask.astype(np.float32)
+    while True:
+        levels.append((c, wgt))
+        h, w = wgt.shape
+        if h <= 1 and w <= 1:
+            break
+        ph, pw = h + (h & 1), w + (w & 1)
+        if (ph, pw) != (h, w):
+            c = np.pad(c, ((0, ph - h), (0, pw - w), (0, 0)))
+            wgt = np.pad(wgt, ((0, ph - h), (0, pw - w)))
+        c = c[0::2, 0::2] + c[1::2, 0::2] + c[0::2, 1::2] + c[1::2, 1::2]
+        wgt = wgt[0::2, 0::2] + wgt[1::2, 0::2] + wgt[0::2, 1::2] + wgt[1::2, 1::2]
+    avg = levels[-1][0] / np.maximum(levels[-1][1], 1e-12)[..., None]
+    for c, wgt in reversed(levels[:-1]):
+        h, w = wgt.shape
+        up = np.repeat(np.repeat(avg, 2, axis=0), 2, axis=1)[:h, :w]
+        avg = np.where((wgt > 0)[..., None], c / np.maximum(wgt, 1e-12)[..., None], up)
+    hole = ~mask
+    rgb[hole] = avg[hole]
+
+
+def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool = False) -> dict:
+    """焼いた float 画像を、高い百分位で割って 8bit の sRGB PNG にする（fill=True なら焼いていない画素を島の色で埋めて）。
 
     戻り値: scale（割った倍率 = lightmap_scale）、max（焼いた最大）、clipped_frac（焼かれた画素のうち 1.0 で切れた割合）。
     メモリを抑えるため float32 のまま、符号化は行の塊ごとにする。
@@ -249,6 +295,8 @@ def _save_normalized(img, path: str, percentile: float = PERCENTILE) -> dict:
     else:
         scale, peak_max, clipped = 1.0, 0.0, 0.0
     scale = max(scale, 1e-4)
+    if fill and n_lit:
+        _fill_gutters(lin, lit_mask)
     rgb = np.empty((h, w, 3), dtype=np.uint8)
     inv = np.float32(1.0 / scale)
     for y0 in range(0, h, 256):
@@ -291,6 +339,7 @@ def bake_lightmaps(
     percentile: float = PERCENTILE,
     exclude_materials: Iterable[str] = (),
     density: dict | None = None,
+    fill: bool = True,
 ) -> list[dict]:
     """objects の光と影を Lightmap UV に焼き、8bit の PNG を out_dir に書く。
 
@@ -301,6 +350,9 @@ def bake_lightmaps(
     持つ物で、ライトマップの場所を取らない）。光る面は焼かなくても、場面の光としては焼いた物を照らす。
     density（物の名前 → 倍率、既定 1）は物ごとの画素の細かさ（大きく見える床を細かく、細い管を粗く）。
     margin は焼いた色を島の外へ伸ばす画素の数で、島の間はその倍（repack のとき）。
+    fill=True なら、それでも焼いていない画素（島の間）を近くの島の色で全部埋める（ミップの粗い段で島の外の黒が島へ混ざらない）。
+    焼く間は、UV のノードを持たない画像のノードに元の描画用の UV をつなぐ（焼く間は Lightmap が描画用の UV になり、アトラスの
+    色が Lightmap の UV で読まれて、光る面の色と跳ね返りの色が狂う）。終わったら外す。
     戻り値: [{'object': 物の名前, 'image': PNG の絶対パス, 'scale': lightmap_scale,
               'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合,
               'device': 焼いた計算機（METAL / CPU …）}, ...]
@@ -342,6 +394,7 @@ def bake_lightmaps(
                     o.data = o.data.copy()
             mats = _ensure_materials(group, gname)
             saved_uv = _prepare_uv(group, repack, island_margin, frozenset(exclude_materials), density)
+            pinned = _pin_image_uvs(group, mats, saved_uv)
             img = bpy.data.images.new(f'{gname}.bake', size, size, alpha=False, float_buffer=True)
             img.colorspace_settings.name = 'Non-Color'  # 焼いた線形の値をそのまま float に残す（色空間の変換を入れない）
             nodes = []
@@ -362,9 +415,9 @@ def bake_lightmaps(
                 device = 'CPU'
                 _bake(margin)
             path = os.path.join(out_dir, f'{gname}.png')
-            stat = _save_normalized(img, path, percentile)
+            stat = _save_normalized(img, path, percentile, fill=fill)
             scale = stat['scale']
-            for m, node in nodes:
+            for m, node in nodes + pinned:
                 m.node_tree.nodes.remove(node)
             bpy.data.images.remove(img)
             for o in group:

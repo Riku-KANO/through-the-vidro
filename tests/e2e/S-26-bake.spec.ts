@@ -68,6 +68,13 @@ const VIEWS = [
  * (process/slices/S-26.md 赤の証跡: over the whole picture the sky, which no light changes, kept 81% before the bake).
  */
 const KEEPS_LIGHT = 0.8;
+/**
+ * (b), with the environment off as well: a matte place (the frosted top of the bench left of the vidro, nothing on it, CSS
+ * pixels of the view from the bench) keeps at least this share. Its light is the bake's; the environment's diffuse light
+ * counted a second time would go with it (before the bake, the lights alone took two thirds of it: 0.547 → 0.188).
+ */
+const KEEPS_MATTE = 0.9;
+const BENCH_TOP = { x0: 470, y0: 455, x1: 590, y1: 490 } as const;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -220,6 +227,40 @@ async function realtimeLightsOff(page: Page): Promise<number> {
 }
 
 /**
+ * Boxes of open floor in the view from the door (CSS pixels of the 1280×720 page): between the furnace and the bench, and
+ * nearer, under the dome's middle. No piece stands there; the furnace's fire is not the light there.
+ */
+const OPEN_FLOOR = [
+  { x0: 560, y0: 430, x1: 720, y1: 520 },
+  { x0: 600, y0: 600, x1: 800, y1: 700 },
+] as const;
+
+/** Mean sRGB luminance (0..1) of a box of a picture. */
+async function regionLuminance(
+  page: Page,
+  b64: string,
+  box: { x0: number; y0: number; x1: number; y1: number },
+): Promise<number> {
+  return page.evaluate(
+    async ({ b64, box }) => {
+      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+      const bmp = await createImageBitmap(blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const g = c.getContext('2d');
+      if (!g) throw new Error('no 2d context');
+      g.drawImage(bmp, 0, 0);
+      const k = bmp.width / innerWidth;
+      const d = g.getImageData(box.x0 * k, box.y0 * k, (box.x1 - box.x0) * k, (box.y1 - box.y0) * k).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4)
+        sum += (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      return sum / (d.length / 4);
+    },
+    { b64, box },
+  );
+}
+
+/**
  * Mean sRGB luminance (0..1) of the lower half of a picture (from the bench: the bench, its lower shelf and the floor; the
  * upper half is mostly the sky, which no light changes), leaving out discs (the hand orb).
  */
@@ -363,6 +404,25 @@ for (const backend of backends) {
         ),
       );
     }
+    if (phase === 'after' && existsSync(shot('before', 'door'))) {
+      // the bake is the same light as the realtime room where nothing stands in its way: the open floor from the door, its
+      // sRGB luminance within a quarter of what it was (a strength off by π would be about three times darker or brighter)
+      const before = readFileSync(shot('before', 'door')).toString('base64');
+      const after = readFileSync(shot('after', 'door')).toString('base64');
+      const ratios: number[] = [];
+      for (const box of OPEN_FLOOR) {
+        const [a, b] = await Promise.all([
+          regionLuminance(page, before, box),
+          regionLuminance(page, after, box),
+        ]);
+        ratios.push(b / a);
+      }
+      keep('openFloor', { boxes: OPEN_FLOOR, ratios });
+      for (const r of ratios) {
+        expect(r, 'open floor from the door, after ÷ before').toBeGreaterThan(0.8);
+        expect(r, 'open floor from the door, after ÷ before').toBeLessThan(1.25);
+      }
+    }
     if (phase === 'after' && VIEWS.every(([, name]) => existsSync(shot('uastc', name)))) {
       writeFileSync(
         join(shotDir, 'compare-codec.png'),
@@ -393,11 +453,32 @@ for (const backend of backends) {
     const dark = await page.screenshot();
     mkdirSync(join(shotDir, phase), { recursive: true });
     writeFileSync(join(shotDir, phase, 'wake-lights-off.png'), dark);
+    // and the environment (the sky the glass mirrors) off too: its diffuse light is in the bake as well (review round 1 of
+    // S-26: with only the lights off, the environment's diffuse light counted twice would still pass)
+    await page.evaluate(() => {
+      (
+        window as unknown as { __s26Scene: { environmentIntensity: number } }
+      ).__s26Scene.environmentIntensity = 0;
+    });
+    await page.waitForTimeout(500);
+    leaveOut.push(...(await orb()));
+    const unlit = await page.screenshot();
+    writeFileSync(join(shotDir, phase, 'wake-lights-and-sky-off.png'), unlit);
     const on = await meanLuminance(page, lit, leaveOut);
     const off = await meanLuminance(page, dark, leaveOut);
-    keep('lightsOff', { lights, on, off, kept: off / on });
+    // without the environment the brass and the glass lose what they mirror (that is right): measure the matte top of the
+    // bench, where the environment gives only diffuse light and a faint sheen
+    const top = {
+      on: await regionLuminance(page, lit.toString('base64'), BENCH_TOP),
+      none: await regionLuminance(page, unlit.toString('base64'), BENCH_TOP),
+    };
+    keep('lightsOff', { lights, on, off, kept: off / on, benchTop: top, benchTopKept: top.none / top.on });
     expect(lights, 'realtime lights in the room').toBeGreaterThanOrEqual(4);
     expect(off / on, 'share of the light kept with the realtime lights off').toBeGreaterThan(KEEPS_LIGHT);
+    expect(
+      top.none / top.on,
+      'the bench top with the realtime lights and the environment off',
+    ).toBeGreaterThan(KEEPS_MATTE);
     expect(errors).toEqual([]);
   });
 

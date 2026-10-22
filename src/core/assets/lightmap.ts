@@ -97,7 +97,8 @@ export class BakedLightingModel extends THREE.PhysicalLightingModel {
       metalness.clamp(0, 1),
     );
     const at = (c: object) => ({ context: { ...context, ...c } }) as unknown as THREE.NodeBuilder;
-    this.indirectDiffuse(at({ irradiance: baked }));
+    // (the environment's irradiance zeroed too: a later three that read it here would add it a second time)
+    this.indirectDiffuse(at({ irradiance: baked, iblIrradiance: vec3(0) }));
     // the environment's specular only (its diffuse share goes into a sink)
     this.indirectSpecular(
       at({
@@ -127,8 +128,10 @@ export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
 const OWN_FIELDS = new Set(['uuid', 'id', 'type', 'version', '_listeners']);
 
 /**
- * The baked material for `source`: the same values, nodes and textures (shared, not copied), with `lightMap` on the second
- * UV and its strength. Only a MeshStandardNodeMaterial (what the pipeline's opaque materials become) can be baked.
+ * The baked material for `source`: the same values (colours and vectors copied, userData a shallow copy), nodes and
+ * textures (shared), with `lightMap` on the second UV and its strength. Only a MeshStandardNodeMaterial (what the
+ * pipeline's opaque materials become) can be baked. An aoMap would darken the baked light a second time (the bake holds the
+ * occlusion): the pipeline's materials have none.
  */
 export function toBakedMaterial(
   source: THREE.MeshStandardNodeMaterial,
@@ -140,24 +143,36 @@ export function toBakedMaterial(
   const dst = out as unknown as Record<string, unknown>;
   for (const key in src) {
     if (OWN_FIELDS.has(key) || key.startsWith('is')) continue;
-    dst[key] = src[key];
+    const v = src[key] as {
+      isColor?: boolean;
+      isVector2?: boolean;
+      isVector3?: boolean;
+      clone?: () => unknown;
+    } | null;
+    dst[key] = v && (v.isColor || v.isVector2 || v.isVector3) && v.clone ? v.clone() : v;
   }
+  out.userData = { ...source.userData };
   out.name = source.name;
   out.lightMap = lightMap;
   out.lightMapIntensity = lightmapIntensity(scale);
   return out;
 }
 
-/** Whether the pipeline bakes a material (blender/scripts/pipeline.py bakeable_material). */
+/**
+ * Whether the pipeline baked a material: lit (standard or physical), opaque, not the game's glass (the hook marks it in
+ * userData.mark), not see-through, and not `bake: false` in its extras — the pipeline writes that on every material of a
+ * baked object it left out (blender/scripts/pipeline.py bakeable_material: the fire, the embers, the air in glass, the glass).
+ */
 export function bakesMaterial(m: THREE.Material): boolean {
-  if (!(m instanceof THREE.MeshStandardNodeMaterial) || m instanceof THREE.MeshPhysicalNodeMaterial) {
-    // a physical material here is the game's glass (or transmissive): never baked
-    return false;
-  }
-  if (typeof m.userData.mark === 'string') return false;
-  if (m.userData.bake === false) return false;
+  if (!(m instanceof THREE.MeshStandardNodeMaterial)) return false;
+  if (typeof m.userData.mark === 'string' || m.userData.bake === false) return false;
+  if (m instanceof THREE.MeshPhysicalNodeMaterial && m.transmission > 0) return false;
   return !m.transparent;
 }
+
+/** Whether a baked material can be drawn with its lightmap here (BakedStandardNodeMaterial is a standard material). */
+const canBake = (m: THREE.Material): m is THREE.MeshStandardNodeMaterial =>
+  m instanceof THREE.MeshStandardNodeMaterial && !(m instanceof THREE.MeshPhysicalNodeMaterial);
 
 /**
  * The lightmaps of a loaded glb: the textures its baked objects name, by name (a texture of the glb no material uses).
@@ -199,6 +214,11 @@ export interface LightmapReport {
   replaced: THREE.Material[];
   /** Objects whose lightmap is not in the file. */
   missing: string[];
+  /**
+   * Baked materials this cannot draw with their lightmap (a physical material: clearcoat, sheen, specular…), by object and
+   * material. They stay lit in real time: say so (the game lists them as problems).
+   */
+  unsupported: string[];
 }
 
 /**
@@ -214,20 +234,25 @@ export function applyLightmaps(
   const sources = new Set<THREE.Material>();
   const meshes: THREE.Mesh[] = [];
   const missing = new Set<string>();
+  const unsupported = new Set<string>();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     let ref: LightmapRef | null = null;
-    let owner: THREE.Object3D | null = mesh;
-    for (; owner && !ref; owner = owner.parent) ref = lightmapOf(owner.userData);
+    let piece: THREE.Object3D | null = null;
+    for (let p: THREE.Object3D | null = mesh; p && !ref; p = p.parent) {
+      ref = lightmapOf(p.userData);
+      if (ref) piece = p;
+    }
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     if (!ref) {
       for (const m of mats) used.add(m);
       return;
     }
+    const name = String(piece?.userData.name ?? piece?.name ?? mesh.name);
     const texture = lightmaps.get(ref.name);
     if (!texture) {
-      missing.add(String(mesh.userData.name ?? mesh.name));
+      missing.add(name);
       for (const m of mats) used.add(m);
       return;
     }
@@ -237,11 +262,16 @@ export function applyLightmaps(
         used.add(m);
         return m;
       }
+      if (!canBake(m)) {
+        unsupported.add(`${name}/${m.name}`);
+        used.add(m);
+        return m;
+      }
       sources.add(m);
       const key = `${m.uuid}|${texture.uuid}|${lightmapRef.scale}`;
       let baked = made.get(key);
       if (!baked) {
-        baked = toBakedMaterial(m as THREE.MeshStandardNodeMaterial, texture, lightmapRef.scale);
+        baked = toBakedMaterial(m, texture, lightmapRef.scale);
         made.set(key, baked);
       }
       return baked;
@@ -254,5 +284,6 @@ export function applyLightmaps(
     materials: [...made.values()],
     replaced: [...sources].filter((m) => !used.has(m)),
     missing: [...missing],
+    unsupported: [...unsupported],
   };
 }

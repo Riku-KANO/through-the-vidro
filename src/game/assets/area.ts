@@ -4,6 +4,7 @@ import { type HazeSpec, readsBackdrop } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import { type AssembledAsset, assembleAsset } from './assemble';
 import { type AssetGlassRecord, createAssetMaterialHook } from './glass';
+import { parseAssetName } from './naming';
 import { type AssetProblem, problemMessage } from './plan';
 import { proceduralMaterial } from './procedural';
 
@@ -46,7 +47,8 @@ export async function loadAreaAsset(
       if (!mesh.isMesh) return;
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const glass = mats.some(readsBackdrop);
-      mesh.castShadow = !glass;
+      // a floor (kind flr) shadows nothing above it; drawn in code before S-26 it only received
+      mesh.castShadow = !glass && kindOf(mesh) !== 'flr';
       mesh.receiveShadow = !glass;
     });
     return {
@@ -61,10 +63,24 @@ export async function loadAreaAsset(
           code: 'lightmap-missing' as const,
           message: problemMessage('lightmap-missing'),
         })),
+        ...(asset.lightmaps?.unsupported ?? []).map((object) => ({
+          object,
+          code: 'lightmap-material' as const,
+          message: problemMessage('lightmap-material'),
+        })),
       ],
       dispose: () => asset.dispose(),
     };
   } finally {
     loader.dispose();
   }
+}
+
+/** The kind of the named object a mesh belongs to (itself or its nearest named ancestor), or null. */
+function kindOf(o: THREE.Object3D): string | null {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) {
+    const parsed = parseAssetName(String(p.userData.name ?? ''));
+    if (parsed.ok) return parsed.value.kind;
+  }
+  return null;
 }
