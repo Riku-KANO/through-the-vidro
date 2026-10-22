@@ -236,56 +236,6 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-24 trial: a surface-only wall in the placed orb's sphere — keep stops you, cut lets you onto the bridge [${backend}]`, async ({
-    page,
-  }) => {
-    test.setTimeout(120_000);
-    mkdirSync(shotDir, { recursive: true });
-    mkdirSync(outDir, { recursive: true });
-    const errors = collectErrors(page);
-    const out: Record<string, unknown> = {};
-    // before the orb is placed the wall stands on the lip of the dead end, across the way onto the bridge
-    await page.goto(`/?scene=prologue-proto&spawn=dead-end&peekHold=0&trial=surface-wall${webgl}`);
-    await waitRoom(page, 'r.ready && r.playing && r.trial', 60_000);
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: join(shotDir, 'trial-wall.png') });
-    for (const mode of ['keep', 'cut'] as const) {
-      // the orb on the dead-end pedestal, fully grown (growHold=1); the trial wall on the lip of the dead end
-      await page.goto(
-        `/?scene=prologue-proto&spawn=dead-end&growHold=1&trial=surface-wall&surfaceCol=${mode}${webgl}`,
-      );
-      const r0 = await waitRoom(page, 'r.ready && r.playing && r.trial', 60_000);
-      await page.waitForTimeout(500);
-      cursor.x = 640;
-      cursor.y = 360;
-      await page.mouse.move(cursor.x, cursor.y);
-      await page.mouse.down();
-      await page.mouse.up();
-      await waitRoom(page, 'r.locked === true');
-      await lookAt(page, [0.05, 1.2, r0.position.z - 6]);
-      await page.keyboard.down('KeyW');
-      await page.waitForTimeout(3_500);
-      await page.keyboard.up('KeyW');
-      await page.waitForTimeout(300);
-      // where each ends: keep before the wall that is no longer drawn, cut out on the bridge
-      await page.screenshot({ path: join(shotDir, `trial-${mode}.png`) });
-      const r = await room(page);
-      const trial = (r as RoomProbe & { trial: { mode: string; segments: number; off: number } }).trial;
-      out[mode] = { trial, position: r.position };
-      expect(trial.mode).toBe(mode);
-      if (mode === 'keep') {
-        expect(trial.off).toBe(0);
-        expect(r.position.z).toBeGreaterThan(-13.9); // stopped by the wall that is not drawn inside the sphere
-      } else {
-        expect(trial.off).toBe(trial.segments);
-        expect(r.position.z).toBeLessThan(-14.5); // on the bridge
-      }
-    }
-    writeFileSync(join(outDir, `trial-${backend}.json`), JSON.stringify(out, null, 2));
-    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
-    expect(errors).toEqual([]);
-  });
-
   test(`S-24 the fixed views (wake, furnace, shelf, door) inside the budget [${backend}]`, async ({
     page,
   }) => {

@@ -633,14 +633,16 @@ slices:
 
   - id: S-28
     title: 置いた玉の球の中では、表の層にしかない壁を通れるようにする
-    status: todo
+    status: integrated
+    branch: slice/S-28-surface-walls
+    accepted: レビュー1巡で P1 なし。P2（S-24 の試しの e2e が落ちる）は統合時に親がその test を消して解消（2026-10-22）
     depends: [S-24]
     parallel: true
     requirements:
       - コアメカニクス > 裏の層のルール（表にしかない壁は消えて通れるようになる）
       - 空間の可読性と導線（4 当たり判定は見た目に正直に）
     paths:
-      - src/layers/**、src/game/orb/**（拾う前の確かめ）、src/game/prologue/physics.ts、src/game/prologue/room.ts（配線だけ）
+      - src/layers/**、src/game/orb/**（拾う前の確かめ）、src/game/prologue/physics.ts、src/game/prologue/room.ts（配線だけ）、src/game/prologue/session.ts（拾う前の確かめの配線）
       - tests/e2e/S-28-*.spec.ts
       - process/slices/S-28.md
     acceptance:

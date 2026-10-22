@@ -217,7 +217,7 @@ export const PEDESTAL_RADIUS = 0.26;
 /**
  * S-24's trial only (?trial=surface-wall; S-23 判断待ち9): a broken glass wall on the surface layer (裏の層のルール: 表にだけ
  * あるもの: 崩れた壁) standing on the lip of the dead end, across the way onto the bridge, inside the placed orb's sphere.
- * Its collider shows what happens to a surface collider inside the sphere (physics.ts SurfaceColliders).
+ * Its collider is cut inside a placed orb's sphere (S-28, physics.ts SurfaceColliders).
  */
 export const TRIAL_SURFACE_WALL: Box = { min: [-0.68, 0, EDGE_Z + 0.04], max: [0.78, 1.0, EDGE_Z + 0.16] };
 

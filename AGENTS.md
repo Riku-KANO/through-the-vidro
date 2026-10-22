@@ -165,6 +165,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。
 - **GPU を使う検査の間は、同じ機械で CPU を多く使う仕事（Blender、KTX2 の書き出し）を走らせない（S-24）。** S-06 の「最長フレーム 200ms」が
   376ms で落ちた。
+- **表の層にしかない物の当たり判定は、置いた玉の球に丸ごと入った区画だけ切る（S-28）。** `splitSurface`（辺 0.4m 以下）→ `SurfaceColliders`。
+  拾う前の確かめにはセッションの `surface` に同じ区画を渡す（壁の中では拾えず、玉が震える）。固定のまま置くと球の中で見えない壁になる。
+  拾った瞬間に当たり判定は戻り、絵は 0.8 秒かけて戻る（その間だけ見た目より固い）のは意図したもの。アセットの `_front` の `_col` を表だけの
+  壁にするときは、`src/game/assets/physics.ts` から `SurfaceColliders` へ入れる配線が要る（まだない）。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
