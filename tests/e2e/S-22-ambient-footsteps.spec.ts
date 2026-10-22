@@ -431,23 +431,32 @@ for (const backend of backends) {
     // a gust's first strike rings out above the wind bed just before it, where a bell is heard (above 1 kHz: the
     // bells are D6 and up, the wind's body lies below): 遠く, but heard
     const sr = full.sampleRate;
-    const hp = new Biquad(sr).highpass(1000);
-    const bright = full.mono.map((v) => hp.process(v));
-    const chimeHits = hits.filter((q) => q.kind === 'chimes');
-    const dropHits = hits.filter((q) => q.kind === 'drops');
-    // gusts whose first strike has the bed to itself: no bell still ringing (3 s), no drop around it
-    const firsts = chimeHits.filter(
-      (h, i) =>
-        (i === 0 || h.at - (chimeHits[i - 1]?.at ?? 0) > 3) &&
-        !dropHits.some((d) => d.at > h.at - 0.6 && d.at < h.at + 0.3),
-    );
-    expect(firsts.length).toBeGreaterThan(0);
+    // the far set only (chimes:town): since S-25 the bell above the door is a place of 'chimes' too, and its strikes
+    // must not stand in for the far bells. Gusts whose first strike has the bed to itself: no far bell still ringing
+    // (3 s), no drop around it, no draught at the door (its bell rings while one comes in, and the door's wind swells).
+    // One seed's 30 s may hold none (seed 7 since S-25), so three seeds are listened to.
     const standOut: number[] = [];
-    for (const h of firsts) {
-      const over = rmsAt(bright, sr, h.at, h.at + 0.3) / rmsAt(bright, sr, h.at - 0.35, h.at - 0.05);
-      standOut.push(over);
-      expect(over, `chime at ${h.at.toFixed(2)} s`).toBeGreaterThan(1.4);
+    for (const seed of [7, 8, 9]) {
+      const run = seed === 7 ? full : await lab(page, { kind: 'ambience', seconds, seed, at: 'bench' });
+      const hp = new Biquad(sr).highpass(1000);
+      const bright = run.mono.map((v) => hp.process(v));
+      const runHits = run.hits ?? [];
+      const chimeHits = runHits.filter((q) => q.id === 'chimes:town');
+      const doorHits = runHits.filter((q) => q.id === 'chimes:door');
+      const dropHits = runHits.filter((q) => q.kind === 'drops');
+      const firsts = chimeHits.filter(
+        (h, i) =>
+          (i === 0 || h.at - (chimeHits[i - 1]?.at ?? 0) > 3) &&
+          !dropHits.some((d) => d.at > h.at - 0.6 && d.at < h.at + 0.3) &&
+          !doorHits.some((d) => d.at > h.at - 3 && d.at < h.at + 0.3),
+      );
+      for (const h of firsts) {
+        const over = rmsAt(bright, sr, h.at, h.at + 0.3) / rmsAt(bright, sr, h.at - 0.35, h.at - 0.05);
+        standOut.push(over);
+        expect(over, `seed ${seed}: chime at ${h.at.toFixed(2)} s`).toBeGreaterThan(1.4);
+      }
     }
+    expect(standOut.length, 'far strikes with the bed to themselves, over seeds 7–9').toBeGreaterThan(0);
     const ratio = rmsAt(half.mono, sr, 3, seconds) / rmsAt(full.mono, sr, 3, seconds);
     // the volume slider's square law (src/core/audio/mix.ts): half the slider against the game's starting position
     const expected = volumeToGain(0.5) / volumeToGain(VIDRO_VOLUMES.ambience);
@@ -555,7 +564,13 @@ for (const backend of backends) {
     await waitRoom(page, 'r.peekAmount === 0');
     // keep listening until each ambience kind has been heard (the first chime may take a few seconds)
     const end = Date.now() + 25_000;
-    while (Date.now() < end && (track.heard.chimes === 0 || track.heard.drops === 0)) {
+    // the far set (chimes:town) must have rung itself: the bell above the door (S-25) also feeds the chimes' ear
+    const townPlays = async () =>
+      (await both(page)).sound.ambience.sources.find((q) => q.id === 'chimes:town')?.plays ?? 0;
+    while (
+      Date.now() < end &&
+      (track.heard.chimes === 0 || track.heard.drops === 0 || (await townPlays()) === 0)
+    ) {
       await sample(page, track);
       await page.waitForTimeout(40);
     }
@@ -595,6 +610,10 @@ for (const backend of backends) {
     const plays = (kind: string) =>
       s.ambience.sources.filter((q) => q.kind === kind).reduce((n, q) => n + q.plays, 0);
     expect(plays('chimes')).toBeGreaterThan(0);
+    expect(
+      s.ambience.sources.find((q) => q.id === 'chimes:town')?.plays ?? 0,
+      'the far set rang',
+    ).toBeGreaterThan(0);
     expect(plays('drops')).toBeGreaterThan(0);
     // one engine, every voice accounted for: the cue (拾う) and the steps
     expect(s.engineVoices).toBe(s.voicesStarted + s.footsteps.voicesStarted);

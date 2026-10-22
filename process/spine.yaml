@@ -585,7 +585,9 @@ slices:
 
   - id: S-25
     title: 工房の音 — 炉の燃える音、水桶の雫、扉の上の風鈴（S-22 の環境音を S-24 の配置に合わせる）
-    status: todo
+    status: integrated
+    branch: slice/S-25-workshop-sounds
+    accepted: レビュー2巡で P1 なし（2巡目の後の再レビューなし）。統合時に親が S-22 の e2e を遠くの風鈴（chimes:town）だけで確かめる形に直した（2026-10-22）
     depends: [S-24]
     requirements:
       - サウンドデザイン > 環境音、音階の統一

@@ -75,7 +75,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/layers/` | 表と裏の層、実体化 | S-02 |
 | `src/game/` | 手の玉、プレイヤー、入力、ギミック、進行、セーブ | S-02, S-03 |
 | `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主） | S-04, S-18 |
-| `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値。生成音楽は M1以降 | S-09, S-21, S-22 |
+| `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値、炉の音・扉の風鈴と吹き込み。生成音楽は M1以降 | S-09, S-21, S-22, S-25 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）。案2と共有 | 変更は CHANGELOG に記録 |
 | `src/game/assets/` | 命名規則と extras から層・当たり判定・台座を組み立てる、印のついたガラス | S-23 |
@@ -169,6 +169,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   拾う前の確かめにはセッションの `surface` に同じ区画を渡す（壁の中では拾えず、玉が震える）。固定のまま置くと球の中で見えない壁になる。
   拾った瞬間に当たり判定は戻り、絵は 0.8 秒かけて戻る（その間だけ見た目より固い）のは意図したもの。アセットの `_front` の `_col` を表だけの
   壁にするときは、`src/game/assets/physics.ts` から `SurfaceColliders` へ入れる配線が要る（まだない）。
+- **環境音の場所を足すときは、その場所に自分の乱数の流れを持たせる（S-25）。** `AmbiencePlayer` の場所は既定で1本の乱数の流れを並びの順に共有する
+  ので、場所を1つ足すとほかの音の打つ時刻が全部入れ替わり、種を決めたオフラインの描画（耳の確認の WAV、e2e）が別の物になる。足す場所には
+  `ownStream`（試作部屋の `PROLOGUE_AMBIENCE`）か `AmbiencePlace.rng` を与える。音の e2e は、同じ種類の別の場所（遠くの風鈴と扉の風鈴など）を
+  `id` で分けて確かめる。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
