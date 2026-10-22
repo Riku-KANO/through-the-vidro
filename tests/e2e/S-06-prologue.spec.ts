@@ -47,7 +47,15 @@ interface RoomProbe {
   drawCalls: number;
   triangles: number;
   fallRescues: number;
-  autoplay: { step: string; done: boolean } | null;
+  /** S-34: also the longest frame of the play, the step it fell in, and the longest frame of each step. */
+  autoplay: {
+    step: string;
+    done: boolean;
+    worstMs?: number;
+    worstStep?: string;
+    worstAt?: number;
+    steps?: Record<string, number>;
+  } | null;
   /** S-34: the close (the bridge settled by the drop's light, the gate open). */
   finale: { settle: number; gate: number; settledSegments: number; gateOpen: boolean };
   layout: {
@@ -556,7 +564,12 @@ for (const backend of backends) {
         ).phases,
     );
     mkdirSync(join(root, 'artifacts/S-06'), { recursive: true });
-    writeFileSync(join(root, `artifacts/S-06/phases-${backend}.json`), JSON.stringify(phases, null, 2));
+    // S-34 review: where in the script the longest frames of the play fall (the room times its own frames by step)
+    const steps = done.autoplay;
+    writeFileSync(
+      join(root, `artifacts/S-06/phases-${backend}.json`),
+      JSON.stringify({ ...phases, gameSteps: steps }, null, 2),
+    );
     for (const [phase, st] of Object.entries(phases)) {
       expect(st.maxDrawCalls, `draw calls in ${phase}`).toBeLessThanOrEqual(BUDGET.drawCalls);
       expect(st.maxTriangles, `triangles in ${phase}`).toBeLessThanOrEqual(BUDGET.triangles);

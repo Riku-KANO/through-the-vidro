@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FLOOR_MATERIALS } from '../../audio/footsteps';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
-import { settledAt, sweepFront } from '../../layers/settle';
+import { segmentsCutByBox, settledAt, sweepFront } from '../../layers/settle';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { PEEK_FOV_DELTA_DEG } from '../orb/peek';
 import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/constants';
@@ -33,6 +33,7 @@ import {
   GRATE,
   GRATE_CENTER,
   LIGHTHOUSE,
+  LIP_HINTS,
   LOOKOUT,
   lookDirection,
   MARVER,
@@ -335,6 +336,11 @@ describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋
     expect(settledAll([0.62, 1.3, (BRIDGE.min[2] + BRIDGE.max[2]) / 2])).toBe(true);
     expect(settledAll(TRIAL_SURFACE_WALL.min)).toBe(true);
     expect(settledAll(TRIAL_SURFACE_WALL.max)).toBe(true);
+    // the broken edge's shards and stones on the lip, with a margin on the dead end's side (S-34 review round 2: a shard
+    // cut by the box's face would be left standing half there)
+    expect(settledAll(LIP_HINTS.min)).toBe(true);
+    expect(settledAll(LIP_HINTS.max)).toBe(true);
+    expect(BRIDGE_SETTLE.box.max[2] - LIP_HINTS.max[2]).toBeGreaterThanOrEqual(0.1);
     // the light motes (a hint of the bridge) all along their drift, up to where they fade over the far shore: none is
     // left coming out of thin air once the bridge is there (S-34 review)
     for (const z of [EDGE_Z + 0.2, (EDGE_Z + MOTES_END_Z) / 2, MOTES_END_Z])
@@ -349,6 +355,10 @@ describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋
     expect(settledAll([0, 1, GATE.z])).toBe(false);
     // the drop hovers in the box, but the light only runs once it has been taken
     expect(DROP[2]).toBeGreaterThan(MOTES_END_Z);
+  });
+
+  it('no footing segment of the bridge is cut by the box: what is drawn settled is what collides settled', () => {
+    expect(segmentsCutByBox(bridgeFooting(), BRIDGE_SETTLE.box)).toEqual([]);
   });
 
   it('past the gate a short road (a few metres) ends at the lookout’s railing, the town beyond it (行き止まりの理由: 柵と街の眺め)', () => {

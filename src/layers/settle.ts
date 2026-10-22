@@ -86,17 +86,55 @@ export function settledSegmentIds(
   sweep: SettleSweep,
   front: number,
 ): string[] {
+  return segments.filter((seg) => segmentSettled(seg, sweep, front)).map((seg) => seg.id);
+}
+
+/**
+ * How many segments the light has fixed (no allocation). The front only moves on, so a count that has not changed means
+ * the same segments: callers make the list again only when it grows.
+ */
+export function countSettled(segments: readonly FootingSegment[], sweep: SettleSweep, front: number): number {
+  let n = 0;
+  for (const seg of segments) if (segmentSettled(seg, sweep, front)) n++;
+  return n;
+}
+
+function segmentSettled(seg: FootingSegment, sweep: SettleSweep, front: number): boolean {
   const { min, max } = sweep.box;
+  return (
+    seg.min[0] >= min[0] &&
+    seg.max[0] <= max[0] &&
+    seg.min[1] >= min[1] &&
+    seg.max[1] <= max[1] &&
+    seg.min[2] >= min[2] &&
+    seg.max[2] <= max[2] &&
+    boxExtent(seg, sweep.direction, true) <= front + 1e-9
+  );
+}
+
+/**
+ * Segments the box cuts through (part in, part out). Their drawing is settled where it lies in the box but their
+ * collider never is (only a segment wholly in the box settles), which would not be honest (空間の可読性と導線 4). A room
+ * puts its box round whole segments; its tests check this is empty (S-34 review: before S-36 uses settling again).
+ */
+export function segmentsCutByBox(segments: readonly FootingSegment[], box: Box): string[] {
   return segments
-    .filter(
-      (seg) =>
-        seg.min[0] >= min[0] &&
-        seg.max[0] <= max[0] &&
-        seg.min[1] >= min[1] &&
-        seg.max[1] <= max[1] &&
-        seg.min[2] >= min[2] &&
-        seg.max[2] <= max[2] &&
-        boxExtent(seg, sweep.direction, true) <= front + 1e-9,
-    )
+    .filter((seg) => {
+      const overlaps =
+        seg.max[0] > box.min[0] &&
+        seg.min[0] < box.max[0] &&
+        seg.max[1] > box.min[1] &&
+        seg.min[1] < box.max[1] &&
+        seg.max[2] > box.min[2] &&
+        seg.min[2] < box.max[2];
+      const inside =
+        seg.min[0] >= box.min[0] &&
+        seg.max[0] <= box.max[0] &&
+        seg.min[1] >= box.min[1] &&
+        seg.max[1] <= box.max[1] &&
+        seg.min[2] >= box.min[2] &&
+        seg.max[2] <= box.max[2];
+      return overlaps && !inside;
+    })
     .map((seg) => seg.id);
 }

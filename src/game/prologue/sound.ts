@@ -771,8 +771,12 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     settleAt.z = z === null || z === undefined ? SETTLE_SOUND_FROM_Z : z;
     finale.settle.setPosition(settleAt);
   };
+  /** The light is on its way over the bridge (from 'settle' to 'settled'): only then does its sound move. */
+  let lightRunning = false;
   /** The light starting across / the gate starting to open: its sound, once, now (or refused, never later). */
   const playFinale = (event: FinaleEvent): void => {
+    if (event.type === 'settle') lightRunning = true;
+    if (event.type === 'settled') lightRunning = false;
     if (disposed || (event.type !== 'settle' && event.type !== 'gateOpen')) return;
     const kind = event.type;
     const buffer = kind === 'settle' ? finale?.banks.settle : finale?.banks.gate;
@@ -899,8 +903,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       if (!ambience.playing && roomProbe.playing && e.ctx.state === 'running') ambience.start(e.now());
       ambience.update(e.ctx.currentTime);
     }
-    // S-34: the settling light's sound follows its front across the bridge
-    followFront();
+    // S-34: the settling light's sound follows its front across the bridge (and stays where the light stopped)
+    if (lightRunning) followFront();
   };
 
   const stopListening = (): void => {

@@ -29,6 +29,7 @@ import {
   GATE,
   GATE_OPEN_DEG,
   GRATE,
+  gateLeafDirection,
   LOOKOUT,
   MOUTH_PIPE_REACH,
   PEDESTAL_ID,
@@ -51,7 +52,7 @@ import {
   insideAnySphere,
   SurfaceColliders,
 } from './physics';
-import { GATE_OPEN_SECONDS, PrologueSession, SETTLE_SECONDS } from './session';
+import { FINALE_SECONDS, PrologueSession } from './session';
 
 /**
  * The prologue room in a real Rapier world (Node): the same colliders the scene builds (the room's own, and the
@@ -646,10 +647,12 @@ describe('S-34: the close — the settled bridge and the open gate (光が世界
       });
       return n > 0;
     };
-    for (const side of [1, -1]) {
-      // a point in the middle of the swung leaf is solid, where the leaf stood shut is not any more
+    for (const side of [1, -1] as const) {
+      // a point in the middle of the swung leaf (from its hinge along layout's gateLeafDirection, as finale.ts draws it)
+      // is solid; where the leaf stood shut is not any more
       const u = GATE.halfWidth / 2;
-      expect(solid(side * (GATE.halfWidth - u * Math.cos(a)), 1, GATE.z - u * Math.sin(a))).toBe(true);
+      const [dx, dz] = gateLeafDirection(side, a);
+      expect(solid(side * GATE.halfWidth + dx * u, 1, GATE.z + dz * u)).toBe(true);
       expect(solid(side * u, 1, GATE.z)).toBe(false);
     }
     const mid = body(r, { feet: [0, 0, GATE.z + 1.0], yaw: 0 });
@@ -689,7 +692,7 @@ describe('S-34: the close — the settled bridge and the open gate (光が世界
     expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, SPAWNS['dead-end'].feet)).toBe('place');
     for (let i = 0; i < 60; i++) tick();
     expect(session.interact({ kind: 'drop' }, [DROP[0], 0, FAR.maxZ + 0.3])).toBe('touch-drop');
-    for (let t = 0; t < 1.3 + Math.max(SETTLE_SECONDS, GATE_OPEN_SECONDS) + 0.2; t += DT) tick();
+    for (let t = 0; t < 1.3 + FINALE_SECONDS + 0.2; t += DT) tick();
     expect(session.dropState).toBe('taken');
     expect(r.footing.settledCount).toBe(r.footing.segments.length);
     // on the bridge, facing the pedestal: the vidro comes (the exception to 裏の足場の上では拾えない)

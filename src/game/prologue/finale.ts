@@ -8,9 +8,10 @@ import { glassEase } from '../../layers/tween';
 import { GATE, GATE_OPEN_DEG, GATE_SPRINGS, LAMP_HEIGHT, LAMP_POST_RADIUS, LOOKOUT, ROAD } from './layout';
 
 /**
- * 序章の締め (S-34; 発案者 2026-10-22): the light drop taken, its light runs back out of the vidro across the bridge and fixes
- * it onto the surface (定着: the drawing is LayerField's settled region, the rule session.ts), and at the same time the gate
- * at the back of the far shore opens. Past it, a short road to a lookout over the mist and the town (門の先の道).
+ * 序章の締め (S-34; 発案者 2026-10-22, 2026-10-23): the light drop taken, its light runs back out of the vidro across the
+ * bridge and fixes it onto the surface (定着: the drawing is LayerField's settled region, the rule session.ts); when the light
+ * has reached the far shore, the gate at its back opens (the reason it opens is seen: パズル設計 > 原則4). Past it, the first
+ * 4 m of the slope down to the plaza (S-35), with a provisional railing over the mist and the town (門の先の道).
  *
  * This file is how that looks and moves: the gate (its posts and arch as S-06 drew them, and two brass leaves that swing
  * open about the posts), its keystone lamp, the lookout's railing and lamps, and the curves the room plays them on.

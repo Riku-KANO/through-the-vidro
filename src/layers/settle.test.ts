@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { splitFooting } from './footing';
-import { type SettleSweep, settledAt, settledSegmentIds, sweepFront, sweepSpan } from './settle';
+import {
+  countSettled,
+  type SettleSweep,
+  segmentsCutByBox,
+  settledAt,
+  settledSegmentIds,
+  sweepFront,
+  sweepSpan,
+} from './settle';
 import { splitSurface } from './surface';
 
 /** Light running through a 2 × 2.5 × 4 m box toward -Z (like the prologue's across its bridge). */
@@ -58,5 +66,24 @@ describe('定着: light fixes part of the back layer onto the surface (S-34)', (
     expect(atHalf.length).toBeLessThan(wall.length);
     for (const id of atHalf) expect((wall.find((s) => s.id === id)?.max[0] ?? 9) <= 1 + 1e-9).toBe(true);
     expect(settledSegmentIds(wall, across, sweepFront(across, 1))).toHaveLength(wall.length);
+  });
+
+  it('counts what it has fixed without listing it (the list is made again only when the count grows)', () => {
+    const segs = splitFooting('b', { min: [-0.5, -0.1, -4], max: [0.5, 0, 0] }, 0.4);
+    for (const u of [0, 0.25, 0.5, 0.8, 1])
+      expect(countSettled(segs, sweep, sweepFront(sweep, u))).toBe(
+        settledSegmentIds(segs, sweep, sweepFront(sweep, u)).length,
+      );
+  });
+
+  it('tells which segments the box cuts through (drawn settled in part, never collided settled: not honest)', () => {
+    const inside = splitFooting('in', { min: [-0.5, -0.1, -3.8], max: [0.5, 0, -0.2] }, 0.4);
+    expect(segmentsCutByBox(inside, sweep.box)).toEqual([]);
+    // 0.625 m segments over z -5 … 0: the one from -4.375 to -3.75 straddles the box's face at z = -4; the one wholly
+    // out of the box is not cut, only left out
+    const poking = splitFooting('long', { min: [-0.5, -0.1, -5], max: [0.5, 0, 0] }, 0.6);
+    const cut = segmentsCutByBox(poking, sweep.box);
+    expect(cut).toHaveLength(1);
+    expect(cut).toEqual(poking.filter((p) => p.min[2] < -4 && p.max[2] > -4).map((p) => p.id));
   });
 });

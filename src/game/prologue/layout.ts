@@ -287,8 +287,9 @@ export const DROP: Vec3 = [-0.2, 1.2, -17.0];
 /**
  * A closed gate at the back of the far shore: the way on, with the town seen through its bars
  * (ルール6: 次に行く場所が先に見えている, ルール9: 理由のない行き止まりは作らない).
- * S-34: it opens when the light drop is taken — two brass leaves hinged at its posts, swinging away from the far shore
- * (finale.ts draws them, physics.ts GateLeaves collides as them).
+ * S-34: it opens once the light of the taken drop has run across the bridge to the far shore (発案者 2026-10-23,
+ * session.ts GATE_OPENS_AT_SECONDS) — two brass leaves hinged at its posts, swinging away from the far shore (finale.ts
+ * draws them, physics.ts GateLeaves collides as them).
  */
 export const GATE = { z: -20.6, halfWidth: FAR.maxX, height: 2.7, depth: 0.2 };
 /** Height where the gate's arch springs from its posts (the arch rises 0.6 of its half width above it). */
@@ -308,13 +309,13 @@ export function gateLeafDirection(side: 1 | -1, angle: number): [number, number]
 }
 
 /**
- * 門の先の道 (S-34, 仮): the far shore's stone goes on past the gate for a few metres and ends at a lookout over the mist,
- * the town and its lighthouse ahead (ルール6). It is where 序章 will join エリア1 (泡の工房街): M1 puts the move to the next
- * area here (トランジション設計 > エリア間の移動); until then the lookout's railing is the reason the way ends
- * (ルール9: 行き止まりには理由を置く — 柵と街の眺め, process/slices/S-34.md 判断待ち).
+ * 門の先の道 (S-34, 仮): past the gate the way goes on as a slope of about 80 m down to the central plaza (進行構造とエリア
+ * 設計 > 街の配置と序章の締め, 2026-10-23; S-35 builds it). S-34 lays only its first 4 m — the far shore's stone going on — and
+ * a provisional railing at their end, the mist and the town with its lighthouse beyond (ルール6; ルール9: 行き止まりには理由
+ * を置く). S-35 takes the railing away and carries the way on (process/slices/S-34.md, S-35 への引き継ぎ).
  */
 export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.minZ };
-/** 仮 (S-34): the lookout's brass railing across the road's end (its rail's height), and the lamps at its two ends. */
+/** 仮 (S-34, until S-35): the brass railing across the road's end (its rail's height), and the lamps at its two ends. */
 export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROAD.maxX - 0.14 };
 
 /**
@@ -324,15 +325,24 @@ export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROA
 export const MOTES_END_Z = EDGE_Z + 0.2 - (EDGE_Z - FAR.maxZ + 1.2);
 
 /**
+ * Where room-art.ts scatters the broken edge's surface-only shards and stones (表にだけあるもの: 割れた破片) on the dead end's
+ * lip, with their own size (the shards stand up to ~0.11 m off their line, the stones are up to 0.12 m across). The shards
+ * and stones are made there from the same numbers; keep the two together (process/slices/S-34.md 残件).
+ */
+export const LIP_HINTS: Box = { min: [-1.4, -0.1, EDGE_Z - 0.22], max: [1.4, 0.5, EDGE_Z + 0.2] };
+
+/**
  * 定着 (S-34): what the light of the taken drop fixes onto the surface, and the way it runs — from the vidro on the
  * dead-end pedestal across the gap and on a little over the far shore. The box holds the whole bridge (the deck drawn
- * 0.15 m onto each shore, its rails, glass and lanterns) and everything that hints at it (the shards and stones on the lip,
- * the faint lines and the motes all along their drift, so none of them is left coming out of thin air; S-24's trial wall).
- * It leaves out the pedestal and the rest of the far shore with the gate. The drop hovers inside it, but it is taken by the
- * time the light runs.
+ * 0.15 m onto each shore, its rails, glass and lanterns) and everything that hints at it (the shards and stones on the lip
+ * with a margin, LIP_HINTS; the faint lines and the motes all along their drift, so none of them is left coming out of thin
+ * air; S-24's trial wall). Its far end is 1 m out over the far shore: anything surface-only put on that first metre of the
+ * far shore would be fixed away with the bridge. It leaves out the pedestal (shared: never cut anyway) and the rest of the
+ * far shore with the gate. The drop hovers inside it, but it is taken by the time the light runs. Every footing segment
+ * lies wholly inside or outside it (settle.ts segmentsCutByBox; layout.test).
  */
 export const BRIDGE_SETTLE: SettleSweep = {
-  box: { min: [FAR.minX, -0.6, MOTES_END_Z - 0.05], max: [FAR.maxX, 2.0, BRIDGE.max[2] + 0.2] },
+  box: { min: [FAR.minX, -0.6, MOTES_END_Z - 0.05], max: [FAR.maxX, 2.0, LIP_HINTS.max[2] + 0.15] },
   direction: [0, 0, -1],
 };
 

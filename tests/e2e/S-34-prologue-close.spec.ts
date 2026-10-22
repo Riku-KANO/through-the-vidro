@@ -6,10 +6,11 @@ import { expect, type Page, test } from '@playwright/test';
  * S-34: the close of the prologue (発案者 2026-10-22: 雫の光で裏の橋が表に定着し、向こう岸の門が開く), on both render paths.
  *  1. held frames (?finaleHold=<seconds since the drop was taken>): the light half way across the bridge, the gate shut,
  *     half open and open, the road past it — state, budget and pictures
- *  2. real input from the dead end: place → cross → touch the drop → the light settles the bridge (timed: 1–2 s) and the
- *     gate opens → back over the bridge → pick the vidro up ON the bridge (the exception to 裏の足場の上では拾えない) →
- *     the bridge stays, colliders and all → across again, through the gate, along the road to the lookout's railing.
- *     The close's two sounds are played (sound.finale), apart from the S-16 table of cues.
+ *  2. with the vidro taken back after the close, the settled bridge is still drawn (見えることのセンサー)
+ *  3. real input from the dead end: place → cross → touch the drop → the light settles the bridge (timed: 1–2 s), and when
+ *     it has reached the far shore the gate opens (発案者 2026-10-23; timed) → back over the bridge → pick the vidro up ON
+ *     the bridge (the exception to 裏の足場の上では拾えない) → the bridge stays, colliders and all → across again, through
+ *     the gate, along the road to the railing. The close's two sounds are played (sound.finale), apart from the S-16 cues.
  * Screens → artifacts/screens/S-34/<backend>/, the run → artifacts/S-34/run-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
@@ -326,6 +327,9 @@ for (const backend of backends) {
           expect(r.finale.frontZ).not.toBeNull();
           expect(r.finale.frontZ ?? 0).toBeLessThan(r.layout.edgeZ);
           expect(r.finale.frontZ ?? 0).toBeGreaterThan(r.layout.farZ);
+          // the gate waits for the light to reach the far shore (発案者 2026-10-23)
+          expect(r.finale.gate).toBe(0);
+          expect(r.finale.gateDeg).toBe(0);
         },
       ],
       [
@@ -348,7 +352,8 @@ for (const backend of backends) {
       ],
       [
         'gate-mid',
-        'spawn=gate&finaleHold=1.3',
+        // the light reached the far shore 1.6 s after the drop was taken; the gate 1.3 s into its opening
+        'spawn=gate&finaleHold=2.9',
         (r) => {
           expect(r.finale.gate).toBeGreaterThan(0.4);
           expect(r.finale.gate).toBeLessThan(0.6);
@@ -358,7 +363,7 @@ for (const backend of backends) {
       ],
       [
         'gate-open',
-        'spawn=gate&finaleHold=3',
+        'spawn=gate&finaleHold=4.5',
         (r) => {
           expect(r.finale.gate).toBe(1);
           expect(r.finale.gateOpen).toBe(true);
@@ -368,7 +373,7 @@ for (const backend of backends) {
       [
         // past the gate: the short road, the lookout's railing and lamps, the mist and the town beyond (門の先の道)
         'road',
-        'spawn=road&finaleHold=3',
+        'spawn=road&finaleHold=4.5',
         (r) => {
           expect(r.position.z).toBeLessThan(r.layout.gateZ);
           expect(r.position.z).toBeGreaterThan(r.layout.lookoutZ);
@@ -484,18 +489,24 @@ for (const backend of backends) {
     const taken = await waitRoom(page, 'r.dropTaken === true', 5_000);
     const t0 = taken.time;
 
-    // 定着: the light crosses the bridge in 1–2 s, segment by segment; the gate opens at the same time
+    // 定着: the light crosses the bridge in 1–2 s, segment by segment; the gate stays shut while it does
     const mid = await waitRoom(page, 'r.finale.settle > 0.3', 3_000);
     expect(mid.finale.settledSegments).toBeLessThan(mid.bridgeSegments);
-    expect(mid.finale.gate).toBeGreaterThan(0);
+    expect(mid.finale.gate).toBe(0);
     await snap('settle-live');
     const settled = await waitRoom(page, 'r.finale.settle === 1', 5_000);
     const settleSeconds = settled.time - t0;
     expect(settleSeconds).toBeGreaterThanOrEqual(1.0);
     expect(settleSeconds).toBeLessThanOrEqual(2.1);
     expect(settled.finale.settledSegments).toBe(settled.bridgeSegments);
+    // 発案者 2026-10-23: the gate starts to open when the light has reached the far shore (原則4: the reason is seen)
+    const starting = await waitRoom(page, 'r.finale.gate > 0', 3_000);
+    const gateStartsAt = starting.time - t0;
+    expect(gateStartsAt).toBeGreaterThanOrEqual(settleSeconds - 0.1);
+    expect(gateStartsAt).toBeLessThanOrEqual(settleSeconds + 0.3);
     const opened = await waitRoom(page, 'r.finale.gate === 1 && r.finale.gateOpen', 6_000);
-    expect(opened.finale.events).toEqual(expect.arrayContaining(FINALE_EVENTS));
+    // in this order: the light starts, is across, the gate starts to open, is open
+    expect(opened.finale.events).toEqual(FINALE_EVENTS);
     for (const e of FINALE_EVENTS) expect(opened.events, `${e} on the room's log`).not.toContain(e);
     await lookAt(page, [0, 1.2, gateZ]);
     await page.waitForTimeout(200);
@@ -554,7 +565,7 @@ for (const backend of backends) {
     const final = await room(page);
     writeFileSync(
       join(root, `artifacts/S-34/run-${backend}.json`),
-      JSON.stringify({ backend, settleSeconds, shots, final, sound: s, errors }, null, 2),
+      JSON.stringify({ backend, settleSeconds, gateStartsAt, shots, final, sound: s, errors }, null, 2),
     );
     expect(s.state).toBe('running');
     expect(s.finale.ready).toBe(true);

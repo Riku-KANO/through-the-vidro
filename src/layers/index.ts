@@ -44,7 +44,9 @@ export {
 } from './materialize';
 export {
   along,
+  countSettled,
   type SettleSweep,
+  segmentsCutByBox,
   settledAt,
   settledSegmentIds,
   sweepFront,

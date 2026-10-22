@@ -13,7 +13,6 @@ import {
   FAR,
   GATE,
   GATE_SPRINGS,
-  gateLeafDirection,
   LAMP_HEIGHT,
   LAMP_POST_RADIUS,
   LAMPS,
@@ -338,10 +337,13 @@ export class SurfaceColliders {
 }
 
 /**
- * S-34: the gate's two leaves as they swing (同時に向こう岸の門が開く). Each is a thin box hinged at its post (layout.ts GATE),
+ * S-34: the gate's two leaves as they swing (光が向こう岸に届くと門が開く). Each is a thin box hinged at its post (layout.ts GATE),
  * turned with the drawn leaf (finale.ts, the same angle), so what stops you is what you see (空間の可読性と導線 4). Shut
  * (angle 0) they close the arch between the posts; open they stand along the road's edges, swung away from the far shore.
- * Nobody can be in a leaf's way as it swings: it swings away from the far shore, and the road is reached only through it.
+ * The leaves swing away from the far shore, where you stand, and push nobody (they are not bodies). Getting into a leaf's
+ * way as it swings is possible in principle — through the gap in the middle before it is wide open, then sideways — but
+ * hardly happens: the gate starts to open as the light reaches the far shore, and by the time anyone has walked to it,
+ * it is nearly open (the S-34 review round 2).
  */
 export class GateLeaves {
   private readonly leaves: [RAPIER.Collider, RAPIER.Collider];
@@ -363,19 +365,32 @@ export class GateLeaves {
   }
 
   /** Puts both leaves `angle` radians from shut. Returns whether they moved. */
+  /** Reused for every move (the leaves swing every frame for 2.6 s: nothing is allocated). */
+  private readonly at = { x: 0, y: LEAF_HALF_HEIGHT, z: 0 };
+  private readonly turn = { x: 0, y: 0, z: 0, w: 1 };
+
   sync(angle: number): boolean {
     if (angle === this.angleValue) return false;
     this.angleValue = angle;
     const hw = GATE.halfWidth;
-    this.leaves.forEach((c, i) => {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    for (let i = 0; i < this.leaves.length; i++) {
+      const c = this.leaves[i] as RAPIER.Collider;
       const side = i === 0 ? 1 : -1;
-      // from its hinge each leaf runs toward the middle, swung by `angle` away from the far shore (toward -Z)
-      const [dx, dz] = gateLeafDirection(side, angle);
-      c.setTranslation({ x: side * hw + (dx * hw) / 2, y: LEAF_HALF_HEIGHT, z: GATE.z + (dz * hw) / 2 });
+      // from its hinge each leaf runs toward the middle, swung by `angle` away from the far shore (toward -Z): the unit
+      // (dx, dz) of layout.ts gateLeafDirection
+      const dx = -side * cos;
+      const dz = -sin;
+      this.at.x = side * hw + (dx * hw) / 2;
+      this.at.z = GATE.z + (dz * hw) / 2;
+      c.setTranslation(this.at);
       // the turn about +Y that takes the box's +X onto (dx, 0, dz)
       const yaw = Math.atan2(-dz, dx);
-      c.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) });
-    });
+      this.turn.y = Math.sin(yaw / 2);
+      this.turn.w = Math.cos(yaw / 2);
+      c.setRotation(this.turn);
+    }
     return true;
   }
 

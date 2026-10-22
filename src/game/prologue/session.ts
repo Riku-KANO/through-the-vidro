@@ -1,5 +1,5 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
-import { type SettleSweep, settledSegmentIds, sweepFront } from '../../layers/settle';
+import { countSettled, type SettleSweep, settledSegmentIds, sweepFront } from '../../layers/settle';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
 import {
@@ -34,8 +34,15 @@ export const DROP_FLIGHT_SECONDS = 1.2;
  * moment the drop is taken. Its front moves on the game's one curve (glassEase, 遷移のルール5).
  */
 export const SETTLE_SECONDS = 1.6;
-/** 仮 (S-34): how long the gate takes to swing open; it starts with the light (同時に向こう岸の門が開く). */
+/**
+ * 発案者 2026-10-23: the gate starts to open when the light that runs across the bridge has reached the far shore, not the
+ * moment the drop is taken (パズル設計 > 原則4: 解けた瞬間に、なぜそうなったかが光と音で見える). Seconds after the drop is taken.
+ */
+export const GATE_OPENS_AT_SECONDS = SETTLE_SECONDS;
+/** 仮 (S-34): how long the gate takes to swing open, from GATE_OPENS_AT_SECONDS. */
 export const GATE_OPEN_SECONDS = 2.6;
+/** Seconds from the drop taken to the gate wide open: the whole close. */
+export const FINALE_SECONDS = GATE_OPENS_AT_SECONDS + GATE_OPEN_SECONDS;
 
 /**
  * The close of the prologue (S-34), on its own bus: the light starts across the bridge / is across, the gate starts to
@@ -102,6 +109,11 @@ export function peekModifier(amount: number): MovementModifier {
 }
 
 const MAIN = 'main';
+
+/** Does the time from `was` to `now` reach `at` (within float noise of many small steps)? */
+function crosses(was: number, now: number, at: number): boolean {
+  return was < at - 1e-9 && now >= at - 1e-9;
+}
 const NONE: readonly string[] = [];
 const NONE_SEGMENTS: readonly FootingSegment[] = [];
 
@@ -193,9 +205,12 @@ export class PrologueSession {
     return this.finaleAt === null ? 0 : progressOf(this.finaleAt, SETTLE_SECONDS);
   }
 
-  /** S-34: 0..1, linear in time since the drop was taken: the gate's opening (GATE_OPEN_SECONDS). */
+  /**
+   * S-34: 0..1, linear in time: the gate's opening (GATE_OPEN_SECONDS), from when the light has reached the far shore
+   * (GATE_OPENS_AT_SECONDS after the drop was taken).
+   */
   get gateProgress(): number {
-    return this.finaleAt === null ? 0 : progressOf(this.finaleAt, GATE_OPEN_SECONDS);
+    return this.finaleAt === null ? 0 : progressOf(this.finaleAt - GATE_OPENS_AT_SECONDS, GATE_OPEN_SECONDS);
   }
 
   /** S-34: seconds since the drop was taken, or null before. */
@@ -219,17 +234,29 @@ export class PrologueSession {
     return this.settled()?.surface ?? NONE;
   }
 
+  /**
+   * What the light has fixed. The light only moves on, so the same number of settled segments is the same set: the lists
+   * are made again only when it grows (a few times while the light crosses, not every frame).
+   */
   private settled(): { footing: string[]; surface: string[] } | null {
     const sweep = this.options.settle;
     const front = this.settleFront;
     if (!sweep || front === null) return null;
-    if (this.settledCache?.front !== front) {
-      this.settledCache = {
-        front,
-        footing: settledSegmentIds(this.options.footing, sweep, front),
-        surface: settledSegmentIds(this.options.surface ?? NONE_SEGMENTS, sweep, front),
-      };
+    const cache = this.settledCache;
+    if (cache?.front === front) return cache;
+    const footing = this.options.footing;
+    const surface = this.options.surface ?? NONE_SEGMENTS;
+    const nFooting = countSettled(footing, sweep, front);
+    const nSurface = countSettled(surface, sweep, front);
+    if (cache && cache.footing.length === nFooting && cache.surface.length === nSurface) {
+      cache.front = front;
+      return cache;
     }
+    this.settledCache = {
+      front,
+      footing: settledSegmentIds(footing, sweep, front),
+      surface: settledSegmentIds(surface, sweep, front),
+    };
     return this.settledCache;
   }
 
@@ -267,10 +294,9 @@ export class PrologueSession {
       if (this.dropElapsed >= DROP_FLIGHT_SECONDS - 1e-9) {
         this.dropValue = 'taken';
         this.events.emit({ type: 'dropTaken' });
-        // S-34: 雫の光で橋が表に定着し、同時に門が開く
+        // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale)
         this.finaleAt = 0;
         this.finaleEvents.emit({ type: 'settle' });
-        this.finaleEvents.emit({ type: 'gateOpen' });
       }
     }
   }
@@ -280,10 +306,11 @@ export class PrologueSession {
     const was = this.finaleAt ?? 0;
     const now = was + dt;
     this.finaleAt = now;
-    // once each, when the time crosses its end (within float noise, like stepTween)
-    const crossed = (end: number): boolean => was < end - 1e-9 && now >= end - 1e-9;
-    if (crossed(SETTLE_SECONDS)) this.finaleEvents.emit({ type: 'settled' });
-    if (crossed(GATE_OPEN_SECONDS)) this.finaleEvents.emit({ type: 'gateOpened' });
+    // once each, when the time crosses its moment (within float noise, like stepTween): the light across, and with it
+    // the gate starting to open; the gate open
+    if (crosses(was, now, SETTLE_SECONDS)) this.finaleEvents.emit({ type: 'settled' });
+    if (crosses(was, now, GATE_OPENS_AT_SECONDS)) this.finaleEvents.emit({ type: 'gateOpen' });
+    if (crosses(was, now, FINALE_SECONDS)) this.finaleEvents.emit({ type: 'gateOpened' });
   }
 
   /** A peek was asked for while it is not possible. A placed orb trembles (置いている間は覗けない). */

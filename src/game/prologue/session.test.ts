@@ -8,8 +8,10 @@ import { combineModifiers } from '../player/motion';
 import type { PrologueEvent } from './events';
 import {
   DROP_FLIGHT_SECONDS,
+  FINALE_SECONDS,
   type FinaleEvent,
   GATE_OPEN_SECONDS,
+  GATE_OPENS_AT_SECONDS,
   PrologueSession,
   peekModifier,
   SETTLE_SECONDS,
@@ -255,37 +257,46 @@ describe('S-34: taking the drop settles the bridge and opens the gate (発案者
     expect(s.settledFooting()).toEqual([]);
   });
 
-  it('the light starts across the bridge and the gate starts to open the moment the drop is taken', () => {
+  it('the light starts across the bridge the moment the drop is taken; the gate waits for it', () => {
     const { s, events, finale } = dropJustTaken();
     expect(events).toEqual([{ type: 'dropTaken' }]);
-    expect(finale).toEqual([{ type: 'settle' }, { type: 'gateOpen' }]);
+    expect(finale).toEqual([{ type: 'settle' }]);
     expect(s.settleProgress).toBeLessThan(0.05);
-    expect(s.gateProgress).toBeLessThan(0.05);
+    expect(s.gateProgress).toBe(0);
     expect(s.settleFront).not.toBeNull();
   });
 
-  it('the light is across in 1–2 s (定着の見た目は1〜2秒); the gate is open after it', () => {
+  it('the light is across in 1–2 s (定着の見た目は1〜2秒); the gate starts to open only then (発案者 2026-10-23: 原則4)', () => {
     expect(SETTLE_SECONDS).toBeGreaterThanOrEqual(1);
     expect(SETTLE_SECONDS).toBeLessThanOrEqual(2);
-    expect(GATE_OPEN_SECONDS).toBeGreaterThanOrEqual(SETTLE_SECONDS);
+    expect(GATE_OPENS_AT_SECONDS).toBe(SETTLE_SECONDS);
     const { s, finale } = dropJustTaken();
     run(s, SETTLE_SECONDS / 2);
     expect(s.settleProgress).toBeGreaterThan(0.4);
     expect(s.settleProgress).toBeLessThan(0.6);
+    // while the light crosses, the gate stays shut
+    expect(s.gateProgress).toBe(0);
+    expect(finale.map((e) => e.type)).toEqual(['settle']);
     run(s, SETTLE_SECONDS / 2 + 0.02);
     expect(s.settleProgress).toBe(1);
-    expect(finale.map((e) => e.type)).toEqual(['settle', 'gateOpen', 'settled']);
-    run(s, GATE_OPEN_SECONDS - SETTLE_SECONDS);
+    // the light has reached the far shore: the gate starts to open with it
+    expect(finale.map((e) => e.type)).toEqual(['settle', 'settled', 'gateOpen']);
+    expect(s.gateProgress).toBeGreaterThan(0);
+    expect(s.gateProgress).toBeLessThan(0.05);
+    run(s, GATE_OPEN_SECONDS / 2);
+    expect(s.gateProgress).toBeGreaterThan(0.45);
+    expect(s.gateProgress).toBeLessThan(0.55);
+    run(s, GATE_OPEN_SECONDS / 2);
     expect(s.gateProgress).toBe(1);
-    expect(finale.map((e) => e.type)).toEqual(['settle', 'gateOpen', 'settled', 'gateOpened']);
-    // once, whatever happens afterwards
+    expect(finale.map((e) => e.type)).toEqual(['settle', 'settled', 'gateOpen', 'gateOpened']);
+    // once each, whatever happens afterwards
     run(s, 5);
     expect(finale).toHaveLength(4);
   });
 
   it('puts nothing new on the room’s event log: the close is its own (S-16’s table of sounds stays as it is)', () => {
     const { s, events } = dropJustTaken();
-    run(s, GATE_OPEN_SECONDS + 1);
+    run(s, FINALE_SECONDS + 1);
     expect(events).toEqual([{ type: 'dropTaken' }]);
   });
 

@@ -57,12 +57,9 @@ import { buildRoomArt } from './room-art';
 import {
   type FinaleEvent,
   finaleFront,
-  GATE_OPEN_SECONDS,
   type InteractTarget,
   PrologueSession,
   peekModifier,
-  progressOf,
-  SETTLE_SECONDS,
   SHAKE_AMPLITUDE,
 } from './session';
 import { pickTarget, type TargetCandidate } from './targets';
@@ -134,7 +131,20 @@ export interface RoomProbe {
   fallRescues: number;
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
-  autoplay: { step: string; done: boolean } | null;
+  /**
+   * The script's step, whether it is done, and (S-34 review: where a long frame falls) the longest frame of the play so
+   * far, in which step it fell and when (room clock), and the longest frame of each step. A frame is the time between two
+   * updates of the room while it is played, so it counts the rendering of the frame before; it is put down to the step
+   * that frame was in.
+   */
+  autoplay: {
+    step: string;
+    done: boolean;
+    worstMs: number;
+    worstStep: string;
+    worstAt: number;
+    steps: Record<string, number>;
+  } | null;
   /** S-34: the close — the drop's light settling the bridge, the gate opening (as drawn and collided now). */
   finale: FinaleProbe;
   layout: {
@@ -158,7 +168,10 @@ export interface RoomProbe {
 
 /** S-34: the close as the room shows it (tests/e2e/S-34-*.spec.ts). */
 export interface FinaleProbe {
-  /** 0..1 since the drop was taken, linear in time: the light across the bridge (SETTLE_SECONDS), the gate (GATE_OPEN_SECONDS). */
+  /**
+   * 0..1, linear in time: the light across the bridge (from the drop taken, SETTLE_SECONDS), the gate's opening (from when
+   * the light has reached the far shore, GATE_OPEN_SECONDS; session.ts).
+   */
   settle: number;
   gate: number;
   /** Footing segments of the bridge the light has fixed (solid for good). */
@@ -305,7 +318,9 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     triangles: 0,
     fallRescues: 0,
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
-    autoplay: opts.autopilot ? { step: '', done: false } : null,
+    autoplay: opts.autopilot
+      ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
+      : null,
     finale: {
       settle: 0,
       gate: 0,
@@ -570,6 +585,29 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     body.vy = v.y;
     body.vz = v.z;
   };
+  /** S-34 review: the longest frames of the scripted play, by step (probe.autoplay). */
+  let frameAt: number | null = null;
+  let frameStep = '';
+  const timeFrame = (): void => {
+    const a = probe.autoplay;
+    const pilot = opts.autopilot;
+    if (!a || !pilot || !playing) {
+      frameAt = null;
+      return;
+    }
+    const now = performance.now();
+    if (frameAt !== null) {
+      const ms = now - frameAt;
+      if (ms > (a.steps[frameStep] ?? 0)) a.steps[frameStep] = ms;
+      if (ms > a.worstMs) {
+        a.worstMs = ms;
+        a.worstStep = frameStep;
+        a.worstAt = time;
+      }
+    }
+    frameAt = now;
+    frameStep = pilot.current;
+  };
   /** Moves an eased 0..1 toward 0 or 1 by at most `k`. */
   const ease = (now: number, on: boolean, k: number): number =>
     on ? Math.min(1, now + k) : Math.max(0, now - k);
@@ -597,8 +635,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const close = { settle: 0, gate: 0, angle: 0, front: null as number | null };
   const stageFinale = (): void => {
     const elapsed = session.finaleElapsed;
-    close.settle = elapsed === null ? 0 : progressOf(elapsed, SETTLE_SECONDS);
-    close.gate = elapsed === null ? 0 : progressOf(elapsed, GATE_OPEN_SECONDS);
+    // the light from the drop taken; the gate from when the light has reached the far shore (session.ts)
+    close.settle = session.settleProgress;
+    close.gate = session.gateProgress;
     if (elapsed === null) {
       close.front = null;
       field.setSettled(null);
@@ -787,6 +826,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     update(dt, t) {
       time += dt;
+      timeFrame();
       art.animate(t);
       let intent = idle;
       let wantPeek = false;

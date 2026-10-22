@@ -1029,6 +1029,11 @@ describe('the close of the prologue sounds (S-34: 橋が定着する音、門が
     r.room.probe.finale = { frontZ: -16 };
     r.frame();
     expect(v.emitter?.position.z).toBeCloseTo(-16, 6);
+    // once the light is across, its sound stays where the light stopped (nothing is written every frame after that)
+    r.room.finale.emit({ type: 'settled' });
+    r.room.probe.finale = { frontZ: -17 };
+    r.frame();
+    expect(v.emitter?.position.z).toBeCloseTo(-16, 6);
     const f = r.sound.probe.finale;
     expect(f.played.map((p) => p.event)).toEqual(['settle']);
     expect(f.voicesStarted).toBe(1);
