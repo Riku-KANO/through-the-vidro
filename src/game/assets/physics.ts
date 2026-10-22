@@ -12,6 +12,8 @@ import type { ColliderShape } from './assemble';
  */
 export interface AssetColliders {
   fixed: RAPIER.Collider[];
+  /** The fixed (shared and surface) colliders by their object name (`<base>_col`). */
+  byName: ReadonlyMap<string, RAPIER.Collider>;
   /** null when the asset has no back-layer collider. */
   footing: BackFooting | null;
   dispose(): void;
@@ -23,15 +25,18 @@ export function addAssetColliders(
   shapes: readonly ColliderShape[],
 ): AssetColliders {
   const fixed: RAPIER.Collider[] = [];
+  const byName = new Map<string, RAPIER.Collider>();
   const back: ColliderShape[] = [];
   for (const s of shapes) {
     if (s.layer === 'back') {
       back.push(s);
       continue;
     }
-    fixed.push(
-      world.createCollider(R.ColliderDesc.trimesh(s.positions, s.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES)),
+    const c = world.createCollider(
+      R.ColliderDesc.trimesh(s.positions, s.indices, R.TriMeshFlags.FIX_INTERNAL_EDGES),
     );
+    fixed.push(c);
+    byName.set(s.name, c);
   }
   const segments: FootingSegment[] = back.map((s) => ({ id: s.name, min: s.box.min, max: s.box.max }));
   const byId = new Map(back.map((s) => [s.name, s]));
@@ -48,6 +53,7 @@ export function addAssetColliders(
       : null;
   return {
     fixed,
+    byName,
     footing,
     dispose() {
       for (const c of fixed) world.removeCollider(c, false);

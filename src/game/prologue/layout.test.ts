@@ -7,28 +7,47 @@ import { PEEK_FOV_DELTA_DEG } from '../orb/peek';
 import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/constants';
 import { LEDGE_DEFAULTS } from '../player/ledge';
 import {
+  ANNEALER,
+  BENCH,
   BENCH_ORB,
   BRIDGE,
   BRIDGE_RISE,
   bridgeFooting,
+  CHAIR,
   DROP,
   DROP_REACH,
   deckHeight,
+  domeWallRadius,
   EDGE_Z,
   FACING_DEG,
   FAR,
   FLOOR_ZONES,
+  FURNACE,
+  FURNACE_FACING,
+  FURNACE_MOUTH,
   floorAt,
   GATE,
+  GRATE,
+  GRATE_CENTER,
   LIGHTHOUSE,
   lookDirection,
+  MARVER,
+  MOUTH_PIPE_REACH,
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_ORB,
   PEDESTAL_RADIUS,
   REACH,
   SPAWNS,
+  type SpawnName,
+  shelfFrontRadius,
+  TEA_CUP,
+  WATER_TUB,
+  WIND_CHIME,
+  WORKS_SHELF,
+  WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
+  WORKSHOP_OBJECTS,
 } from './layout';
 
 /** Level-design invariants of the prologue (パズル設計 > 原則, 空間の可読性と導線). */
@@ -174,13 +193,105 @@ describe('what each floor is made of (S-22: 足音は床の材質ごとに変え
     }
   });
 
-  it('names only materials that have footsteps, and never one that is not drawn underfoot (brass is not)', () => {
+  it('names only materials that have footsteps; brass only where the grate is drawn (S-24)', () => {
     for (const z of FLOOR_ZONES) expect(FLOOR_MATERIALS).toContain(z.material);
-    expect(FLOOR_ZONES.map((z) => z.material)).not.toContain('brass');
+    expect(FLOOR_ZONES.filter((z) => z.material === 'brass').map((z) => z.name)).toEqual(['grate']);
+  });
+
+  it('the brass grate in front of the furnace sounds brass, and the glass floor around it frosted (S-24)', () => {
+    expect(floorAt(...GRATE_CENTER)).toEqual({ zone: 'grate', material: 'brass' });
+    const [fx, fz] = FURNACE_FACING;
+    const at = (along: number, across: number): [number, number] => [
+      GRATE_CENTER[0] + fx * along - fz * across,
+      GRATE_CENTER[1] + fz * along + fx * across,
+    ];
+    const d = GRATE.depth / 2;
+    const w = GRATE.width / 2;
+    for (const [a, b] of [
+      [d - 0.05, w - 0.05],
+      [-d + 0.05, w - 0.05],
+      [d - 0.05, -w + 0.05],
+      [-d + 0.05, -w + 0.05],
+    ] as const)
+      expect(floorAt(...at(a, b)).material).toBe('brass');
+    for (const [a, b] of [
+      [d + 0.08, 0],
+      [-d - 0.08, 0],
+      [0, w + 0.08],
+      [0, -w - 0.08],
+    ] as const)
+      expect(floorAt(...at(a, b))).toEqual({ zone: 'workshop', material: 'frosted' });
   });
 
   it('somewhere it does not know (off every floor) still answers, with 石畳 — the town’s ground', () => {
     expect(floorAt(30, 30)).toEqual({ zone: 'none', material: 'stone' });
+  });
+});
+
+describe('the workshop interior (S-24: 職人がついさっきまで仕事をしていた工房, the approved plan)', () => {
+  const furniture = Object.values(WORKSHOP_OBJECTS).filter((o) => o.col);
+
+  it('the furniture keeps to the walls, inside the dome', () => {
+    for (const o of furniture) {
+      const r = Math.hypot(...o.at);
+      expect(r, o.name).toBeGreaterThan(2.0);
+      expect(r, o.name).toBeLessThan(WORKSHOP_FLOOR_RADIUS - 0.2);
+    }
+  });
+
+  it('the floor under the skylight stays clear: the grate ends before it, the pipe in the furnace too', () => {
+    // the grate's nearest edge to the centre, and the end of the blowpipe left in the furnace's mouth
+    const furnaceR = Math.hypot(FURNACE.center[0], FURNACE.center[2]);
+    expect(furnaceR - (GRATE.near + GRATE.depth)).toBeGreaterThan(WORKSHOP.oculus);
+    expect(furnaceR - MOUTH_PIPE_REACH).toBeGreaterThan(WORKSHOP.oculus);
+    // the grate lies between the furnace and the centre, in front of the mouth
+    expect(Math.hypot(...GRATE_CENTER)).toBeLessThan(furnaceR);
+    const along =
+      (FURNACE_MOUTH[0] - FURNACE.center[0]) * FURNACE_FACING[0] +
+      (FURNACE_MOUTH[2] - FURNACE.center[2]) * FURNACE_FACING[1];
+    expect(along).toBeGreaterThan(0.4);
+  });
+
+  it('the stool stands left of the bench with the half-drunk tea by it, the tub left of the marver', () => {
+    expect(CHAIR.center[0]).toBeLessThan(BENCH.center[0] - BENCH.size[0] / 2);
+    expect(Math.hypot(TEA_CUP[0] - CHAIR.center[0], TEA_CUP[2] - CHAIR.center[2])).toBeLessThan(1.2);
+    expect(WATER_TUB.center[0]).toBeLessThan(MARVER.center[0]);
+  });
+
+  it('the works shelf follows the leaning wall: every tier stays inside the glass, from the left side round to the back', () => {
+    for (const y of WORKS_SHELF.tiers) {
+      expect(shelfFrontRadius(y) + WORKS_SHELF.depth).toBeLessThan(domeWallRadius(y + 0.05));
+      expect(shelfFrontRadius(y)).toBeGreaterThan(3.4);
+    }
+    // left (−X) to back (+Z), clear of the annealer at the back and the stool on the left
+    expect(WORKS_SHELF.fromDeg).toBeGreaterThan(90);
+    expect(WORKS_SHELF.toDeg).toBeLessThan(180);
+    const annealerDeg = (Math.atan2(ANNEALER.center[2], ANNEALER.center[0]) * 180) / Math.PI;
+    expect(WORKS_SHELF.fromDeg - annealerDeg).toBeGreaterThan(20);
+  });
+
+  it('the wind chime hangs inside the door, above the head', () => {
+    expect(Math.abs(WIND_CHIME[0])).toBeLessThan(WORKSHOP.door.halfWidth);
+    expect(Math.hypot(WIND_CHIME[0], WIND_CHIME[2])).toBeLessThan(domeWallRadius(WIND_CHIME[1]));
+    expect(WIND_CHIME[1] - 0.2).toBeGreaterThan(EYE_HEIGHT + 0.3);
+    expect(WIND_CHIME[1]).toBeLessThan(WORKSHOP.door.height);
+  });
+
+  it('the fixed views look at what they are named for', () => {
+    const eye = (s: (typeof SPAWNS)[SpawnName]): Vec3 => [s.feet[0], EYE_HEIGHT, s.feet[2]];
+    const look = (s: (typeof SPAWNS)[SpawnName]) => lookDirection(s.yaw, s.pitch);
+    // the fire is straight ahead in front of the furnace, the shelf's middle before the shelf
+    expect(angleDeg(eye(SPAWNS.furnace), look(SPAWNS.furnace), FURNACE_MOUTH)).toBeLessThan(20);
+    const shelf = WORKSHOP_OBJECTS.shelf.at;
+    expect(angleDeg(eye(SPAWNS.shelf), look(SPAWNS.shelf), [shelf[0], 0.88, shelf[1]])).toBeLessThan(15);
+    // from the door, looking back, the bench and the furnace are both in view (horizontal half-angle ~51°)
+    for (const p of [BENCH_ORB, FURNACE_MOUTH])
+      expect(angleDeg(eye(SPAWNS.door), look(SPAWNS.door), p)).toBeLessThan(50);
+    // where you wake: the furnace is to the right (out of view), its light falls into the view's right side
+    const wake = SPAWNS.bench;
+    const right = [Math.cos(wake.yaw), 0, -Math.sin(wake.yaw)];
+    const toFire = [FURNACE_MOUTH[0] - wake.feet[0], 0, FURNACE_MOUTH[2] - wake.feet[2]];
+    expect((right[0] ?? 0) * (toFire[0] ?? 0) + (right[2] ?? 0) * (toFire[2] ?? 0)).toBeGreaterThan(2);
   });
 });
 

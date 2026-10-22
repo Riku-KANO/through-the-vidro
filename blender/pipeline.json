@@ -1,4 +1,7 @@
 {
-  "about": "Jobs of `pnpm assets` (scripts/assets/pipeline.mjs). Each .blend is exported into one glb per area of its object names (A1_… → a1.glb, CM_… → common.glb) in `out`, then compressed. The lab sample is S-23's; areas come with M1 (S-24 and after).",
-  "jobs": [{ "name": "lab", "blend": "blender/scenes/asset-lab.blend", "out": "public/assets/lab" }]
+  "about": "Jobs of `pnpm assets` (scripts/assets/pipeline.mjs). Each .blend is exported into one glb per area of its object names (A1_… → a1.glb, CM_… → common.glb) in `out`, then compressed. The lab sample is S-23's; the workshop (序章「工房」の内装) is S-24's, made by blender/scripts/make_workshop.py.",
+  "jobs": [
+    { "name": "lab", "blend": "blender/scenes/asset-lab.blend", "out": "public/assets/lab" },
+    { "name": "workshop", "blend": "blender/scenes/workshop.blend", "out": "public/assets/workshop" }
+  ]
 }

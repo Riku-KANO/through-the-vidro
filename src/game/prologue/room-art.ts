@@ -39,11 +39,11 @@ import {
 } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
+import type { Box } from '../../layers/footing';
 import type { LayerKind } from '../../layers/layers';
 import { HAND_ORB_RADIUS } from '../orb/hand-pose';
 import type { MeshData } from '../player/walk-lab-field';
 import {
-  BENCH,
   BENCH_ORB,
   BRIDGE,
   DROP,
@@ -51,7 +51,8 @@ import {
   EDGE_Z,
   FAR,
   FOOTING_SEGMENT,
-  FURNACE,
+  FURNACE_FACING,
+  FURNACE_MOUTH,
   GATE,
   LAMP_HEIGHT,
   LAMP_POST_RADIUS,
@@ -62,13 +63,15 @@ import {
   PEDESTAL_ORB,
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
+  WORKSHOP_TOP,
 } from './layout';
 import { deckMesh, domePoint, domeWall } from './shapes';
 
 /**
  * The look of 序章「工房」 (アートディレクション): 夜明け前の青, almost colourless glass with the green of
  * its edges and dull brass, warm light only from the furnace, the lamps and the back layer (光があった頃の
- * 街の名残). Built for M0 from code; Blender assets replace it later.
+ * 街の名残). Built from code for M0; the workshop's interior is Blender's since S-24 (room.ts loads its glb and this
+ * file only lights it); the rest moves to Blender as the areas are modelled.
  *
  * Every object goes through LayerField.assign (surface / back / shared), which keeps transmissive glass
  * out of the smaller peek image and pins the shadow camera to the normal view (AGENTS.md).
@@ -117,6 +120,17 @@ const FOG_NEAR = 18;
 const FOG_FAR = 150;
 /** Far glass haze (S-01 cheap path), long enough that the town still reads from the home orb's view. */
 const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
+/**
+ * The workshop's lights (S-24, 仮 values for the designer's eye). 光と時間帯: 夜明け前の青 through the skylight onto the
+ * vidro; the furnace is the only warm light (the lamp over the bench is gone), flickering a little like a fire.
+ */
+const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
+const SKYLIGHT_INTENSITY = 26;
+const SKYLIGHT_ANGLE = 0.13;
+const FIRE_COLOR = 0xff8a3c;
+const FIRE_INTENSITY = 9;
+/** How much the fire's light breathes (± of its intensity). */
+const FIRE_FLICKER = 0.08;
 /** The valley floor, far below the mist. */
 const VALLEY_Y = -32;
 /** The mist rises to just below the walkable tops. */
@@ -228,6 +242,7 @@ export function buildRoomArt(
   renderer: THREE.WebGPURenderer,
   quality: QualityPreset,
   field: LayerField,
+  options: { trialWall?: Box } = {},
 ): RoomArt {
   const scene = new THREE.Scene();
   const disposables: { dispose(): void }[] = [];
@@ -301,7 +316,7 @@ export function buildRoomArt(
   pmrem.dispose();
   scene.environment = envTarget.texture;
 
-  // ---- lights (one dawn light + the sky; warm points from the furnace, the bench lamp, the orb) --------
+  // ---- lights (one dawn light + the sky; the skylight and the furnace below, the placed orb) ------------
   const hemi = new THREE.HemisphereLight(0x7890c0, 0x181c28, 0.8);
   put(hemi, 'shared');
   const sun = new THREE.DirectionalLight(0xffbd86, 2.5);
@@ -343,7 +358,6 @@ export function buildRoomArt(
   const stone = keep(stoneMaterial(0.62));
   const rock = keep(stoneMaterial(1.4));
   const frostFloor = keep(createFrostedFloorMaterial({ tileSize: 0.9, frostColor: 0xa7b1bc }));
-  const wood = keep(new THREE.MeshStandardNodeMaterial({ color: 0x5c4637, roughness: 0.78, metalness: 0 }));
   const dark = keep(new THREE.MeshStandardNodeMaterial({ color: 0x1b2433, roughness: 1, metalness: 0 }));
   const glass = (
     kind: Parameters<typeof createGlass>[0],
@@ -352,7 +366,6 @@ export function buildRoomArt(
   // the dome stands behind the bench glass from where you stand: cheap on every preset (ガラスの描画 > 対策1)
   const domeGlass = glass('clear', { placement: 'behind-glass', haze: TOWN_HAZE, thickness: 0.05 });
   domeGlass.side = THREE.DoubleSide;
-  const vesselGlass = glass('clear', { placement: 'near', thickness: 0.05 });
   const shardGlass = glass('clear', { placement: 'behind-glass', haze: TOWN_HAZE, thickness: 0.03 });
   const townGlass = glass('clear', { placement: 'far', haze: TOWN_HAZE, thickness: 0.06 });
   const panelGlass = glass('clear', { placement: 'near', thickness: 0.03 });
@@ -367,6 +380,7 @@ export function buildRoomArt(
   const cupNode = cupMilk as THREE.MeshPhysicalNodeMaterial;
   cupNode.emissiveNode = (cupNode.emissiveNode as THREE.Node<'vec3'>).add(rimLight(focus.pedestal).mul(1.6));
   const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
+  const fire = new THREE.PointLight(FIRE_COLOR, FIRE_INTENSITY, 7, 2);
 
   // ---- the workshop (序章「工房」) ---------------------------------------------------------------
   {
@@ -433,97 +447,33 @@ export function buildRoomArt(
     frame.castShadow = true;
     put(frame, 'shared');
 
-    // the workbench, a few blown vessels on it, the hanging lamp
-    const bench = new THREE.Group();
-    const [bw, bh, bd] = BENCH.size;
-    const top = mesh(new RoundedBoxGeometry(bw, 0.09, bd, 3, 0.03), wood);
-    top.position.y = bh - 0.045;
-    bench.add(top);
-    for (const sx of [-bw / 2 + 0.12, bw / 2 - 0.12]) {
-      const leg = mesh(new RoundedBoxGeometry(0.1, bh - 0.09, bd - 0.14, 2, 0.03), wood);
-      leg.position.set(sx, (bh - 0.09) / 2, 0);
-      bench.add(leg);
-    }
-    const shelf = mesh(new RoundedBoxGeometry(bw - 0.3, 0.05, bd - 0.2, 2, 0.02), wood);
-    shelf.position.y = 0.28;
-    bench.add(shelf);
-    const pipe = mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.3, 8), brass);
-    pipe.rotation.z = Math.PI / 2 - 0.06;
-    pipe.position.set(0.55, bh + 0.025, -0.24);
-    bench.add(pipe);
-    for (const c of bench.children) c.castShadow = true;
-    bench.position.set(BENCH.center[0], 0, BENCH.center[2]);
-    put(bench, 'shared');
-    // the vidro's brass ring stand on the bench
-    const stand = mesh(new THREE.TorusGeometry(0.05, 0.008, 8, 32), brass);
-    stand.rotation.x = Math.PI / 2;
-    stand.position.set(BENCH_ORB[0], BENCH.size[1] + 0.012, BENCH_ORB[2]);
-    put(stand, 'shared');
-    // near glass (transmission), kept off the line of sight to the vidro
-    const profiles: [number, number][][] = [
-      [
-        [0.001, 0],
-        [0.1, 0.01],
-        [0.13, 0.1],
-        [0.1, 0.2],
-        [0.04, 0.26],
-        [0.036, 0.36],
-        [0.05, 0.38],
-      ],
-      [
-        [0.001, 0],
-        [0.07, 0.005],
-        [0.085, 0.11],
-        [0.055, 0.26],
-        [0.07, 0.42],
-        [0.085, 0.45],
-      ],
-    ];
-    [
-      [-0.62, -0.1],
-      [0.62, 0.12],
-    ].forEach(([x = 0, z = 0], i) => {
-      const prof = profiles[i % profiles.length] ?? [];
-      const v = mesh(
-        new THREE.LatheGeometry(
-          prof.map(([px, py]) => new THREE.Vector2(px, py)),
-          36,
-        ),
-        vesselGlass,
-      );
-      v.position.set(BENCH.center[0] + x, BENCH.size[1], BENCH.center[2] + z);
-      put(v, 'shared');
-    });
-    const lamp = mesh(new THREE.SphereGeometry(0.16, 32, 16), lampMilk);
-    lamp.position.set(-0.6, 2.75, -1.7);
-    put(lamp, 'shared');
-    const rod = mesh(new THREE.CylinderGeometry(0.008, 0.008, 1.0, 6), brass);
-    rod.position.set(-0.6, 3.33, -1.7);
-    put(rod, 'shared');
-    const lampLight = new THREE.PointLight(0xffd2a0, 5.5, 8, 2);
-    lampLight.position.set(-0.6, 2.6, -1.7);
-    put(lampLight, 'shared');
-
-    // the furnace (炉): a dark kiln with a glowing mouth and its warm light on the floor
-    const kiln = mesh(new THREE.SphereGeometry(FURNACE.radius, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), dark);
-    kiln.scale.set(1, 1.15, 1);
-    kiln.position.set(FURNACE.center[0], 0, FURNACE.center[2]);
-    kiln.castShadow = true;
-    put(kiln, 'shared');
-    const mouthMat = keep(new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(3.4, 1.5, 0.5) }));
-    const mouth = mesh(new THREE.CircleGeometry(0.26, 32), mouthMat);
-    const toCentre = new THREE.Vector3(-FURNACE.center[0], 0, -FURNACE.center[2]).normalize();
-    mouth.position
-      .set(FURNACE.center[0], 0.42, FURNACE.center[2])
-      .addScaledVector(toCentre, FURNACE.radius * 0.97);
-    mouth.lookAt(mouth.position.clone().add(toCentre));
-    put(mouth, 'shared');
-    const chimney = mesh(new THREE.CylinderGeometry(0.09, 0.12, 2.6, 12), brass);
-    chimney.position.set(FURNACE.center[0] + 0.2, 2.2, FURNACE.center[2] + 0.2);
-    put(chimney, 'shared');
-    const fire = new THREE.PointLight(0xff8a3c, 9, 7, 2);
-    fire.position.copy(mouth.position).addScaledVector(toCentre, 0.35).setY(0.6);
-    put(fire, 'shared');
+    // The interior (the bench, its vessels, the furnace, the shelf…) is the workshop's glb (S-24, room.ts loads it).
+    // Here only its lights, which the game places (the glb carries no lights):
+    //  - 光と時間帯 夜明け前の青: the cool light of the sky through the skylight, falling on the vidro on the bench (the
+    //    first picture: 目覚めて最初に見る絵)
+    //  - the furnace, the only warm light of the workshop: at its mouth, toward the room and the grate
+    const sky = new THREE.SpotLight(SKYLIGHT_COLOR, SKYLIGHT_INTENSITY, 0, SKYLIGHT_ANGLE, 0.75, 1.4);
+    sky.position.set(0, WORKSHOP_TOP - 0.2, 0);
+    sky.target.position.set(...BENCH_ORB);
+    // A shadow drawn once like the sun's, so the bench top keeps the light off its lower shelf (the vidro casts none: it
+    // is taken away). A stand-in until the bake (光と時間帯: 静止した光と影は焼き込み; S-26). A cutoff distance was tried
+    // instead and dropped: its falloff turned the round pool into a lopsided one (review round 2 of S-24).
+    sky.castShadow = true;
+    sky.shadow.autoUpdate = false;
+    sky.shadow.needsUpdate = true;
+    sky.shadow.mapSize.set(512, 512);
+    sky.shadow.camera.near = 0.5;
+    sky.shadow.camera.far = 6;
+    sky.shadow.bias = -0.0005;
+    sky.shadow.normalBias = 0.02;
+    scene.add(sky.target);
+    put(keep(sky), 'shared');
+    fire.position.set(
+      FURNACE_MOUTH[0] + FURNACE_FACING[0] * 0.38,
+      FURNACE_MOUTH[1] + 0.06,
+      FURNACE_MOUTH[2] + FURNACE_FACING[1] * 0.38,
+    );
+    put(keep(fire), 'shared');
   }
 
   // ---- the way, the broken edge, the far shore, the gate -------------------------------------------
@@ -655,6 +605,19 @@ export function buildRoomArt(
       g.rotateZ((rand() - 0.5) * 0.5);
       g.translate(-0.7 + (i / 4) * 1.4 + (rand() - 0.5) * 0.12, h * 0.42, EDGE_Z + 0.04 - rand() * 0.08);
       shards.push(g);
+    }
+    // S-24's trial (?trial=surface-wall): a broken glass wall on the surface layer across the way onto the bridge
+    const w = options.trialWall;
+    if (w) {
+      const n = 5;
+      for (let i = 0; i < n; i++) {
+        const width = (w.max[0] - w.min[0]) / n;
+        const h = (w.max[1] - w.min[1]) * (0.7 + 0.3 * rand());
+        const g = new RoundedBoxGeometry(width * 0.92, h, w.max[2] - w.min[2], 2, 0.02);
+        g.rotateZ((rand() - 0.5) * 0.12);
+        g.translate(w.min[0] + width * (i + 0.5), w.min[1] + h / 2, (w.min[2] + w.max[2]) / 2);
+        shards.push(g);
+      }
     }
     const shardMesh = mesh(merged(shards), shardGlass);
     shardMesh.renderOrder = 3;
@@ -948,6 +911,12 @@ export function buildRoomArt(
     fogRange: { near: fogNear, far: fogFar },
     animate(t) {
       ghostTime.value = t;
+      // a fire breathes: a few slow, unrelated waves (no strobe)
+      fire.intensity =
+        FIRE_INTENSITY *
+        (1 +
+          FIRE_FLICKER *
+            (0.5 * Math.sin(t * 2.3) + 0.3 * Math.sin(t * 5.9 + 1.3) + 0.2 * Math.sin(t * 11.7 + 0.4)));
       for (let i = 0; i < MOTES; i++) {
         const s = moteSeeds[i];
         if (!s) continue;
