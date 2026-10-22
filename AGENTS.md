@@ -70,6 +70,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   物の小ささと画面の揺らぎで余裕がなくなる。
   物の色だけを見るときは、隠す代わりに平らな色の材質に替えて差を取り、揺れる灯りの雑音は差の大きさで比べ、手の玉の円は除く
   （`tests/e2e/S-30-furnace-colour.spec.ts`）。
+- **部屋の出来事の記録（`room.events` → `probe.events`）に新しい種類を足さない（S-34）。** S-16・S-18 の e2e は記録の名前をすべて音の表と照合し、
+  知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`）。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -199,6 +201,10 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **焼き込みの場面ではガラスは透明（S-26）。** ゲームのガラスは影を落とさず光を通すので、焼き込みもガラスと焼かない光らない材質（材質の
   `bake: false`。ガラスの中の泡）をすべての光線に透明にする。影を落とすべき静的な物に `bake: false` を付けない。材質の画像のノードには UV Map の
   ノードで1つ目の UV をつなぐ（焼く間は描画用の UV が Lightmap になる）。
+- **裏の層を表に定着させるときは、光の掃き（`src/layers/settle.ts`）で行う（S-34）。** 描画は `new LayerField({ settle: true })` と毎フレームの
+  `setSettled(...)`（uniform だけ。オプションなしのシーンのシェーダは変わらない）。当たり判定は `settledSegmentIds` を `BackFooting.settle`・
+  `SurfaceColliders.settle` へ。区画は光が全体を通り過ぎてから定着し、定着した足場の上では玉を拾える。箱は区画を切らない（`segmentsCutByBox` が空）。
+  エリアで使うときの課題: 定着の範囲は今は1つ、拾える例外はセッションの中（`PickUpContext.settled` へ移す）。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を

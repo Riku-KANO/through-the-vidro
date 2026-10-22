@@ -1,4 +1,5 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
+import { countSettled, type SettleSweep, settledSegmentIds, sweepFront } from '../../layers/settle';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
 import {
@@ -16,7 +17,8 @@ import { EventBus, type PrologueEvent } from './events';
 /**
  * The prologue's game state (pure, no three.js or Rapier): where the vidro is, the peek, the hand, the
  * refusals and the light drop. It strings S-02's orb rules together for one room:
- *   作業台の玉を手にする → 覗く → 台座に置く (実体化) → 渡る → 光の雫に触れる.
+ *   作業台の玉を手にする → 覗く → 台座に置く (実体化) → 渡る → 光の雫に触れる
+ *   → (S-34) 雫の光が橋を表に定着させ、門が開く → 橋を戻って玉を拾う → 門の先へ.
  * The scene feeds it the input and the player's feet, and draws what it says.
  */
 
@@ -27,6 +29,41 @@ export const SHAKE_AMPLITUDE = 0.012;
 export const HAND_SECONDS = PEEK_SECONDS;
 /** 仮: the touched light drop flies into the orb (光の雫の数: 手の玉の中に光の粒として入っていく). */
 export const DROP_FLIGHT_SECONDS = 1.2;
+/**
+ * 仮 (S-34, spine: 定着の見た目は1〜2秒): how long the drop's light takes to run across what it settles (the bridge), from the
+ * moment the drop is taken. Its front moves on the game's one curve (glassEase, 遷移のルール5).
+ */
+export const SETTLE_SECONDS = 1.6;
+/**
+ * 発案者 2026-10-23: the gate starts to open when the light that runs across the bridge has reached the far shore, not the
+ * moment the drop is taken (パズル設計 > 原則4: 解けた瞬間に、なぜそうなったかが光と音で見える). Seconds after the drop is taken.
+ */
+export const GATE_OPENS_AT_SECONDS = SETTLE_SECONDS;
+/** 仮 (S-34): how long the gate takes to swing open, from GATE_OPENS_AT_SECONDS. */
+export const GATE_OPEN_SECONDS = 2.6;
+/** Seconds from the drop taken to the gate wide open: the whole close. */
+export const FINALE_SECONDS = GATE_OPENS_AT_SECONDS + GATE_OPEN_SECONDS;
+
+/**
+ * The close of the prologue (S-34), on its own bus: the light starts across the bridge / is across, the gate starts to
+ * open / is open. Kept off the room's event log (events.ts PrologueEvent), whose names are S-16's table of sounds.
+ */
+export type FinaleEvent =
+  | { type: 'settle' }
+  | { type: 'settled' }
+  | { type: 'gateOpen' }
+  | { type: 'gateOpened' };
+
+/** 0..1 of a span of `seconds`, `elapsed` into it; exactly 1 at its end (within float noise of many small steps). */
+export function progressOf(elapsed: number, seconds: number): number {
+  if (elapsed >= seconds - 1e-9) return 1;
+  return Math.max(0, elapsed / seconds);
+}
+
+/** Where the light's front stands along the sweep `elapsed` seconds after the drop was taken (eased, 遷移のルール5). */
+export function finaleFront(sweep: SettleSweep, elapsed: number): number {
+  return sweepFront(sweep, glassEase(progressOf(elapsed, SETTLE_SECONDS)));
+}
 
 export type InteractTarget = { kind: 'bench' } | { kind: 'pedestal'; id: string } | { kind: 'drop' };
 
@@ -52,6 +89,11 @@ export interface SessionOptions {
   surface?: readonly FootingSegment[];
   /** Where the light drop hovers (it is back layer: touchable only inside a sphere). */
   drop: Vec3;
+  /**
+   * S-34: what the drop's light fixes onto the surface once it is taken (the bridge, layout.ts BRIDGE_SETTLE). Footing and
+   * surface-only segments it has passed are no longer the orb's to hold: the pickup no longer asks about them.
+   */
+  settle?: SettleSweep;
 }
 
 /**
@@ -68,8 +110,17 @@ export function peekModifier(amount: number): MovementModifier {
 
 const MAIN = 'main';
 
+/** Does the time from `was` to `now` reach `at` (within float noise of many small steps)? */
+function crosses(was: number, now: number, at: number): boolean {
+  return was < at - 1e-9 && now >= at - 1e-9;
+}
+const NONE: readonly string[] = [];
+const NONE_SEGMENTS: readonly FootingSegment[] = [];
+
 export class PrologueSession {
   readonly events = new EventBus<PrologueEvent>();
+  /** S-34: the close (FinaleEvent), apart from `events`. */
+  readonly finaleEvents = new EventBus<FinaleEvent>();
 
   private orbsValue: readonly Orb[] = createOrbs(0);
   private onBench: boolean;
@@ -79,6 +130,11 @@ export class PrologueSession {
   private dropValue: DropState = 'waiting';
   private dropElapsed = 0;
   private sphereCache: { orbs: readonly Orb[]; spheres: OrbSphere[] } | null = null;
+  /** S-34: seconds since the drop was taken (null before). */
+  private finaleAt: number | null = null;
+  /** Dev hold (holdFinale): the close does not move on. */
+  private finaleHeld = false;
+  private settledCache: { front: number; footing: string[]; surface: string[] } | null = null;
 
   constructor(readonly options: SessionOptions) {
     this.onBench = options.orbStart === 'bench';
@@ -144,6 +200,78 @@ export class PrologueSession {
     return this.sphereCache.spheres;
   }
 
+  /** S-34: 0..1, linear in time since the drop was taken: the light across the bridge (SETTLE_SECONDS). */
+  get settleProgress(): number {
+    return this.finaleAt === null ? 0 : progressOf(this.finaleAt, SETTLE_SECONDS);
+  }
+
+  /**
+   * S-34: 0..1, linear in time: the gate's opening (GATE_OPEN_SECONDS), from when the light has reached the far shore
+   * (GATE_OPENS_AT_SECONDS after the drop was taken).
+   */
+  get gateProgress(): number {
+    return this.finaleAt === null ? 0 : progressOf(this.finaleAt - GATE_OPENS_AT_SECONDS, GATE_OPEN_SECONDS);
+  }
+
+  /** S-34: seconds since the drop was taken, or null before. */
+  get finaleElapsed(): number | null {
+    return this.finaleAt;
+  }
+
+  /** S-34: where the light's front stands along the sweep (settle.ts), or null before the drop is taken / with no sweep. */
+  get settleFront(): number | null {
+    const sweep = this.options.settle;
+    return sweep && this.finaleAt !== null ? finaleFront(sweep, this.finaleAt) : null;
+  }
+
+  /** S-34: ids of the bridge's footing segments the light has fixed, in segment order (the same array until it moves). */
+  settledFooting(): readonly string[] {
+    return this.settled()?.footing ?? NONE;
+  }
+
+  /** S-34: ids of the surface-only segments the light has fixed as cut, in segment order. */
+  settledSurface(): readonly string[] {
+    return this.settled()?.surface ?? NONE;
+  }
+
+  /**
+   * What the light has fixed. The light only moves on, so the same number of settled segments is the same set: the lists
+   * are made again only when it grows (a few times while the light crosses, not every frame).
+   */
+  private settled(): { footing: string[]; surface: string[] } | null {
+    const sweep = this.options.settle;
+    const front = this.settleFront;
+    if (!sweep || front === null) return null;
+    const cache = this.settledCache;
+    if (cache?.front === front) return cache;
+    const footing = this.options.footing;
+    const surface = this.options.surface ?? NONE_SEGMENTS;
+    const nFooting = countSettled(footing, sweep, front);
+    const nSurface = countSettled(surface, sweep, front);
+    if (cache && cache.footing.length === nFooting && cache.surface.length === nSurface) {
+      cache.front = front;
+      return cache;
+    }
+    this.settledCache = {
+      front,
+      footing: settledSegmentIds(footing, sweep, front),
+      surface: settledSegmentIds(surface, sweep, front),
+    };
+    return this.settledCache;
+  }
+
+  /**
+   * Dev holds (the room's ?finaleHold): as if the drop had been taken `elapsed` seconds ago, and held there (the light, the
+   * settled segments and the gate stop at that moment, for the drawing, the colliders and the pickup alike). No events.
+   * The orb is the caller's to place.
+   */
+  holdFinale(elapsed: number): void {
+    this.dropValue = 'taken';
+    this.dropElapsed = DROP_FLIGHT_SECONDS;
+    this.finaleAt = Math.max(0, elapsed);
+    this.finaleHeld = true;
+  }
+
   /** The light drop is real (inside a sphere) and can be touched. */
   dropMaterialized(): boolean {
     const [x, y, z] = this.options.drop;
@@ -160,13 +288,29 @@ export class PrologueSession {
     this.orbsValue = stepOrbs(this.orbsValue, dt);
     this.hand = stepTween(this.hand, dt, HAND_SECONDS);
     this.shakeLeft = Math.max(0, this.shakeLeft - dt);
+    if (this.finaleAt !== null) this.stepFinale(dt);
     if (this.dropValue === 'flying') {
       this.dropElapsed += dt;
       if (this.dropElapsed >= DROP_FLIGHT_SECONDS - 1e-9) {
         this.dropValue = 'taken';
         this.events.emit({ type: 'dropTaken' });
+        // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale)
+        this.finaleAt = 0;
+        this.finaleEvents.emit({ type: 'settle' });
       }
     }
+  }
+
+  private stepFinale(dt: number): void {
+    if (this.finaleHeld) return;
+    const was = this.finaleAt ?? 0;
+    const now = was + dt;
+    this.finaleAt = now;
+    // once each, when the time crosses its moment (within float noise, like stepTween): the light across, and with it
+    // the gate starting to open; the gate open
+    if (crosses(was, now, SETTLE_SECONDS)) this.finaleEvents.emit({ type: 'settled' });
+    if (crosses(was, now, GATE_OPENS_AT_SECONDS)) this.finaleEvents.emit({ type: 'gateOpen' });
+    if (crosses(was, now, FINALE_SECONDS)) this.finaleEvents.emit({ type: 'gateOpened' });
   }
 
   /** A peek was asked for while it is not possible. A placed orb trembles (置いている間は覗けない). */
@@ -207,11 +351,16 @@ export class PrologueSession {
       return 'place';
     }
     if (at !== id) return 'nothing';
-    const surface = this.options.surface;
+    // S-34: what the drop's light has fixed is no longer this orb's to hold: on the settled bridge the orb comes (the
+    // exception to 実体化した足場の上にいるときは回収できない), and a settled surface-only wall stays cut
+    const settled = this.settled();
+    const unsettled = (segments: readonly FootingSegment[], ids: readonly string[] | undefined) =>
+      ids && ids.length > 0 ? segments.filter((seg) => !ids.includes(seg.id)) : segments;
+    const surface = unsettled(this.options.surface ?? NONE_SEGMENTS, settled?.surface);
     const ctx = {
       pedestals: this.options.pedestals,
-      footing: this.options.footing,
-      surface: surface && surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
+      footing: unsettled(this.options.footing, settled?.footing),
+      surface: surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
       feet,
     };
     if (!canPickUp(this.orbsValue, MAIN, ctx)) {

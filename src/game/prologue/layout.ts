@@ -1,5 +1,6 @@
 import type { FloorMaterial } from '../../audio/footsteps';
 import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
+import type { SettleSweep } from '../../layers/settle';
 
 /**
  * 序章「工房」 (進行構造とエリア設計): the workshop at the edge of the town, before dawn.
@@ -289,8 +290,64 @@ export const DROP: Vec3 = [-0.2, 1.2, -17.0];
 /**
  * A closed gate at the back of the far shore: the way on, with the town seen through its bars
  * (ルール6: 次に行く場所が先に見えている, ルール9: 理由のない行き止まりは作らない).
+ * S-34: it opens once the light of the taken drop has run across the bridge to the far shore (発案者 2026-10-23,
+ * session.ts GATE_OPENS_AT_SECONDS) — two brass leaves hinged at its posts, swinging away from the far shore (finale.ts
+ * draws them, physics.ts GateLeaves collides as them).
  */
 export const GATE = { z: -20.6, halfWidth: FAR.maxX, height: 2.7, depth: 0.2 };
+/** Height where the gate's arch springs from its posts (the arch rises 0.6 of its half width above it). */
+export const GATE_SPRINGS = GATE.height - GATE.halfWidth * 0.6;
+/**
+ * 仮 (S-34): how far the leaves swing open. A little past square, so that open they lie just outside the road's edges, out of
+ * the way (out over the drop, like a balcony's doors).
+ */
+export const GATE_OPEN_DEG = 96;
+
+/**
+ * S-34: the unit (x, z) along a leaf of the gate from its hinge, `angle` radians from shut; `side` is +1 for the leaf hinged
+ * at the right post (+X), -1 for the left. Shut, the leaves run toward the middle; open, away from the far shore (-Z).
+ */
+export function gateLeafDirection(side: 1 | -1, angle: number): [number, number] {
+  return [-side * Math.cos(angle), -Math.sin(angle)];
+}
+
+/**
+ * 門の先の道 (S-34, 仮): past the gate the way goes on as a slope of about 80 m down to the central plaza (進行構造とエリア
+ * 設計 > 街の配置と序章の締め, 2026-10-23; S-35 builds it). S-34 lays only its first 4 m — the far shore's stone going on — and
+ * a provisional railing at their end, the mist and the town with its lighthouse beyond (ルール6; ルール9: 行き止まりには理由
+ * を置く). S-35 takes the railing away and carries the way on (process/slices/S-34.md, S-35 への引き継ぎ).
+ */
+export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.minZ };
+/** 仮 (S-34, until S-35): the brass railing across the road's end (its rail's height), and the lamps at its two ends. */
+export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROAD.maxX - 0.14 };
+
+/**
+ * Where the light motes over the gap (surface layer, room-art.ts: a hint of the bridge) end their drift: they rise just over
+ * the dead end's lip and fade 1 m out over the far shore.
+ */
+export const MOTES_END_Z = EDGE_Z + 0.2 - (EDGE_Z - FAR.maxZ + 1.2);
+
+/**
+ * Where room-art.ts scatters the broken edge's surface-only shards and stones (表にだけあるもの: 割れた破片) on the dead end's
+ * lip, with their own size (the shards stand up to ~0.11 m off their line, the stones are up to 0.12 m across). The shards
+ * and stones are made there from the same numbers; keep the two together (process/slices/S-34.md 残件).
+ */
+export const LIP_HINTS: Box = { min: [-1.4, -0.1, EDGE_Z - 0.22], max: [1.4, 0.5, EDGE_Z + 0.2] };
+
+/**
+ * 定着 (S-34): what the light of the taken drop fixes onto the surface, and the way it runs — from the vidro on the
+ * dead-end pedestal across the gap and on a little over the far shore. The box holds the whole bridge (the deck drawn
+ * 0.15 m onto each shore, its rails, glass and lanterns) and everything that hints at it (the shards and stones on the lip
+ * with a margin, LIP_HINTS; the faint lines and the motes all along their drift, so none of them is left coming out of thin
+ * air; S-24's trial wall). Its far end is 1 m out over the far shore: anything surface-only put on that first metre of the
+ * far shore would be fixed away with the bridge. It leaves out the pedestal (shared: never cut anyway) and the rest of the
+ * far shore with the gate. The drop hovers inside it, but it is taken by the time the light runs. Every footing segment
+ * lies wholly inside or outside it (settle.ts segmentsCutByBox; layout.test).
+ */
+export const BRIDGE_SETTLE: SettleSweep = {
+  box: { min: [FAR.minX, -0.6, MOTES_END_Z - 0.05], max: [FAR.maxX, 2.0, LIP_HINTS.max[2] + 0.15] },
+  direction: [0, 0, -1],
+};
 
 /** 街灯 (乳白ガラス) along the way, on thin brass posts at its edges. Height of the globe's centre. */
 export const LAMPS: readonly { x: number; z: number }[] = [
@@ -353,6 +410,8 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
     box: { minX: BRIDGE.min[0], maxX: BRIDGE.max[0], minZ: BRIDGE.min[2], maxZ: BRIDGE.max[2] },
   },
   { name: 'far', material: 'stone', box: FAR },
+  // S-34: the road past the gate, the far shore's stone going on
+  { name: 'road', material: 'stone', box: ROAD },
 ];
 
 function inZone(f: FloorZone, x: number, z: number): boolean {
@@ -407,6 +466,10 @@ export const SPAWNS = {
   shelf: { feet: [-0.9, 0, 0.75] as Vec3, yaw: 2.27, pitch: -0.23 },
   /** Just inside the door, looking back into the workshop. */
   door: { feet: [0, 0, -3.75] as Vec3, yaw: Math.PI, pitch: -0.12 },
+  /** S-34: on the far shore before the gate, looking at it (and through it, the road and the town). */
+  gate: { feet: [0.3, 0, -17.4] as Vec3, yaw: 0.05, pitch: 0.02 },
+  /** S-34: on the road past the gate, the lookout's railing ahead and the town beyond it. */
+  road: { feet: [0.3, 0, -21.6] as Vec3, yaw: -0.04, pitch: -0.07 },
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;

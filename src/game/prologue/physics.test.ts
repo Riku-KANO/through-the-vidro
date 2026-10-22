@@ -4,6 +4,7 @@ import * as THREE from 'three/webgpu';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { activeSegmentIds, type Sphere, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
+import { settledSegmentIds, sweepFront } from '../../layers/settle';
 import { boxInsideSphere, SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { type AssembledAsset, addAssetColliders, assembleAsset } from '../assets';
 import { loadGlbInNode } from '../assets/node-glb.test-helper';
@@ -15,6 +16,7 @@ import {
   ANNEALER,
   BENCH,
   BRIDGE,
+  BRIDGE_SETTLE,
   bridgeFooting,
   DROP,
   deckHeight,
@@ -25,10 +27,14 @@ import {
   FURNACE_FACING,
   FURNACE_MOUTH,
   GATE,
+  GATE_OPEN_DEG,
   GRATE,
+  gateLeafDirection,
+  LOOKOUT,
   MOUTH_PIPE_REACH,
   PEDESTAL_ID,
   PEDESTAL_ORB,
+  ROAD,
   SPAWNS,
   type SpawnName,
   TRIAL_SURFACE_WALL,
@@ -42,10 +48,11 @@ import {
   BackFooting,
   deckSegmentShape,
   FallGuard,
+  GateLeaves,
   insideAnySphere,
   SurfaceColliders,
 } from './physics';
-import { PrologueSession } from './session';
+import { FINALE_SECONDS, PrologueSession } from './session';
 
 /**
  * The prologue room in a real Rapier world (Node): the same colliders the scene builds (the room's own, and the
@@ -73,7 +80,9 @@ function room() {
   addRoomColliders(R, world);
   const furniture = addAssetColliders(R, world, workshop.colliders);
   const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
-  return { world, footing, furniture };
+  // S-34: the gate's two leaves, shut until the drop is taken
+  const gate = new GateLeaves(R, world);
+  return { world, footing, furniture, gate };
 }
 
 function body(r: ReturnType<typeof room>, at: SpawnName | { feet: Vec3; yaw: number }) {
@@ -545,5 +554,165 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
     // out in front, S-31) — a round thing makes the body slide along it rather than come to rest
     expect(closest).toBeLessThan(GRATE.near + 0.5);
     expect(closest).toBeGreaterThan(1.0);
+  });
+});
+
+describe('S-34: the close — the settled bridge and the open gate (光が世界を戻す)', () => {
+  const OPEN = (GATE_OPEN_DEG * Math.PI) / 180;
+  const allSettled = () => settledSegmentIds(bridgeFooting(), BRIDGE_SETTLE, sweepFront(BRIDGE_SETTLE, 1));
+
+  it('the light’s box takes in every footing segment of the bridge', () => {
+    expect(allSettled()).toEqual(bridgeFooting().map((s) => s.id));
+  });
+
+  it('the settled bridge holds with no sphere at all: the body walks across it with the vidro in hand, no fence', () => {
+    const r = room();
+    r.footing.settle(allSettled());
+    r.footing.sync([]);
+    expect(r.footing.activeCount).toBe(r.footing.segments.length);
+    const p = body(r, { feet: [0, 0, EDGE_Z + 1.2], yaw: 0 });
+    const s = walk(r, p, forward, 5);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - deckHeight(q.z)) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeLessThan(FAR.maxZ - 1);
+    // and back again, from the far shore to the dead end (橋を戻る)
+    const q = body(r, { feet: [0, 0, FAR.maxZ - 0.8], yaw: Math.PI });
+    const back = walk(r, q, forward, 5);
+    expect(back.every((b) => b.grounded && b.y > -0.05)).toBe(true);
+    expect(q.feet.z).toBeGreaterThan(EDGE_Z + 0.5);
+  });
+
+  it('a sphere that comes and goes later leaves the settled segments on (they never switch off again)', () => {
+    const r = room();
+    r.footing.settle(allSettled());
+    r.footing.sync([fullSphere]);
+    r.footing.sync([{ ...fullSphere, materialize: { target: 0 as const } }]);
+    r.footing.sync([]);
+    expect(r.footing.activeCount).toBe(r.footing.segments.length);
+    expect(r.footing.settledCount).toBe(r.footing.segments.length);
+  });
+
+  it('only the segments the light has passed hold: ahead of the front the fence of the sphere still decides', () => {
+    const r = room();
+    const half = settledSegmentIds(r.footing.segments, BRIDGE_SETTLE, sweepFront(BRIDGE_SETTLE, 0.5));
+    expect(half.length).toBeGreaterThan(0);
+    expect(half.length).toBeLessThan(r.footing.segments.length);
+    r.footing.settle(half);
+    r.footing.sync([]);
+    expect([...r.footing.activeIds]).toEqual(half);
+  });
+
+  it('shut, the gate stops the body on the far shore', () => {
+    const r = room();
+    const p = body(r, { feet: [0.2, 0, FAR.maxZ - 0.8], yaw: 0 });
+    walk(r, p, forward, 5);
+    expect(p.feet.z).toBeGreaterThan(GATE.z);
+    expect(p.feet.z).toBeLessThan(GATE.z + 0.6);
+  });
+
+  it('open, the gate lets the body through onto the short road, which ends at the lookout’s railing', () => {
+    const r = room();
+    r.gate.sync(OPEN);
+    const p = body(r, { feet: [0.2, 0, FAR.maxZ - 0.8], yaw: 0 });
+    const s = walk(r, p, forward, 8);
+    expect(s.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
+    expect(p.feet.z).toBeLessThan(GATE.z - 1);
+    // the railing, not the edge, stops it: 柵 (行き止まりの理由), with the road under the feet up to it
+    expect(p.feet.z).toBeGreaterThan(LOOKOUT.z);
+    expect(p.feet.z).toBeLessThan(LOOKOUT.z + BODY_RADIUS + 0.2);
+    expect(p.feet.z).toBeGreaterThan(ROAD.minZ);
+    expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+  });
+
+  it('open, its leaves stand along the road’s edges: walking the road by either edge, nothing is in the way', () => {
+    const r = room();
+    r.gate.sync(OPEN);
+    for (const x of [ROAD.minX + 0.45, ROAD.maxX - 0.45]) {
+      const p = body(r, { feet: [x, 0, FAR.minZ + 1.2], yaw: 0 });
+      const s = walk(r, p, forward, 2.5);
+      expect(Math.min(...s.slice(30).map((q) => q.speed))).toBeGreaterThan(1.2);
+      expect(p.feet.z).toBeLessThan(GATE.z - 1.5);
+    }
+  });
+
+  it('half open, the leaves are where they are drawn (their colliders swing with them), the gap between them lets you by', () => {
+    const r = room();
+    const a = OPEN * 0.5;
+    r.gate.sync(a);
+    r.world.step();
+    const solid = (x: number, y: number, z: number): boolean => {
+      let n = 0;
+      r.world.intersectionsWithPoint({ x, y, z }, () => {
+        n++;
+        return true;
+      });
+      return n > 0;
+    };
+    for (const side of [1, -1] as const) {
+      // a point in the middle of the swung leaf (from its hinge along layout's gateLeafDirection, as finale.ts draws it)
+      // is solid; where the leaf stood shut is not any more
+      const u = GATE.halfWidth / 2;
+      const [dx, dz] = gateLeafDirection(side, a);
+      expect(solid(side * GATE.halfWidth + dx * u, 1, GATE.z + dz * u)).toBe(true);
+      expect(solid(side * u, 1, GATE.z)).toBe(false);
+    }
+    const mid = body(r, { feet: [0, 0, GATE.z + 1.0], yaw: 0 });
+    walk(r, mid, forward, 3);
+    expect(mid.feet.z).toBeLessThan(GATE.z - 1);
+  });
+
+  it('a surface-only wall in the light’s way stays cut once the light has passed, with no sphere', () => {
+    const r = room();
+    const wall = new SurfaceColliders(
+      R,
+      r.world,
+      splitSurface('trial-wall', TRIAL_SURFACE_WALL, SURFACE_SEGMENT),
+    );
+    const settled = settledSegmentIds(wall.segments, BRIDGE_SETTLE, sweepFront(BRIDGE_SETTLE, 1));
+    expect(settled).toHaveLength(wall.segments.length);
+    wall.settle(settled);
+    wall.sync([]);
+    expect(wall.cutCount).toBe(wall.segments.length);
+  });
+
+  it('the whole close, played as the room plays it: drop → light → back over the bridge → pick up on it → through the gate', () => {
+    const r = room();
+    const session = new PrologueSession({
+      orbStart: 'hand',
+      pedestals: { [PEDESTAL_ID]: PEDESTAL_ORB },
+      footing: r.footing.segments,
+      drop: DROP,
+      settle: BRIDGE_SETTLE,
+    });
+    const tick = () => {
+      session.step(DT, { wantPeek: false });
+      r.footing.sync(session.spheres());
+      r.footing.settle(session.settledFooting());
+      r.gate.sync(OPEN * Math.min(1, session.gateProgress));
+    };
+    expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, SPAWNS['dead-end'].feet)).toBe('place');
+    for (let i = 0; i < 60; i++) tick();
+    expect(session.interact({ kind: 'drop' }, [DROP[0], 0, FAR.maxZ + 0.3])).toBe('touch-drop');
+    for (let t = 0; t < 1.3 + FINALE_SECONDS + 0.2; t += DT) tick();
+    expect(session.dropState).toBe('taken');
+    expect(r.footing.settledCount).toBe(r.footing.segments.length);
+    // on the bridge, facing the pedestal: the vidro comes (the exception to 裏の足場の上では拾えない)
+    const p = body(r, { feet: [0.1, deckHeight(EDGE_Z - 0.8), EDGE_Z - 0.8], yaw: 0 });
+    for (let i = 0; i < 20; i++) {
+      tick();
+      r.world.step();
+      p.update(DT, { ...forward, move: { x: 0, y: 0 } });
+    }
+    const f = p.feet;
+    expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, [f.x, f.y, f.z])).toBe('pickup');
+    const samples: { y: number; z: number; grounded: boolean }[] = [];
+    for (let t = 0; t < 7; t += DT) {
+      tick();
+      r.world.step();
+      p.update(DT, forward);
+      samples.push({ y: p.feet.y, z: p.feet.z, grounded: p.grounded });
+    }
+    expect(session.spheres()).toEqual([]);
+    expect(samples.every((q) => q.grounded && q.y > -0.05)).toBe(true);
+    expect(p.feet.z).toBeLessThan(GATE.z - 1);
   });
 });

@@ -19,19 +19,25 @@ import { PlayerController, type PlayerIntent } from '../player/player';
 import type { Autopilot } from './autopilot';
 import { createDivePath } from './dive-path';
 import { EventBus, eventName, type PrologueEvent } from './events';
+import { buildFinale, gateAngle, settleGlow } from './finale';
 import {
   BENCH_ORB,
   BRIDGE,
+  BRIDGE_SETTLE,
   bridgeFooting,
   DROP,
   DROP_REACH,
   EDGE_Z,
   FACING_DEG,
   FAR,
+  GATE,
+  GATE_OPEN_DEG,
+  LOOKOUT,
   lookDirection,
   PEDESTAL_ID,
   PEDESTAL_ORB,
   REACH,
+  ROAD,
   SPAWNS,
   type SpawnName,
   TRIAL_SURFACE_WALL,
@@ -43,11 +49,19 @@ import {
   BackFooting,
   deckSegmentShape,
   FallGuard,
+  GateLeaves,
   insideAnySphere,
   SurfaceColliders,
 } from './physics';
 import { buildRoomArt } from './room-art';
-import { type InteractTarget, PrologueSession, peekModifier, SHAKE_AMPLITUDE } from './session';
+import {
+  type FinaleEvent,
+  finaleFront,
+  type InteractTarget,
+  PrologueSession,
+  peekModifier,
+  SHAKE_AMPLITUDE,
+} from './session';
 import { pickTarget, type TargetCandidate } from './targets';
 
 /**
@@ -117,8 +131,32 @@ export interface RoomProbe {
   fallRescues: number;
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
-  autoplay: { step: string; done: boolean } | null;
-  layout: { edgeZ: number; farZ: number; pedestalOrb: Vec3; drop: Vec3 };
+  /**
+   * The script's step, whether it is done, and (S-34 review: where a long frame falls) the longest frame of the play so
+   * far, in which step it fell and when (room clock), and the longest frame of each step. A frame is the time between two
+   * updates of the room while it is played, so it counts the rendering of the frame before; it is put down to the step
+   * that frame was in.
+   */
+  autoplay: {
+    step: string;
+    done: boolean;
+    worstMs: number;
+    worstStep: string;
+    worstAt: number;
+    steps: Record<string, number>;
+  } | null;
+  /** S-34: the close — the drop's light settling the bridge, the gate opening (as drawn and collided now). */
+  finale: FinaleProbe;
+  layout: {
+    edgeZ: number;
+    farZ: number;
+    pedestalOrb: Vec3;
+    drop: Vec3;
+    /** S-34: the gate, the road's end past it and the lookout's railing there. */
+    gateZ: number;
+    roadEndZ: number;
+    lookoutZ: number;
+  };
   /** The workshop's interior from its glb (S-24), once the room is built. */
   workshop: WorkshopProbe | null;
   /**
@@ -126,6 +164,25 @@ export interface RoomProbe {
    * collider a placed orb has cut away (S-28). null without the wall.
    */
   trial: { segments: number; off: number } | null;
+}
+
+/** S-34: the close as the room shows it (tests/e2e/S-34-*.spec.ts). */
+export interface FinaleProbe {
+  /**
+   * 0..1, linear in time: the light across the bridge (from the drop taken, SETTLE_SECONDS), the gate's opening (from when
+   * the light has reached the far shore, GATE_OPEN_SECONDS; session.ts).
+   */
+  settle: number;
+  gate: number;
+  /** Footing segments of the bridge the light has fixed (solid for good). */
+  settledSegments: number;
+  /** Degrees the gate's leaves have swung, and whether that is open (all but the last tenth of the swing). */
+  gateDeg: number;
+  gateOpen: boolean;
+  /** World z of the light's front over the bridge; null before the drop is taken. */
+  frontZ: number | null;
+  /** The close's events (session.ts FinaleEvent): 'settle', 'gateOpen', 'settled', 'gateOpened'. */
+  events: string[];
 }
 
 /** What the room built from the workshop's glb (tests/e2e/S-24-*.spec.ts). */
@@ -148,10 +205,14 @@ export interface PrologueRoom extends DiveWorld {
   readonly probe: RoomProbe;
   /** The orb's and the room's events (覗く・置く・拾う・震える, 雫): the port for S-09's sounds. */
   readonly events: EventBus<PrologueEvent>;
+  /** S-34: the close's events (the light settling the bridge, the gate opening), apart from `events`. */
+  readonly finale: EventBus<FinaleEvent>;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
 const DROP_ARRIVAL_GLOW_SECONDS = 0.9;
+/** 仮 (S-34): the keystone lamp is lit by the time the gate is this far (0..1) into its opening. */
+const KEYSTONE_LIGHTS = 0.25;
 const MAX_EVENTS = 40;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
@@ -192,6 +253,7 @@ interface Shell {
   camera: THREE.PerspectiveCamera;
   probe: RoomProbe;
   events: EventBus<PrologueEvent>;
+  finale: EventBus<FinaleEvent>;
 }
 
 /** The built room: everything heavy (Rapier, the art, the pipelines). */
@@ -219,6 +281,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   // until the body exists, the camera stands where the player will
   camera.position.set(s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]);
   const events = new EventBus<PrologueEvent>();
+  const finale = new EventBus<FinaleEvent>();
   const probe: RoomProbe = {
     ready: false,
     playing: false,
@@ -255,8 +318,27 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     triangles: 0,
     fallRescues: 0,
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
-    autoplay: opts.autopilot ? { step: '', done: false } : null,
-    layout: { edgeZ: EDGE_Z, farZ: FAR.maxZ, pedestalOrb: PEDESTAL_ORB, drop: DROP },
+    autoplay: opts.autopilot
+      ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
+      : null,
+    finale: {
+      settle: 0,
+      gate: 0,
+      settledSegments: 0,
+      gateDeg: 0,
+      gateOpen: false,
+      frontZ: null,
+      events: [],
+    },
+    layout: {
+      edgeZ: EDGE_Z,
+      farZ: FAR.maxZ,
+      pedestalOrb: PEDESTAL_ORB,
+      drop: DROP,
+      gateZ: GATE.z,
+      roadEndZ: ROAD.minZ,
+      lookoutZ: LOOKOUT.z,
+    },
     workshop: null,
     trial: null,
   };
@@ -276,6 +358,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     standingFov: FOV_DEFAULT,
     probe,
     events,
+    finale,
     pose(u, outPos, outTarget) {
       dive.pose(u, outPos, outTarget);
       if (!built) return;
@@ -285,7 +368,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built.fogRange.far.value = 150 + away * 3;
     },
     prepare() {
-      building ??= buildRoom(ctx, opts, { camera, probe, events }).then((b) => {
+      building ??= buildRoom(ctx, opts, { camera, probe, events, finale }).then((b) => {
         if (disposed) {
           b.dispose();
           return;
@@ -308,13 +391,14 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built?.dispose();
       built = null;
       events.clear();
+      finale.clear();
     },
   };
 }
 
 async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Promise<BuiltRoom> {
   const { renderer, canvas, overlay, quality } = ctx;
-  const { camera, probe, events } = shell;
+  const { camera, probe, events, finale } = shell;
   // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col.
   // Loaded alongside Rapier, before anything that would need releasing if the file failed to load.
   const [R, workshop] = await Promise.all([
@@ -332,12 +416,20 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const trial = trialWall
     ? new SurfaceColliders(R, world, splitSurface('trial-wall', TRIAL_SURFACE_WALL, SURFACE_SEGMENT))
     : null;
+  // S-34: the gate's leaves, shut until the drop is taken
+  const gateLeaves = new GateLeaves(R, world);
   world.step();
 
   const shadowsBefore = renderer.shadowMap.enabled;
   renderer.shadowMap.enabled = true;
-  const field = new LayerField();
-  const art = buildRoomArt(renderer, quality, field, trialWall ? { trialWall: TRIAL_SURFACE_WALL } : {});
+  // S-34: the field also draws what the drop's light has settled (the bridge, fixed onto the surface)
+  const field = new LayerField({ settle: true });
+  const art = buildRoomArt(renderer, quality, field, {
+    ...(trialWall ? { trialWall: TRIAL_SURFACE_WALL } : {}),
+    // the gate is the close's (finale.ts): its leaves open
+    gate: false,
+  });
+  const finaleArt = buildFinale(quality, field, art.scene);
   const workshopTriangles = triangleCount(workshop.assembled.root);
   for (const { object, layer } of workshop.assembled.layered) field.assign(object, layer);
   art.scene.add(workshop.assembled.root);
@@ -387,6 +479,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     footing: footing.segments,
     surface: trial?.segments ?? [],
     drop: DROP,
+    settle: BRIDGE_SETTLE,
   });
   const spawn = SPAWNS[opts.spawn];
   const player = new PlayerController(world, {
@@ -410,6 +503,17 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   if (opts.growHold !== null) {
     session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
   }
+  // S-34 dev hold (?finaleHold=<seconds since the drop was taken>, with a spawn): the orb on its pedestal, the drop taken
+  // that long ago, and the close held at that moment (the light, the settled segments, the gate: drawn, collided and asked
+  // by the pickup alike). &finaleOrb=hand: the vidro then taken back (from where it stands: the light must have fixed the
+  // footing there), so what is left of the bridge is what the light fixed.
+  const finaleHold = ctx.params.has('spawn') ? holdSeconds(ctx.params.get('finaleHold')) : null;
+  if (finaleHold !== null) {
+    if (session.orbPlace !== 'pedestal') session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
+    session.holdFinale(finaleHold);
+    if (ctx.params.get('finaleOrb') === 'hand')
+      session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, spawn.feet);
+  }
 
   probe.orb = session.orbPlace;
   probe.bridgeSegments = footing.segments.length;
@@ -418,6 +522,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     if (probe.events.length > MAX_EVENTS) probe.events.shift();
     if (e.type === 'dropTaken') arrivalGlow = DROP_ARRIVAL_GLOW_SECONDS;
     events.emit(e);
+  });
+  // S-34: the close on its own bus (its names are not S-16's sounds)
+  const offFinale = session.finaleEvents.on((e) => {
+    probe.finale.events.push(e.type);
+    finale.emit(e);
   });
 
   let playing = false;
@@ -476,6 +585,29 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     body.vy = v.y;
     body.vz = v.z;
   };
+  /** S-34 review: the longest frames of the scripted play, by step (probe.autoplay). */
+  let frameAt: number | null = null;
+  let frameStep = '';
+  const timeFrame = (): void => {
+    const a = probe.autoplay;
+    const pilot = opts.autopilot;
+    if (!a || !pilot || !playing) {
+      frameAt = null;
+      return;
+    }
+    const now = performance.now();
+    if (frameAt !== null) {
+      const ms = now - frameAt;
+      if (ms > (a.steps[frameStep] ?? 0)) a.steps[frameStep] = ms;
+      if (ms > a.worstMs) {
+        a.worstMs = ms;
+        a.worstStep = frameStep;
+        a.worstAt = time;
+      }
+    }
+    frameAt = now;
+    frameStep = pilot.current;
+  };
   /** Moves an eased 0..1 toward 0 or 1 by at most `k`. */
   const ease = (now: number, on: boolean, k: number): number =>
     on ? Math.min(1, now + k) : Math.max(0, now - k);
@@ -495,6 +627,33 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       session.refusePeek();
       probe.lastAction = 'peek-denied';
     }
+  };
+
+  // S-34: the close as the session says (or as held): the settled bridge and its band of light, the gate
+  const settledView = { sweep: BRIDGE_SETTLE, front: 0, glow: 0 };
+  const openRad = (GATE_OPEN_DEG * Math.PI) / 180;
+  const close = { settle: 0, gate: 0, angle: 0, front: null as number | null };
+  const stageFinale = (): void => {
+    const elapsed = session.finaleElapsed;
+    // the light from the drop taken; the gate from when the light has reached the far shore (session.ts)
+    close.settle = session.settleProgress;
+    close.gate = session.gateProgress;
+    if (elapsed === null) {
+      close.front = null;
+      field.setSettled(null);
+    } else {
+      settledView.front = finaleFront(BRIDGE_SETTLE, elapsed);
+      settledView.glow = settleGlow(close.settle);
+      close.front = settledView.front;
+      field.setSettled(settledView);
+    }
+    footing.settle(session.settledFooting());
+    if (trial?.settle(session.settledSurface()) && probe.trial) probe.trial.off = trial.cutCount;
+    close.angle = gateAngle(close.gate);
+    finaleArt.setGate(close.angle);
+    gateLeaves.sync(close.angle);
+    // the keystone lamp lights as the gate starts to open (the light has come to it), on the game's one curve
+    finaleArt.setKeystone(glassEase(Math.min(1, close.gate / KEYSTONE_LIGHTS)));
   };
 
   /** The drop is real where it is drawn (the same as the session's rule, but also under the dev holds). */
@@ -593,6 +752,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       art.drop.scale.setScalar(1 - 0.75 * u);
       art.drop.rotation.y = time * 2;
     }
+    stageFinale();
   };
 
   const publish = (): void => {
@@ -625,6 +785,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     probe.dropTaken = session.dropState === 'taken';
     probe.dropMaterialized = dropDrawn();
     probe.backPassFrames = pipeline.backPassFrames;
+    const f = probe.finale;
+    f.settle = close.settle;
+    f.gate = close.gate;
+    f.settledSegments = footing.settledCount;
+    f.gateDeg = (close.angle * 180) / Math.PI;
+    f.gateOpen = close.angle >= openRad * 0.9;
+    // the front is measured along the sweep's direction (straight down -Z over the bridge)
+    f.frontZ = close.front === null ? null : close.front / BRIDGE_SETTLE.direction[2];
     orbScreenCircle(frame.center, HAND_ORB_RADIUS, camera.fov, camera.aspect, probe.orbScreen);
     probe.orbScreen.visible = frame.visible;
     if (probe.autoplay && opts.autopilot) {
@@ -658,6 +826,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     update(dt, t) {
       time += dt;
+      timeFrame();
       art.animate(t);
       let intent = idle;
       let wantPeek = false;
@@ -711,10 +880,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         feetAt[2] = body.fz;
         // the same test as 拾う前の安全確認 (S-02 segmentsUnder), on the segments that are solid now;
         // only looked up near the bridge, so most frames allocate nothing
+        // (S-34: a segment the drop's light has settled is solid for good: not footing the orb holds any more)
         onBackFooting =
           body.fz < BRIDGE.max[2] + 0.5 &&
           body.fz > BRIDGE.min[2] - 0.5 &&
-          segmentsUnder(feetAt, footing.segments).some((seg) => footing.activeIds.includes(seg.id));
+          segmentsUnder(feetAt, footing.segments).some(
+            (seg) => footing.activeIds.includes(seg.id) && !footing.isSettled(seg.id),
+          );
         // 落下死はない: the last line of defence if the body ever drops below the walkways. It should never
         // act; when it does it says so (the e2e counts console warnings) and counts on the probe.
         guard.observe(feetAt, player.grounded, onBackFooting);
@@ -765,21 +937,32 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     dispose() {
       offInput();
       offEvents();
+      offFinale();
       session.events.clear();
+      session.finaleEvents.clear();
       input.dispose();
       prompt.remove();
       player.dispose();
       footing.dispose();
       furniture.dispose();
       trial?.dispose();
+      gateLeaves.dispose();
       world.free();
       workshop.dispose();
       pipeline.dispose();
       field.dispose();
+      finaleArt.dispose();
       art.dispose();
       renderer.shadowMap.enabled = shadowsBefore;
     },
   };
+}
+
+/** A dev hold in seconds (?finaleHold), or null. */
+function holdSeconds(v: string | null): number | null {
+  if (v === null || v.trim() === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /** Triangles drawn under `root` (indexed or not). */

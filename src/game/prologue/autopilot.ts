@@ -1,11 +1,12 @@
 import type { Vec3 } from '../../layers/footing';
 import type { PlayerIntent } from '../player/player';
-import { BENCH_ORB, DROP, EDGE_Z, FAR, PEDESTAL_ORB } from './layout';
+import { BENCH_ORB, DROP, EDGE_Z, FAR, GATE, LIGHTHOUSE, PEDESTAL_ORB } from './layout';
 import type { DropState, OrbPlace } from './session';
 
 /**
  * ?autoplay=1: plays the prologue the way a player would, through the same intents (move, look, peek,
- * 置く・拾う・調べる): take the vidro → the one way → the dead end → peek → place → cross → touch the drop.
+ * 置く・拾う・調べる): take the vidro → the one way → the dead end → peek → place → cross → touch the drop
+ * → (S-34) watch the light settle the bridge → back over it → pick the vidro up on it → through the open gate.
  * Presentation timing only (seconds below are not design values).
  */
 export interface PilotState {
@@ -51,6 +52,12 @@ const SCRIPT: Step[] = [
   { kind: 'walk', name: 'walk-far', to: [0.45, FAR.maxZ - 0.6], within: 0.3 },
   { kind: 'use', name: 'touch', at: DROP, until: (s) => s.drop === 'taken', linger: 1.0 },
   { kind: 'look', name: 'look-back', at: [PEDESTAL_ORB[0], 1.4, PEDESTAL_ORB[2] + 3], seconds: 2.5 },
+  // S-34: the light has settled the bridge: back over it, the vidro picked up on it, through the open gate
+  { kind: 'walk', name: 'walk-back', to: [0.1, EDGE_Z - 0.8], within: 0.3 },
+  { kind: 'use', name: 'pick-up', at: PEDESTAL_ORB, until: (s) => s.orb === 'hand', linger: 0.8 },
+  { kind: 'walk', name: 'walk-over', to: [0.2, FAR.maxZ - 0.8], within: 0.3 },
+  { kind: 'walk', name: 'walk-gate', to: [0, GATE.z - 1.8], within: 0.35 },
+  { kind: 'look', name: 'look-town', at: [LIGHTHOUSE[0], 14, LIGHTHOUSE[2]], seconds: 1.5 },
 ];
 
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));

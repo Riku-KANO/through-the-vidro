@@ -17,7 +17,10 @@ export const title =
  * URL switches:
  *   (none)         the whole prologue: loading → home → dive → the workshop
  *   autoplay=1     the same, played by the script (S-04's home autoplay, then the in-room autopilot)
- *   direct=1       start in the workshop without the home; spawn=bench|furnace|shelf|door|path|dead-end|far
+ *   direct=1       start in the workshop without the home; spawn=bench|furnace|shelf|door|path|dead-end|far|gate|road
+ *                  (gate/road: S-34's gate and the road past it)
+ *   finaleHold=<s> (S-34, with a spawn) as if the drop had been taken that many seconds ago, held there: the light over
+ *                  the bridge, what it has settled and the gate; &finaleOrb=hand: the vidro then taken back
  *                  (furnace/shelf/door: S-24's views of the interior)
  *   trial=surface-wall   a surface-only wall at the dead end (S-24's trial): its collider is cut inside a placed
  *                  orb's sphere, and the orb cannot be picked up while you stand in it (S-28)

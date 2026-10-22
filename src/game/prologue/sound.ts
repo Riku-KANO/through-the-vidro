@@ -16,6 +16,7 @@ import {
   WIND_SOURCE,
 } from '../../audio/ambience';
 import { createVidroEngine } from '../../audio/engine';
+import { FINALE_LEVELS, type FinaleBanks, finaleSources, loadFinaleBanks } from '../../audio/finale';
 import {
   type FloorMaterial,
   FOOTSTEP_SOURCES,
@@ -35,11 +36,14 @@ import type { GlassStrength } from '../../core/audio/glass';
 import { renderOffline } from '../../core/audio/offline';
 import { mulberry32, randomSeed } from '../../core/audio/rng';
 import type { Vec3 } from '../../layers/footing';
+import { sweepSpan } from '../../layers/settle';
+import { glassEase } from '../../layers/tween';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
 import { EYE_HEIGHT, WALK_SPEED } from '../player/constants';
 import { type EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
+  BRIDGE_SETTLE,
   DROP,
   EDGE_Z,
   FAR,
@@ -57,6 +61,7 @@ import {
   WORKSHOP_TOP,
 } from './layout';
 import type { RoomProbe } from './room';
+import { type FinaleEvent, GATE_OPEN_SECONDS, SETTLE_SECONDS } from './session';
 
 /**
  * 序章の音 (S-16): the prologue room's events (room.events, S-06) answered with S-09's sounds.
@@ -76,6 +81,9 @@ import type { RoomProbe } from './room';
  *    the engine is there.
  *  - S-25: the workshop's own sounds where S-24 drew them (layout.ts): the furnace burning low in its mouth, a drop
  *    falling from the ladle into the tub, the chime above the door rung by the door's draughts.
+ *  - S-34: the close — the drop's light settling the bridge (from the light, following it across) and the gate opening
+ *    (from the gate), once each as they start (room.finale; src/audio/finale.ts). Played through the engine's voices
+ *    like any event's sound, but logged and counted apart from the cues (`probe.finale`): the cues are S-16's table.
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
 
@@ -187,12 +195,39 @@ export function answer(event: PrologueEvent, player: CuePlayer, log: CueLog): vo
 /** What the sound needs from the room (PrologueRoom satisfies it). */
 export interface SoundRoom {
   readonly events: EventBus<PrologueEvent>;
+  /** S-34: the close (the light settling the bridge, the gate opening), apart from `events`. */
+  readonly finale?: EventBus<FinaleEvent>;
   /** The game camera: the listener, and the frame the hand orb is held in. */
   readonly camera: THREE.Object3D;
   readonly probe: Pick<
     RoomProbe,
     'orb' | 'peekAmount' | 'handPresence' | 'time' | 'playing' | 'position' | 'speed' | 'footfalls'
-  >;
+  > & {
+    /** S-34: where the settling light's front is (world z), null when none. */
+    finale?: { readonly frontZ: number | null };
+  };
+}
+
+/* ---------- S-34: the close of the prologue ---------- */
+
+/** The close's sounds, timed to the room's close and moving on its curve (session.ts, layers/tween glassEase). */
+export const FINALE_SOURCES = finaleSources({
+  settleSeconds: SETTLE_SECONDS,
+  gateSeconds: GATE_OPEN_SECONDS,
+  ease: glassEase,
+});
+/** Where the settling light's sound stands: over the deck, at the front (its z from the room). */
+const SETTLE_SOUND_Y = 0.7;
+/** Where the light starts (world z): the near face of what it settles, along its way (layout.ts BRIDGE_SETTLE). */
+const SETTLE_SOUND_FROM_Z = sweepSpan(BRIDGE_SETTLE)[0] / BRIDGE_SETTLE.direction[2];
+/** The gate's sound: from the middle of the gate, at the height of its hinges' upper knuckles. */
+export const GATE_SOUND: Vec3 = [0, 1.4, GATE.z];
+
+/** One of the close's sounds that played: which, from where, how far from the listener when it started. */
+export interface FinalePlayed {
+  event: 'settle' | 'gateOpen';
+  at: [number, number, number];
+  distance: number;
 }
 
 /* ---------- S-22: where the workshop's ambience is placed ---------- */
@@ -327,14 +362,20 @@ function placeAmbience(
   return { player, placed };
 }
 
-/** Everything the room's footsteps and ambience play from (S-22). */
+/** Everything the room's footsteps and ambience play from (S-22), and (S-34) the close's two sounds. */
 export interface SoundBanks {
   footsteps: FootstepBanks;
   ambience: AmbienceBanks;
+  /** S-34. Without it the close stays silent (and says so: probe.finale.refused). */
+  finale?: FinaleBanks;
 }
 
 export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<SoundBanks> {
-  return { footsteps: await loadFootstepBanks(ctx, signal), ambience: await loadAmbienceBanks(ctx, signal) };
+  return {
+    footsteps: await loadFootstepBanks(ctx, signal),
+    ambience: await loadAmbienceBanks(ctx, signal),
+    finale: await loadFinaleBanks(ctx, FINALE_SOURCES, signal),
+  };
 }
 
 /* ---------- S-22: offline renders for the sensor (OfflineAudioContext, through the game's engine) ---------- */
@@ -342,11 +383,11 @@ export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal
 export type SoundLabSpec =
   /**
    * One sound of a bank at unity, onto the ambience bus (no emitter), in a room's reverb. The loops (wind, S-25 fire)
-   * play on from the start.
+   * play on from the start. S-34: 'finale' #0 is the bridge settling, #1 the gate opening.
    */
   | {
       kind: 'sound';
-      bank: FloorMaterial | 'chimes' | 'drops' | 'wind' | 'fire' | 'door-chime';
+      bank: FloorMaterial | 'chimes' | 'drops' | 'wind' | 'fire' | 'door-chime' | 'finale';
       index: number;
       seconds: number;
       room?: 'workshop' | 'dome';
@@ -403,7 +444,9 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
                   ? WIND_SOURCE
                   : bank === 'fire'
                     ? FURNACE_SOURCE
-                    : FOOTSTEP_SOURCES[bank][index];
+                    : bank === 'finale'
+                      ? [FINALE_SOURCES.settle, FINALE_SOURCES.gate][index]
+                      : FOOTSTEP_SOURCES[bank][index];
         if (!source) throw new RangeError(`no sound ${bank} #${index}`);
         const [buf] = await loadBank(ctx, [source]);
         if (!buf) throw new Error(`sound ${source.id} did not render`);
@@ -491,8 +534,23 @@ export interface SoundProbe {
   readonly footsteps: FootstepsProbe;
   /** S-22: the workshop's ambience. */
   readonly ambience: AmbienceProbe;
+  /** S-34: the close's sounds (the bridge settling, the gate opening), counted apart from the cues. */
+  readonly finale: FinaleSoundProbe;
   /** S-22 sensor (not enumerable, so probes copied by the e2e leave it out): renders a sound offline. */
   readonly render: (spec: SoundLabSpec) => Promise<SoundLabResult>;
+}
+
+/**
+ * S-34: the close's sounds. Each of 'settle' and 'gateOpen' is answered once, as it happens: played (with where from), or
+ * refused (no audio yet, its sounds not loaded, or the engine refused it) and then never played later.
+ */
+export interface FinaleSoundProbe {
+  /** Its sounds are loaded and its emitters placed. */
+  ready: boolean;
+  played: FinalePlayed[];
+  refused: string[];
+  /** Voices the engine started for them (the engine's whole count takes them in: engineVoices). */
+  voicesStarted: number;
 }
 
 /** One footstep that sounded: the floor (zone and material) where the foot came down, and how. */
@@ -699,6 +757,58 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
 
   const off = room.events.on((e) => answer(e, player, log));
 
+  // S-34: the close's two sounds, once their buffers are loaded; apart from the cues (S-16's table)
+  let finale: { banks: FinaleBanks; settle: Emitter; gate: Emitter } | null = null;
+  const finaleLog = { played: [] as FinalePlayed[], refused: [] as string[], voices: 0 };
+  const settleAt = { x: 0, y: SETTLE_SOUND_Y, z: SETTLE_SOUND_FROM_Z };
+  /**
+   * The settling light's sound goes with its front over the bridge. The moment the light starts, the room has not drawn
+   * its front yet (the event comes from the session's step): it starts where the light does.
+   */
+  const followFront = (): void => {
+    if (!finale) return;
+    const z = roomProbe.finale?.frontZ;
+    settleAt.z = z === null || z === undefined ? SETTLE_SOUND_FROM_Z : z;
+    finale.settle.setPosition(settleAt);
+  };
+  /** The light is on its way over the bridge (from 'settle' to 'settled'): only then does its sound move. */
+  let lightRunning = false;
+  /** The light starting across / the gate starting to open: its sound, once, now (or refused, never later). */
+  const playFinale = (event: FinaleEvent): void => {
+    if (event.type === 'settle') lightRunning = true;
+    if (event.type === 'settled') lightRunning = false;
+    if (disposed || (event.type !== 'settle' && event.type !== 'gateOpen')) return;
+    const kind = event.type;
+    const buffer = kind === 'settle' ? finale?.banks.settle : finale?.banks.gate;
+    if (!engine || !finale || !buffer) {
+      finaleLog.refused.push(kind);
+      return;
+    }
+    follow();
+    followFront();
+    const emitter = kind === 'settle' ? finale.settle : finale.gate;
+    const where: [number, number, number] =
+      kind === 'settle'
+        ? [settleAt.x, settleAt.y, settleAt.z]
+        : [GATE_SOUND[0], GATE_SOUND[1], GATE_SOUND[2]];
+    const level = kind === 'settle' ? FINALE_LEVELS.settle : FINALE_LEVELS.gate;
+    const before = engine.snapshot().voicesStarted;
+    const started = engine.startVoice({ level, emitter }, (ctx, destination, when) =>
+      scheduleBuffer(ctx, destination, buffer, when, { gain: level }),
+    );
+    finaleLog.voices += engine.snapshot().voicesStarted - before;
+    if (!started) {
+      finaleLog.refused.push(kind);
+      return;
+    }
+    finaleLog.played.push({
+      event: kind,
+      at: where,
+      distance: Math.hypot(where[0] - ear.x, where[1] - ear.y, where[2] - ear.z),
+    });
+  };
+  const offFinale = room.finale?.on(playFinale) ?? null;
+
   /** The engine is there (its own, or handed over): place the emitters in the room. */
   const attach = (e: AudioEngine): void => {
     engine = e;
@@ -723,6 +833,13 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         steps = { player: new Footsteps(banks.footsteps), feet };
         ambience = placedPlayer;
         ambienceSpots = placed;
+        // S-34: the close's sounds, from the bridge (following the light) and from the gate
+        if (banks.finale) {
+          const settle = e.createEmitter('sfx', settleAt);
+          const gate = e.createEmitter('sfx', { x: GATE_SOUND[0], y: GATE_SOUND[1], z: GATE_SOUND[2] });
+          live.push(settle, gate);
+          finale = { banks: banks.finale, settle, gate };
+        }
       },
       (err) => {
         if (!disposed) console.error('S-22: the footsteps and the ambience could not be loaded:', err);
@@ -786,6 +903,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       if (!ambience.playing && roomProbe.playing && e.ctx.state === 'running') ambience.start(e.now());
       ambience.update(e.ctx.currentTime);
     }
+    // S-34: the settling light's sound follows its front across the bridge (and stays where the light stopped)
+    if (lightRunning) followFront();
   };
 
   const stopListening = (): void => {
@@ -885,6 +1004,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     get engineVoices() {
       return engine?.snapshot().voicesStarted ?? 0;
     },
+    get finale(): FinaleSoundProbe {
+      return {
+        ready: finale !== null,
+        played: [...finaleLog.played],
+        refused: [...finaleLog.refused],
+        voicesStarted: finaleLog.voices,
+      };
+    },
     get footsteps(): FootstepsProbe {
       return {
         ready: steps !== null,
@@ -927,6 +1054,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       if (disposed) return;
       disposed = true;
       off();
+      offFinale?.();
+      finale = null;
       subscribed = false;
       stopListening();
       stopWaiting?.();

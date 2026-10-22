@@ -5,8 +5,10 @@
  *  - LayerField.setSpheres() each frame from game/orb's orbSpheres() (+ boundaryGlow()).
  *  - activeSegmentIds() tells the physics which back-layer footing colliders to enable; cutSurfaceIds() which
  *    surface-only colliders to disable (S-28), and segmentsAroundBody() whether a pickup would shut the body in.
+ *  - 定着 (S-34): a sweep of light fixes part of the back layer onto the surface for good (settle.ts); the field draws it
+ *    (new LayerField({ settle: true }), setSettled()) and settledSegmentIds() tells the colliders what it has fixed.
  */
-export { type FieldSphere, LayerField } from './field';
+export { type FieldSphere, LayerField, type SettledView } from './field';
 export {
   activeSegmentIds,
   type Box,
@@ -40,6 +42,16 @@ export {
   SMALL_ORB_RADIUS,
   stepMaterialization,
 } from './materialize';
+export {
+  along,
+  countSettled,
+  type SettleSweep,
+  segmentsCutByBox,
+  settledAt,
+  settledSegmentIds,
+  sweepFront,
+  sweepSpan,
+} from './settle';
 export {
   type BodyExtent,
   boxInsideSphere,
