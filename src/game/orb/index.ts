@@ -34,4 +34,4 @@ export {
   stepPeek,
 } from './peek';
 export { type PeekFrame, PeekPipeline, type PeekPipelineOptions } from './peek-pipeline';
-export { canPeek, canPickUp, canPlace, type PickUpContext } from './rules';
+export { canPeek, canPickUp, canPlace, PICKUP_BODY, type PickUpContext } from './rules';

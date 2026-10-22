@@ -9,7 +9,7 @@ import {
   peekAmount,
   stepPeek,
 } from '../orb/peek';
-import { canPeek, canPickUp, canPlace } from '../orb/rules';
+import { canPeek, canPickUp, canPlace, PICKUP_BODY } from '../orb/rules';
 import type { MovementModifier } from '../player/motion';
 import { EventBus, type PrologueEvent } from './events';
 
@@ -48,6 +48,8 @@ export interface SessionOptions {
   pedestals: Readonly<Record<string, Vec3>>;
   /** Back-layer footing, for 拾う前に足場の上にいないか (技術設計 > 裏の層の実装 > 安全). */
   footing: readonly FootingSegment[];
+  /** Surface-only walls (S-28): a placed orb cuts them away, so 拾う前に壁の中にいないか too. */
+  surface?: readonly FootingSegment[];
   /** Where the light drop hovers (it is back layer: touchable only inside a sphere). */
   drop: Vec3;
 }
@@ -205,7 +207,13 @@ export class PrologueSession {
       return 'place';
     }
     if (at !== id) return 'nothing';
-    const ctx = { pedestals: this.options.pedestals, footing: this.options.footing, feet };
+    const surface = this.options.surface;
+    const ctx = {
+      pedestals: this.options.pedestals,
+      footing: this.options.footing,
+      surface: surface && surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
+      feet,
+    };
     if (!canPickUp(this.orbsValue, MAIN, ctx)) {
       this.tremble('pickup');
       return 'pickup-denied';

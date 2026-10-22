@@ -2,13 +2,15 @@ import { join } from 'node:path';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three/webgpu';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { activeSegmentIds, type Sphere, splitFooting, type Vec3 } from '../../layers/footing';
+import { activeSegmentIds, type Sphere, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
+import { boxInsideSphere, SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { type AssembledAsset, addAssetColliders, assembleAsset } from '../assets';
 import { loadGlbInNode } from '../assets/node-glb.test-helper';
 import { BODY_RADIUS } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
+import type { PrologueEvent } from './events';
 import {
   ANNEALER,
   BENCH,
@@ -38,11 +40,9 @@ import {
 import {
   addRoomColliders,
   BackFooting,
-  boxInsideSphere,
   deckSegmentShape,
   FallGuard,
   insideAnySphere,
-  type SurfaceColliderMode,
   SurfaceColliders,
 } from './physics';
 import { PrologueSession } from './session';
@@ -277,59 +277,99 @@ describe('picking the vidro up never drops you into the valley (罰がない、�
   });
 });
 
-describe('S-24 trial: a surface-only wall inside the placed orb’s sphere (S-23 判断待ち9, the designer decides)', () => {
+describe('S-28: a surface-only wall inside the placed orb’s sphere (裏の層のルール: 表にしかない壁は消えて通れるようになる)', () => {
   const placed = {
     center: PEDESTAL_ORB,
     radius: MAIN_ORB_RADIUS,
     materialize: { progress: 1, target: 1 as const },
   };
-  const wallSegments = () => splitFooting('trial-wall', TRIAL_SURFACE_WALL, FOOTING_SEGMENT);
-  /** The dead end with the wall on the lip; the orb placed (the bridge on) or not. */
-  function deadEnd(mode: SurfaceColliderMode, orbPlaced: boolean) {
+  const wallSegments = () => splitSurface('trial-wall', TRIAL_SURFACE_WALL, SURFACE_SEGMENT);
+  /** The dead end with the wall (?trial=surface-wall) on its lip; the orb placed (the bridge on) or not. */
+  function deadEnd(orbPlaced: boolean) {
     const r = room();
-    const wall = new SurfaceColliders(R, r.world, wallSegments(), mode);
+    const wall = new SurfaceColliders(R, r.world, wallSegments());
     const spheres = orbPlaced ? [placed] : [];
     r.footing.sync(spheres);
     wall.sync(spheres);
     return { ...r, wall };
   }
   const towardBridge = { feet: [0.05, 0, EDGE_Z + 1.4] as Vec3, yaw: 0 };
+  const wallMidZ = (TRIAL_SURFACE_WALL.min[2] + TRIAL_SURFACE_WALL.max[2]) / 2;
+  const still: PlayerIntent = { ...forward, move: { x: 0, y: 0 } };
+  const backward: PlayerIntent = { ...forward, move: { x: 0, y: -1 } };
 
   it('the whole wall is inside the sphere of the orb on the dead-end pedestal (it vanishes from view there)', () => {
     for (const seg of wallSegments()) expect(boxInsideSphere(seg, placed)).toBe(true);
   });
 
-  it('keep (as now): with the orb placed the wall is cut from view but still stops you before the bridge', () => {
-    const r = deadEnd('keep', true);
+  it('before the orb is placed, the wall stops you short of the edge', () => {
+    const r = deadEnd(false);
     const p = body(r, towardBridge);
     walk(r, p, forward, 4);
-    expect(r.wall.offCount).toBe(0);
-    expect(p.feet.z).toBeGreaterThan(TRIAL_SURFACE_WALL.max[2]);
+    expect(r.wall.cutCount).toBe(0);
+    expect(p.feet.z).toBeGreaterThan(TRIAL_SURFACE_WALL.max[2] + BODY_RADIUS - 0.05);
   });
 
-  it('cut: with the orb placed the wall is gone in both senses, and you walk onto the bridge', () => {
-    const r = deadEnd('cut', true);
+  it('with the orb placed the wall is gone in both senses (not drawn, no collider), and you walk onto the bridge', () => {
+    const r = deadEnd(true);
     const p = body(r, towardBridge);
     walk(r, p, forward, 4);
-    expect(r.wall.offCount).toBe(wallSegments().length);
+    expect(r.wall.cutCount).toBe(wallSegments().length);
     expect(p.feet.z).toBeLessThan(EDGE_Z - 1);
   });
 
-  it('cut: without the orb the wall is solid like any wall', () => {
-    const r = deadEnd('cut', false);
-    expect(r.wall.offCount).toBe(0);
+  it('once the orb is picked up (its sphere shrinking back), the wall is solid again', () => {
+    const r = deadEnd(true);
+    r.wall.sync([{ ...placed, materialize: { target: 0 as const } }]);
+    expect(r.wall.cutCount).toBe(0);
+    const p = body(r, towardBridge);
+    walk(r, p, forward, 4);
+    expect(p.feet.z).toBeGreaterThan(TRIAL_SURFACE_WALL.max[2]);
   });
 
-  it('cut: picking the orb up while standing in the wall would shut the body in — a pickup check has to refuse it', () => {
-    const r = deadEnd('cut', true);
-    const inWall: Vec3 = [0.05, 0, (TRIAL_SURFACE_WALL.min[2] + TRIAL_SURFACE_WALL.max[2]) / 2];
-    expect(r.wall.enclosing(inWall, BODY_RADIUS, 1.75).length).toBeGreaterThan(0);
-    // the orb is picked up: the sphere shrinks (no longer ground), the wall comes back around the body
-    const p = body(r, { feet: inWall, yaw: Math.PI });
-    r.wall.sync([{ ...placed, materialize: { target: 0 as const } }]);
-    expect(r.wall.offCount).toBe(0);
-    // the body now stands inside a solid collider (what Rapier then does with it is recorded in S-24.md: it was shut in)
-    expect(r.wall.enclosing(inWall, BODY_RADIUS, 1.75)).toEqual([]);
+  it('standing in the wall the pickup is refused (the orb trembles), the wall stays cut, and you walk out of it', () => {
+    // what the room does: every frame the session's spheres go to the footing and the wall; E asks with the feet
+    const r = room();
+    const wall = new SurfaceColliders(R, r.world, wallSegments());
+    const session = new PrologueSession({
+      orbStart: 'hand',
+      pedestals: { [PEDESTAL_ID]: PEDESTAL_ORB },
+      footing: r.footing.segments,
+      surface: wall.segments,
+      drop: DROP,
+    });
+    const tick = () => {
+      session.step(DT, { wantPeek: false });
+      r.footing.sync(session.spheres());
+      wall.sync(session.spheres());
+    };
+    expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, SPAWNS['dead-end'].feet)).toBe('place');
+    for (let i = 0; i < 60; i++) tick();
+    expect(wall.cutCount).toBe(wall.segments.length);
+    // in the wall, on the shore (not on the bridge's footing)
+    const p = body(r, { feet: [0.05, 0, wallMidZ], yaw: 0 });
+    const step = (intent: PlayerIntent) => {
+      tick();
+      r.world.step();
+      p.update(DT, intent);
+    };
+    for (let i = 0; i < 20; i++) step(still);
+    const f = p.feet;
+    expect(f.z).toBeGreaterThan(EDGE_Z);
+    expect(Math.abs(f.z - wallMidZ)).toBeLessThan(0.05);
+    const events: PrologueEvent[] = [];
+    session.events.on((e) => events.push(e));
+    expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, [f.x, f.y, f.z])).toBe('pickup-denied');
+    expect(events).toEqual([{ type: 'shake', reason: 'pickup' }]);
+    for (let i = 0; i < 30; i++) step(still);
+    expect(wall.cutCount).toBe(wall.segments.length);
+    // the body is not shut in: it walks back out of the wall, and from there the orb comes
+    for (let t = 0; t < 1.5; t += DT) step(backward);
+    const out = p.feet;
+    expect(out.z).toBeGreaterThan(TRIAL_SURFACE_WALL.max[2] + BODY_RADIUS);
+    expect(session.interact({ kind: 'pedestal', id: PEDESTAL_ID }, [out.x, out.y, out.z])).toBe('pickup');
+    tick();
+    expect(wall.cutCount).toBe(0);
     p.dispose();
   });
 });

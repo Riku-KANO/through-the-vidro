@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
+import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { PEEK_FOV_DELTA_DEG, PEEK_SECONDS, peekFovOffset, peekMoveSpeedMultiplier } from '../orb/peek';
 import { combineModifiers } from '../player/motion';
 import type { PrologueEvent } from './events';
@@ -148,6 +149,25 @@ describe('picking up (拾う: 実体化した足場の上では回収できな�
     expect(s.spheres()[0]?.radius).toBeCloseTo(MAIN_ORB_RADIUS, 6);
     expect(s.shake).toBeGreaterThan(0.9);
     expect(events).toEqual([{ type: 'shake', reason: 'pickup' }]);
+  });
+
+  it('refuses while the player stands in a surface-only wall only this orb cut (S-28), and the orb trembles', () => {
+    // 表にしかない壁 across the way before the bridge, wholly inside the sphere: picking the orb up there would bring the
+    // wall back around the body
+    const wall = splitSurface('wall', { min: [-0.3, 0, -0.6], max: [-0.18, 1, 0.6] }, SURFACE_SEGMENT);
+    const s = new PrologueSession({ ...options, orbStart: 'hand', surface: wall });
+    s.interact({ kind: 'pedestal', id: PEDESTAL }, [-1.6, 0, 0]);
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    const events = record(s);
+    expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, [-0.24, 0, 0.1])).toBe('pickup-denied');
+    expect(s.orbPlace).toBe('pedestal');
+    expect(s.spheres()[0]?.radius).toBeCloseTo(MAIN_ORB_RADIUS, 6);
+    expect(s.shake).toBeGreaterThan(0.9);
+    expect(events).toEqual([{ type: 'shake', reason: 'pickup' }]);
+    // a step back, clear of the wall, it comes
+    run(s, 0.5);
+    expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, [-0.7, 0, 0.1])).toBe('pickup');
+    expect(events.at(-1)).toEqual({ type: 'pickup', from: 'pedestal' });
   });
 
   it('takes the orb back from solid ground and plays the sphere back to 0 in 0.8 s', () => {
