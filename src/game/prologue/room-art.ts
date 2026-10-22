@@ -123,18 +123,22 @@ const TOWN_HAZE: HazeSpec = { color: HORIZON_COOL, near: 35, far: 240 };
 /**
  * The workshop's lights (S-24, 仮 values for the designer's eye). 光と時間帯: 夜明け前の青 through the skylight onto the
  * vidro; the furnace is the only warm light (the lamp over the bench is gone), flickering a little like a fire.
- * S-27: the fire's light is a deeper orange, weaker, and stands out over the grate (FIRE_REACH past the mouth) — at the
- * mouth (S-24: 9, 0xff8a3c, 0.38 m out) it lit the inside of the brass collar and the floor to a cream glow
- * (画面の仕上げ: ブルームは控えめに; the fire deep in the mouth is the light source that blooms).
+ * S-27: the fire's light is a deeper orange, weaker, and a spot from the mouth's opening out over the grate and the floor
+ * (S-24: a point light of 9, 0xff8a3c, 0.38 m out, which lit the inside of the brass collar, the floor to a cream glow
+ * and the furnace's own front; 画面の仕上げ: ブルームは控えめに — the fire deep in the mouth is the light source that blooms).
  */
 const SKYLIGHT_COLOR = new THREE.Color(0.52, 0.66, 1.0);
 const SKYLIGHT_INTENSITY = 26;
 const SKYLIGHT_ANGLE = 0.13;
 const FIRE_COLOR = 0xff6a2a;
 const FIRE_INTENSITY = 5;
-/** How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands, and how much higher. */
-const FIRE_REACH = 0.6;
+/** How far in front of the fire (FURNACE_MOUTH, toward the room) its light stands (the opening of the collar), how much higher. */
+const FIRE_REACH = 0.36;
 const FIRE_LIFT = 0.08;
+/** Where the light aims: on the floor this far in front of the fire (the grate's far side). Its cone and soft edge. */
+const FIRE_AIM = 1.2;
+const FIRE_ANGLE = 1.15;
+const FIRE_PENUMBRA = 0.85;
 /** How much the fire's light breathes (± of its intensity). */
 const FIRE_FLICKER = 0.08;
 /** The valley floor, far below the mist. */
@@ -386,7 +390,7 @@ export function buildRoomArt(
   const cupNode = cupMilk as THREE.MeshPhysicalNodeMaterial;
   cupNode.emissiveNode = (cupNode.emissiveNode as THREE.Node<'vec3'>).add(rimLight(focus.pedestal).mul(1.6));
   const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
-  const fire = new THREE.PointLight(FIRE_COLOR, FIRE_INTENSITY, 7, 2);
+  const fire = new THREE.SpotLight(FIRE_COLOR, FIRE_INTENSITY, 7, FIRE_ANGLE, FIRE_PENUMBRA, 2);
 
   // ---- the workshop (序章「工房」) ---------------------------------------------------------------
   {
@@ -479,6 +483,12 @@ export function buildRoomArt(
       FURNACE_MOUTH[1] + FIRE_LIFT,
       FURNACE_MOUTH[2] + FURNACE_FACING[1] * FIRE_REACH,
     );
+    fire.target.position.set(
+      FURNACE_MOUTH[0] + FURNACE_FACING[0] * FIRE_AIM,
+      0,
+      FURNACE_MOUTH[2] + FURNACE_FACING[1] * FIRE_AIM,
+    );
+    scene.add(fire.target);
     put(keep(fire), 'shared');
   }
 

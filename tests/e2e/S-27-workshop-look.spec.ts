@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
-import { WORKS_SHELF } from '../../src/game/prologue/layout';
+import { FURNACE_FACING, FURNACE_MOUTH, WORKS_SHELF } from '../../src/game/prologue/layout';
 
 /**
  * S-27: the workshop's look, polished (a furnace that reads as a furnace, works on the shelf you can see, more things
@@ -13,10 +13,12 @@ import { WORKS_SHELF } from '../../src/game/prologue/layout';
  *      (artifacts/screens/S-27/<backend>/compare.png), when the before pictures are there. The designer judges the look.
  *  (b) sensors for what the designer saw (2026-10-22), measured on the screenshots in the page (thresholds and the
  *      values before and after: process/slices/S-27.md):
- *      - 炉が炉に見える: from in front of the furnace its mouth burns red — enough deep red pixels
- *      - 扉から見てクリーム色に滲みすぎない: from the door, few bright, warm, washed-out (cream) pixels
- *      - 作品の棚の作品が見える: hiding the works on the shelf changes enough of the picture, the clear ones alone too
- *        (against the sky, before, they hardly changed it)
+ *      - 炉が炉に見える: from in front of the furnace, the mouth (its opening projected on the screen) burns red — enough
+ *        of it is a fire's red (hue up to 20°, saturated)
+ *      - 扉から見てクリーム色に滲みすぎない: from the door, few bright, warm, washed-out (cream) pixels in the picture
+ *      - 作品の棚の作品が見える: within the works' place on the screen (the box round their vertices), hiding the works changes
+ *        enough pixels, the clear ones alone too (against the sky, before, they hardly changed it). Pixels that differ
+ *        between two pictures of the same thing (the fire's light breathes) are left out
  */
 test.use({ locale: 'ja-JP' });
 
@@ -46,23 +48,22 @@ const VIEWS = [
 ] as const;
 
 /**
- * Thresholds of the sensors (shares of the 1280×720 picture). Set from the pictures before and after (S-27.md): each
- * sits between what the S-24 workshop showed and what the change is meant to show, with room for the two paths.
+ * Thresholds of the sensors, set before measuring the change. The mouth: a fifth of its opening on the screen (about a
+ * third of the opening is the cave behind the pipe and the yoke). The door: 1% of the picture (S-24: 12%). The shelf: twice
+ * what the S-24 workshop showed in the same place (review round 1: the first version counted over the whole picture and
+ * left the clear works a thin margin).
  */
 const LIMITS = {
-  /**
-   * 炉の前: deep red pixels — the fire in the mouth (S-24: none; the warm brass and the lit floor are orange, not this red).
-   * 0.15% of the picture is a disc about 40 px across.
-   */
-  furnaceRed: 0.0015,
+  /** 炉の前: share of the mouth's opening in a fire's red. S-24: 0 (its fire was a cream-white disc). */
+  furnaceRed: 0.2,
   /** 扉から振り返る: cream pixels (bright, warm, washed out). S-24: 12% (the furnace's milky bubbles and their bloom). */
   doorCream: 0.01,
   /**
-   * 作品の棚: pixels the works change when hidden, above the noise between two pictures — all of them, and the clear ones
-   * alone. At least twice what S-24 showed (0.44% and 0.25%).
+   * 作品の棚: share of the works' place that changes when they are hidden — all of them, and the clear ones alone. S-24:
+   * 2.34–2.36% and 0.76–0.77% (WebGPU–WebGL2, the same measure on the S-24 glb); twice the higher of the two.
    */
-  shelfWorks: 0.009,
-  shelfClear: 0.005,
+  shelfWorks: 0.0471,
+  shelfClear: 0.0154,
 };
 
 function collectErrors(page: Page): string[] {
@@ -107,12 +108,16 @@ async function openView(page: Page, spawn: string, webgl: string): Promise<void>
     const render = renderer.render;
     renderer.render = (...args: unknown[]) => {
       const s = args[0] as { isScene?: boolean; getObjectByProperty?: unknown };
-      if (s?.isScene && !w.__s27Scene) {
+      const camera = args[1] as { isPerspectiveCamera?: boolean } | undefined;
+      if (s?.isScene && !w.__s27Scene && camera?.isPerspectiveCamera) {
         let found = false;
         (s as { traverse(f: (o: { userData: { name?: string } }) => void): void }).traverse((o) => {
           if (o.userData?.name === 'A0_shlf_works01') found = true;
         });
-        if (found) w.__s27Scene = s;
+        if (found) {
+          w.__s27Scene = s;
+          (w as { __s27Camera?: unknown }).__s27Camera = camera;
+        }
       }
       return render.apply(renderer, args);
     };
@@ -121,11 +126,56 @@ async function openView(page: Page, spawn: string, webgl: string): Promise<void>
   await page.waitForTimeout(1_200);
 }
 
+/** A place on the screen (CSS pixels of the 1280×720 page): a box, or a disc. */
+type Region = { x0: number; y0: number; x1: number; y1: number } | { cx: number; cy: number; r: number };
+
+/** World points (three's coordinates) on the screen, with the camera the room drew with (CSS pixels). */
+async function project(page: Page, points: [number, number, number][]): Promise<[number, number][]> {
+  return page.evaluate((points) => {
+    const cam = (
+      window as unknown as {
+        __s27Camera: { matrixWorldInverse: { elements: number[] }; projectionMatrix: { elements: number[] } };
+      }
+    ).__s27Camera;
+    const v = cam.matrixWorldInverse.elements;
+    const p = cam.projectionMatrix.elements;
+    const at = (m: number[], i: number) => m[i] ?? 0;
+    return points.map(([x, y, z]) => {
+      const vx = at(v, 0) * x + at(v, 4) * y + at(v, 8) * z + at(v, 12);
+      const vy = at(v, 1) * x + at(v, 5) * y + at(v, 9) * z + at(v, 13);
+      const vz = at(v, 2) * x + at(v, 6) * y + at(v, 10) * z + at(v, 14);
+      const cx = at(p, 0) * vx + at(p, 4) * vy + at(p, 8) * vz + at(p, 12);
+      const cy = at(p, 1) * vx + at(p, 5) * vy + at(p, 9) * vz + at(p, 13);
+      const cw = at(p, 3) * vx + at(p, 7) * vy + at(p, 11) * vz + at(p, 15);
+      return [(cx / cw / 2 + 0.5) * innerWidth, (0.5 - cy / cw / 2) * innerHeight] as [number, number];
+    });
+  }, points);
+}
+
+/** The furnace's mouth on the screen: a disc over the brass collar's opening (radius 0.2 m, 0.955 m off the centre). */
+async function mouthRegion(page: Page): Promise<Region> {
+  const [fx, fz] = FURNACE_FACING;
+  const reach = 0.335; // from FURNACE_MOUTH (0.62 m off the centre) to the opening
+  const c: [number, number, number] = [
+    FURNACE_MOUTH[0] + fx * reach,
+    FURNACE_MOUTH[1],
+    FURNACE_MOUTH[2] + fz * reach,
+  ];
+  const [centre, edge] = await project(page, [c, [c[0], c[1] + 0.2, c[2]]]);
+  if (!centre || !edge) throw new Error('the mouth was not projected');
+  return { cx: centre[0], cy: centre[1], r: Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) };
+}
+
 /**
  * Hides (or shows again) the shelf's works: named objects of kind `ware` standing along the shelf's arc. With `clear`,
- * only their meshes of clear glass (the library's glass keeps its Blender mark in userData.mark).
+ * only their meshes of clear glass (the library's glass keeps its Blender mark in userData.mark). Returns how many meshes,
+ * and points of them in the world (every 4th vertex: to find their place on the screen).
  */
-async function setShelfWorks(page: Page, visible: boolean, only?: 'clear'): Promise<number> {
+async function setShelfWorks(
+  page: Page,
+  visible: boolean,
+  only?: 'clear',
+): Promise<{ meshes: number; points: [number, number, number][] }> {
   return page.evaluate(
     ({ visible, only, from, to }) => {
       interface V {
@@ -138,12 +188,22 @@ async function setShelfWorks(page: Page, visible: boolean, only?: 'clear'): Prom
         visible: boolean;
         isMesh?: boolean;
         material?: { userData?: { mark?: string } } | { userData?: { mark?: string } }[];
-        geometry?: { boundingBox: { min: V; max: V } | null; computeBoundingBox(): void };
+        geometry?: {
+          boundingBox: { min: V; max: V } | null;
+          computeBoundingBox(): void;
+          getAttribute(name: string): {
+            count: number;
+            getX(i: number): number;
+            getY(i: number): number;
+            getZ(i: number): number;
+          };
+        };
         matrixWorld: { elements: number[] };
         traverse(f: (o: O) => void): void;
       }
       const scene = (window as unknown as { __s27Scene: O }).__s27Scene;
       const meshes = new Set<O>();
+      const points: [number, number, number][] = [];
       scene.traverse((o) => {
         const name = o.userData?.name ?? '';
         if (!/^A0_ware_[A-Za-z0-9]+$/.test(name)) return;
@@ -173,58 +233,107 @@ async function setShelfWorks(page: Page, visible: boolean, only?: 'clear'): Prom
           if (only === 'clear' && !mats.some((x) => x?.userData?.mark === 'glass_clear')) return;
           m.visible = visible;
           meshes.add(m);
+          // every 4th vertex in the world (one object holds the works of the whole arc, so its box would cover far more)
+          const pos = m.geometry?.getAttribute('position');
+          if (!pos) return;
+          const e = m.matrixWorld.elements;
+          const w = (i: number) => e[i] ?? 0;
+          for (let i = 0; i < pos.count; i += 4) {
+            const x = pos.getX(i);
+            const y = pos.getY(i);
+            const z = pos.getZ(i);
+            points.push([
+              w(0) * x + w(4) * y + w(8) * z + w(12),
+              w(1) * x + w(5) * y + w(9) * z + w(13),
+              w(2) * x + w(6) * y + w(10) * z + w(14),
+            ]);
+          }
         });
       });
-      return meshes.size;
+      return { meshes: meshes.size, points };
     },
     { visible, only, from: WORKS_SHELF.fromDeg, to: WORKS_SHELF.toDeg },
   );
 }
 
-/** Shares of the picture (PNG) by colour, measured in the page (sRGB 0..1). */
+/**
+ * Shares measured in the page (sRGB 0..1). `cream` over the whole picture. With a region: `red` = share of the region in a
+ * fire's red; with `other`, `changed` = share of the region that differs from `other`, leaving out the pixels that differ
+ * between `png` and `again` (two pictures of the same thing), whose share of the region is `noise`.
+ */
 async function measure(
   page: Page,
   png: Buffer,
-  other?: Buffer,
-): Promise<{ red: number; cream: number; changed: number }> {
+  opts: { other?: Buffer; again?: Buffer; region?: Region } = {},
+): Promise<{ red: number; cream: number; changed: number; noise: number; regionPixels: number }> {
   return page.evaluate(
-    async ({ a, b }) => {
+    async ({ a, b, c, region }) => {
       const pixels = async (b64: string) => {
         const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
         const bmp = await createImageBitmap(blob);
-        const c = new OffscreenCanvas(bmp.width, bmp.height);
-        const g = c.getContext('2d');
+        const cv = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = cv.getContext('2d');
         if (!g) throw new Error('no 2d context');
         g.drawImage(bmp, 0, 0);
-        return g.getImageData(0, 0, bmp.width, bmp.height).data;
+        return { data: g.getImageData(0, 0, bmp.width, bmp.height).data, width: bmp.width };
       };
-      const d = await pixels(a);
-      const e = b ? await pixels(b) : null;
+      const { data: d, width } = await pixels(a);
+      const e = b ? (await pixels(b)).data : null;
+      const f = c ? (await pixels(c)).data : null;
+      // the page's CSS pixels to the picture's pixels (the same at a device scale of 1)
+      const k = width / innerWidth;
+      const inside = (i: number): boolean => {
+        if (!region) return true;
+        const x = ((i / 4) % width) / k;
+        const y = Math.floor(i / 4 / width) / k;
+        if ('r' in region) return Math.hypot(x - region.cx, y - region.cy) <= region.r;
+        return x >= region.x0 && x <= region.x1 && y >= region.y0 && y <= region.y1;
+      };
+      const differs = (p: Uint8ClampedArray, q: Uint8ClampedArray, i: number): boolean =>
+        Math.max(
+          Math.abs((p[i] ?? 0) - (q[i] ?? 0)),
+          Math.abs((p[i + 1] ?? 0) - (q[i + 1] ?? 0)),
+          Math.abs((p[i + 2] ?? 0) - (q[i + 2] ?? 0)),
+        ) > 12;
       let red = 0;
       let cream = 0;
       let changed = 0;
+      let noise = 0;
+      let inRegion = 0;
       const n = d.length / 4;
       for (let i = 0; i < d.length; i += 4) {
         const r = (d[i] ?? 0) / 255;
         const g = (d[i + 1] ?? 0) / 255;
         const bl = (d[i + 2] ?? 0) / 255;
-        // deep red: a saturated red with little green and blue (a fire's red; lit brass is about 0.55, 0.33, 0.2)
-        if (r > 0.45 && g < 0.5 * r && bl < 0.3 * r) red++;
         // cream: bright, warm (red ≥ green ≥ blue), washed out (little between red and blue)
         const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
         if (l > 0.72 && r >= g && g >= bl && r - bl < 0.3) cream++;
-        if (e) {
-          const dd = Math.max(
-            Math.abs((d[i] ?? 0) - (e[i] ?? 0)),
-            Math.abs((d[i + 1] ?? 0) - (e[i + 1] ?? 0)),
-            Math.abs((d[i + 2] ?? 0) - (e[i + 2] ?? 0)),
-          );
-          if (dd > 12) changed++;
+        if (!inside(i)) continue;
+        inRegion++;
+        // a fire's red: hue up to 20° (red ≥ green ≥ blue: hue = 60·(g − b)/(r − b)), saturated, not dark. Lit brass is
+        // about 22° (0.55, 0.33, 0.2)
+        if (r >= 0.4 && r >= g && g >= bl && r - bl >= 0.6 * r && (g - bl) * 3 <= r - bl) red++;
+        if (f && differs(d, f, i)) {
+          noise++;
+          continue;
         }
+        if (e && differs(d, e, i)) changed++;
       }
-      return { red: red / n, cream: cream / n, changed: changed / n };
+      const m = Math.max(1, inRegion);
+      return {
+        red: red / m,
+        cream: cream / n,
+        changed: changed / m,
+        noise: noise / m,
+        regionPixels: inRegion,
+      };
     },
-    { a: png.toString('base64'), b: other?.toString('base64') ?? null },
+    {
+      a: png.toString('base64'),
+      b: opts.other?.toString('base64') ?? null,
+      c: opts.again?.toString('base64') ?? null,
+      region: opts.region ?? null,
+    },
   );
 }
 
@@ -325,9 +434,11 @@ for (const backend of backends) {
     test.setTimeout(120_000);
     const errors = collectErrors(page);
     await openView(page, 'furnace', webgl);
-    const m = await measure(page, await page.screenshot());
-    keep('furnace', m);
-    expect(m.red, 'deep red share of the picture in front of the furnace').toBeGreaterThan(LIMITS.furnaceRed);
+    const region = await mouthRegion(page);
+    const m = await measure(page, await page.screenshot(), { region });
+    keep('furnace', { ...m, region });
+    expect(m.regionPixels, 'the mouth is on the screen').toBeGreaterThan(2_000);
+    expect(m.red, "share of the mouth's opening in a fire's red").toBeGreaterThan(LIMITS.furnaceRed);
     expect(errors).toEqual([]);
   });
 
@@ -348,10 +459,9 @@ for (const backend of backends) {
     const errors = collectErrors(page);
     await openView(page, 'shelf', webgl);
     const shown = await page.screenshot();
-    // the noise between two pictures of the same thing (the fire's light breathes, the motes drift)
+    // a second picture of the same thing: the pixels that differ (the fire's light breathes) are left out
     await page.waitForTimeout(300);
     const again = await page.screenshot();
-    const noise = (await measure(page, shown, again)).changed;
     const all = await setShelfWorks(page, false);
     await page.waitForTimeout(400);
     const hidden = await page.screenshot();
@@ -360,14 +470,33 @@ for (const backend of backends) {
     await page.waitForTimeout(400);
     const noClear = await page.screenshot();
     await setShelfWorks(page, true);
-    const works = (await measure(page, shown, hidden)).changed;
-    const clearOnly = (await measure(page, shown, noClear)).changed;
-    keep('shelf', { works, clearOnly, noise, meshes: { all, clear } });
-    expect(all, 'meshes of the works on the shelf').toBeGreaterThan(0);
-    expect(clear, 'meshes of clear works on the shelf').toBeGreaterThan(0);
-    expect(noise, 'two pictures of the same view').toBeLessThan(0.004);
-    expect(works - noise, 'share the works change').toBeGreaterThan(LIMITS.shelfWorks);
-    expect(clearOnly - noise, 'share the clear works change').toBeGreaterThan(LIMITS.shelfClear);
+    // the works' place on the screen: the box round their vertices
+    const xy = await project(page, all.points);
+    const xs = xy.map(([x]) => x);
+    const ys = xy.map(([, y]) => y);
+    const region: Region = {
+      x0: Math.max(0, Math.min(...xs)),
+      y0: Math.max(0, Math.min(...ys)),
+      x1: Math.min(1280, Math.max(...xs)),
+      y1: Math.min(720, Math.max(...ys)),
+    };
+    const works = await measure(page, shown, { other: hidden, again, region });
+    const clearOnly = await measure(page, shown, { other: noClear, again, region });
+    keep('shelf', {
+      works: works.changed,
+      clearOnly: clearOnly.changed,
+      noise: works.noise,
+      region,
+      meshes: { all: all.meshes, clear: clear.meshes },
+    });
+    expect(all.meshes, 'meshes of the works on the shelf').toBeGreaterThan(0);
+    expect(clear.meshes, 'meshes of clear works on the shelf').toBeGreaterThan(0);
+    expect(works.regionPixels, 'the works are on the screen').toBeGreaterThan(20_000);
+    expect(works.noise, 'two pictures of the same view').toBeLessThan(0.02);
+    expect(works.changed, "share of the works' place they change").toBeGreaterThan(LIMITS.shelfWorks);
+    expect(clearOnly.changed, "share of the works' place the clear ones change").toBeGreaterThan(
+      LIMITS.shelfClear,
+    );
     expect(errors).toEqual([]);
   });
 }

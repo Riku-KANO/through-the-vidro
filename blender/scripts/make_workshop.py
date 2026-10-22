@@ -22,14 +22,14 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 - A0_tool_bench01          作業台に置いたままの道具（鋏、ピンセット、キャリパー、眼鏡の縁、下の棚の盆とへら。S-27）
 - A0_cup_tea01             飲みかけの湯のみ（曇りガラス、お茶）
 - A0_chr_stool01(+_col)    椅子（曇りガラスの座面、真鍮の脚）
-- A0_frn_furnace01(+_col)  炉（S-27: 熱で煤けた厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、乳白ガラスの覗き窓、
+- A0_frn_furnace01(+_col)  炉（S-27: 熱で煤けた厚いガラスの泡の集まりに真鍮の帯、口の奥の火の洞、覗き窓（熾火と乳白ガラスの輪）、
                            真鍮の煙道、口に差したままの吹き竿と受け）
 - A0_grt_floor01           炉の前の真鍮の格子（床。当たり判定なし）
 - A0_pipe_rack01(+_col)    吹き竿の立て掛け（真鍮）
 - A0_mrv_marver01(+_col)   マーバー台（真鍮の板、曇りガラスの脚）
 - A0_ware_marver01         作りかけの器（気泡入り、竿の先）、冷ましている杯とかけら（S-27）
-- A0_tool_marver01         マーバー台の上の道具（ピンセット、ブロック、へら。S-27）
-- A0_bkt_marver01(+_col)   竿の桶（真鍮の桶に水、ポンテ 3 本。S-27）
+- A0_tool_marver01         マーバー台の上の道具（ピンセット、ブロック、へら）と左の端に掛けたジャック（S-27）
+- A0_bkt_marver01(+_col)   マーバー台の前の竿の桶（真鍮の桶に水、ポンテ 3 本。S-27）
 - A0_tub_water01(+_col)    水桶（曇りガラス、真鍮のたが、水、柄杓）
 - A0_anl_annealer01(+_col) 徐冷炉（曇りガラスの泡、口は中心へ、中がほのかに暖かい）
 - A0_ware_anneal01         冷ましている作品（透明）
@@ -37,7 +37,7 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 - A0_tool_anneal01         台車の上の道具（トング、へら、受け輪。S-27）
 - A0_ware_cart01           台車の上で入る順を待つ作品（透明・乳白。S-27）
 - A0_shlf_works01(+_col)   作品の棚（壁に沿う弧の三段、曇りガラスの板、真鍮の縁と柱）
-- A0_shlf_back01(+_col)    作品の棚の背板（傾く壁に沿う影の青灰の曇りガラス、上の縁は真鍮。S-27）
+- A0_shlf_board01(+_col)   作品の棚の背板（傾く壁に沿う暗い不透明の板、四隅を丸め、縁を一周する真鍮の枠。S-27）
 - A0_ware_clear01 / A0_ware_bubble01 / A0_ware_frost01 / A0_ware_opal01  棚の瓶・器・ビードロ（材質ごとに一つ。乳白は S-27）
 - A0_chim_door01           扉の上の風鈴（透明ガラス、真鍮の吊り金具、曇りガラスの短冊）
 
@@ -635,6 +635,13 @@ def collider(part: Part, arcs: bool = False) -> bmesh.types.BMesh:
 
 
 # ── 物にする ────────────────────────────────────────────────────────────────
+def deselect_all() -> None:
+    """演算子の前に選択を外す。物を消した直後の view_layer.objects は None を返すことがある（--only furnace で落ちた）"""
+    for o in bpy.context.view_layer.objects:
+        if o is not None:
+            o.select_set(False)
+
+
 def link(obj, collection=None):
     (collection or bpy.context.scene.collection).objects.link(obj)
     return obj
@@ -755,8 +762,7 @@ def metaball_mesh(balls, resolution: float) -> bmesh.types.BMesh:
         e.stiffness = METABALL_STIFFNESS
         e.use_negative = negative
     ob = link(bpy.data.objects.new('blob', mb))
-    for o in bpy.context.view_layer.objects:
-        o.select_set(False)
+    deselect_all()
     ob.select_set(True)
     bpy.context.view_layer.objects.active = ob
     bpy.ops.object.convert(target='MESH')
@@ -782,8 +788,7 @@ def decimate(bm: bmesh.types.BMesh, triangles: int) -> None:
     tris = sum(len(f.verts) - 2 for f in bm.faces)
     mod = ob.modifiers.new('decimate', 'DECIMATE')
     mod.ratio = min(1.0, triangles / max(tris, 1))
-    for o in bpy.context.view_layer.objects:
-        o.select_set(False)
+    deselect_all()
     ob.select_set(True)
     bpy.context.view_layer.objects.active = ob
     bpy.ops.object.modifier_apply(modifier=mod.name)
@@ -800,6 +805,8 @@ CAVE_DEPTH = 0.26
 #: 口の真鍮の筒の内の半径と、体に開ける穴の半径（筒の外の半径 0.2 より小さく、筒が穴の縁を隠す）
 COLLAR_INNER = 0.17
 MOUTH_HOLE = 0.19
+#: 火の洞のいちばん熱い所: 奥の芯からこの距離の輪（m）
+HOT_RING = 0.09
 
 
 def boolean_difference(bm: bmesh.types.BMesh, cutter: bmesh.types.BMesh) -> None:
@@ -815,8 +822,7 @@ def boolean_difference(bm: bmesh.types.BMesh, cutter: bmesh.types.BMesh) -> None
     mod.operation = 'DIFFERENCE'
     mod.solver = 'EXACT'
     mod.object = b
-    for o in bpy.context.view_layer.objects:
-        o.select_set(False)
+    deselect_all()
     a.select_set(True)
     bpy.context.view_layer.objects.active = a
     bpy.ops.object.modifier_apply(modifier=mod.name)
@@ -883,13 +889,15 @@ def furnace(m) -> None:
     add(lathe_bm(cave, 20), m['fire'], place(f(back, MOUTH_Y), axis=tuple(axis)))
     back_c = Vector(f(back, MOUTH_Y))
     reach = math.hypot(CAVE_DEPTH, rim)
-    p.uv_rules['A0_fire'] = lambda co: (0.5, 1.0 - (co - back_c).length / reach)
+    # 熱い所は奥の壁の輪（芯からの距離 HOT_RING）: 口に差した竿が奥の真ん中を隠すので、正面からも竿の周りに見える
+    p.uv_rules['A0_fire'] = lambda co: (0.5, 1.0 - abs((co - back_c).length - HOT_RING) / (reach - HOT_RING))
     # 口（グローリーホール）: 体の中から突き出す真鍮の筒（穴の縁と洞の縁を隠す）。外の端は少し開く
     start = MOUTH_REACH
     length = 0.955 - start
     collar = shell_profile([(0.2, 0.0), (0.2, length - 0.055), (0.228, length)], 0.2 - COLLAR_INNER)
     add(lathe_bm(collar, 20), m['brass'], place(f(start, MOUTH_Y), axis=tuple(axis)))
-    # 覗き窓: 口の左右の、乳白ガラスの小さなレンズと真鍮の輪（中の熱で淡く光る。覗き窓のほかに乳白はない）
+    # 覗き窓: 口の左右の、中の火が赤く透ける小さな窓（熾火の材質）、縁に細い乳白ガラスの輪、外に真鍮の輪。工房で乳白ガラスの印を
+    # 持つのはこの輪だけ（乳白の窓の面は、口の前の灯りを受けてクリーム色の点に見えた: レビュー1巡目）
     for side in (-1, 1):
         a = math.radians(50.0) * side
         d = Vector((FACING[0] * math.cos(a) + f.r[0] * math.sin(a), 0.0, FACING[1] * math.cos(a) + f.r[1] * math.sin(a)))
@@ -900,8 +908,11 @@ def furnace(m) -> None:
         at, normal = Vector(hit[0]), Vector(hit[1]).normalized()
         add(tube_bm(circle(tuple(at + normal * 0.006), 0.062, 12, axis=tuple(normal)), 0.012, 4, closed=True),
             m['brass'])
-        lens = [(0.058, 0.0), (0.035, 0.012), (0.0, 0.016)]  # 外 → 軸（上）: 面は外を向く
-        add(lathe_bm(lens, 12), m['milky'], place(at + normal * 0.002, axis=tuple(normal)))
+        window = [(0.052, 0.0), (0.03, 0.005), (0.0, 0.007)]  # 外 → 軸（上）: 面は外を向く
+        add(lathe_bm(window, 12), m['ember'], place(at + normal * 0.001, axis=tuple(normal)))
+        add(tube_bm(circle(tuple(at + normal * 0.004), 0.053, 12, axis=tuple(normal)), 0.005, 4, closed=True),
+            m['milky'])
+    p.uv_rules['A0_ember'] = lambda co: (0.5, 0.88)  # 火の区画の赤橙
     # 足元の真鍮の輪と、体を締める 2 本の帯（口の窪みの上と、上の泡の首）: 泡の面に沿う
     def band(y, segments, lift, radius, sides):
         pts = []
@@ -1256,7 +1267,7 @@ def bench_shelf_wares(m) -> None:
 
 
 def marver_tools(m) -> None:
-    """マーバー台の上に置いたままの道具: ピンセット、へら、ブロック（作りかけの竿は台の真ん中を斜めに横切る）"""
+    """マーバー台の上に置いたままの道具: ピンセット、へら、ブロック（作りかけの竿は台の真ん中を斜めに横切る）、左の端に掛けたジャック"""
     cx, cz = MARVER['center']
     _, height, _ = MARVER['size']
     f = Frame(cx, cz)
@@ -1266,15 +1277,23 @@ def marver_tools(m) -> None:
     tweezers(p, m['brass'], f(0.19, y, -0.42), f.yaw, 0.27)
     block(p, m['brass'], f(0.19, y, 0.16), f.yaw)
     paddle(p, m['brass'], f(-0.18, y, 0.02), f.yaw, blade=(0.14, 0.085), handle=0.2)
+    # 台の左の端の真鍮の鉤に掛けたジャック（鋏の形の道具）: 2 本の腕が下へ
+    hook = [f(0.08, y - 0.03, -0.45), f(0.08, y - 0.03, -0.49), f(0.08, y - 0.07, -0.5)]
+    p.merge(tube_bm(fillet(hook, 0.02, 3), 0.005, 6), m['brass'])
+    for side in (-1, 1):
+        arm = fillet([f(0.08, y - 0.07, -0.5), f(0.08 + side * 0.03, y - 0.16, -0.505),
+                      f(0.08 + side * 0.012, y - 0.36, -0.51)], 0.05, 3)
+        p.merge(tube_bm(arm, 0.006, 6), m['brass'])
     build(p, 'A0_tool_marver01', (cx, y, cz))
 
 
-#: マーバー台の横の竿の桶（S-27）: 台の枠での位置（a = 中心へ、s = 右）、半径、高さ
-PIPE_BUCKET = {'a': -0.2, 's': -0.74, 'radius': 0.16, 'height': 0.3}
+#: マーバー台の前の竿の桶（S-27）: 台の枠での位置（a = 中心へ、s = 右）、半径、高さ。台の前の縁に寄せる（隙間 9cm）。最初は台の
+#: 左の奥（水桶と台車の間）に置いたが、水桶と台の裏の床へ入る道を、通れそうで通れない幅に狭めていた（レビュー1巡目）
+PIPE_BUCKET = {'a': 0.5, 's': 0.25, 'radius': 0.16, 'height': 0.3}
 
 
 def pipe_bucket(m) -> None:
-    """竿の桶: マーバー台の左の、水を張った真鍮の桶。ポンテ（竿）3 本を立てて冷ましたまま。竿の頭は桶の縁の内"""
+    """竿の桶: マーバー台の前の、水を張った真鍮の桶。ポンテ（竿）3 本を立てて冷ましたまま。竿の頭は桶の縁の内"""
     cx, cz = MARVER['center']
     f = Frame(cx, cz)
     bx, _, bz = f(PIPE_BUCKET['a'], 0.0, PIPE_BUCKET['s'])
@@ -1515,66 +1534,72 @@ def shelf_wares(m) -> None:
     build(parts['opal'], 'A0_ware_opal01', origin)
 
 
-#: 棚の背板（S-27）: 壁のガラスからの隙間、厚み、下と上の縁の高さ
-SHELF_BACK = {'gap': 0.008, 'thick': 0.02, 'from_y': 0.3, 'to_y': SHELF['tiers'][-1] + 0.44}
+#: 棚の背板（S-27）: 壁のガラスからの隙間、厚み、下と上の縁の高さ、四隅の丸みの半径（m）
+SHELF_BOARD = {'gap': 0.008, 'thick': 0.02, 'from_y': 0.3, 'to_y': SHELF['tiers'][-1] + 0.44, 'corner': 0.14}
 
 
-def shelf_back(m) -> None:
-    """作品の棚の背板（S-27）: 段の後ろで傾く壁に沿う、影の青灰の曇りガラスの帯。不透明に描く（透過のガラスは不透明な物しか
-    屈折しないので、透明の作品はこの面を背にして縁と屈折が読める）。上の縁は真鍮。棚が空に見えないように"""
+def shelf_board(m) -> None:
+    """作品の棚の背板（S-27）: 段の後ろで傾く壁に沿う、暗い不透明の板（A0_shade）。透過のガラスは不透明な物しか屈折しないので、
+    透明の作品はこの面を背にして縁と屈折が読める。形のルール: 四隅は大きく丸め（半径 0.14m）、縁は一周を真鍮の枠で包む（直線と細い線は
+    真鍮の枠だけ）。棚が空に見えないように"""
     a0, a1 = SHELF['from_deg'] - 1.5, SHELF['to_deg'] + 1.5
-    gap, t = SHELF_BACK['gap'], SHELF_BACK['thick']
-    y0, y1 = SHELF_BACK['from_y'], SHELF_BACK['to_y']
-    rc = t / 2 * 0.9
-    # 断面（y, 壁からの距離）: 部屋の側の面を下から上へ、上の縁を丸く回って壁の側の面を下へ、下の縁を丸く回る
-    rows = 9
-    inner = [(y0 + rc + (y1 - y0 - 2 * rc) * i / (rows - 1), gap + t) for i in range(rows)]
-    top = [(y1 - rc + rc * math.sin(math.pi / 2 * k / 3), gap + t / 2 + rc * math.cos(math.pi / 2 * k / 3))
-           for k in range(1, 4)]
-    top += [(y1 - rc + rc * math.cos(math.pi / 2 * k / 3), gap + t / 2 - rc * math.sin(math.pi / 2 * k / 3))
-            for k in range(1, 3)]
-    outer = [(y, gap) for y, _ in inner[::-1]]
-    bottom = [(y0 + rc - rc * math.sin(math.pi / 2 * k / 3), gap + t / 2 - rc * math.cos(math.pi / 2 * k / 3))
-              for k in range(1, 4)]
-    bottom += [(y0 + rc - rc * math.cos(math.pi / 2 * k / 3), gap + t / 2 + rc * math.sin(math.pi / 2 * k / 3))
-               for k in range(1, 3)]
-    section = inner + top + outer + bottom
-    steps = max(2, round((a1 - a0) / 2.5))
+    gap, t, corner = SHELF_BOARD['gap'], SHELF_BOARD['thick'], SHELF_BOARD['corner']
+    y0, y1 = SHELF_BOARD['from_y'], SHELF_BOARD['to_y']
+    # 行（高さ）: 丸めた隅のところは細かく
+    edge = [corner * (1 - math.cos(math.pi / 2 * k / 4)) for k in range(5)]
+    inner_rows = [y0 + corner + (y1 - y0 - 2 * corner) * k / 7 for k in range(1, 7)]
+    rows = sorted({round(y0 + e, 6) for e in edge} | {round(y1 - e, 6) for e in edge} | {round(y, 6) for y in inner_rows})
+
+    def inset_deg(y: float) -> float:
+        """隅の丸み: 上と下の縁から corner の内では、端を弧に沿って内へ寄せる（m を方位の度へ）"""
+        d = min(y - y0, y1 - y)
+        if d >= corner:
+            return 0.0
+        metres = corner - math.sqrt(max(0.0, corner * corner - (corner - d) ** 2))
+        return math.degrees(metres / (wall_r(y) - gap - t / 2))
+
+    cols = max(2, round((a1 - a0) / 2.5))
+
+    def point(y: float, u: float, w: float) -> tuple[float, float, float]:
+        """高さ y、端から端への割合 u、壁からの距離 w"""
+        lo, hi = a0 + inset_deg(y), a1 - inset_deg(y)
+        a = math.radians(lo + (hi - lo) * u)
+        r = wall_r(y) - w
+        return (r * math.cos(a), y, r * math.sin(a))
+
     bm = bmesh.new()
-    loops = []
-    for i in range(steps + 1):
-        a = math.radians(a0 + (a1 - a0) * i / steps)
-        c, s = math.cos(a), math.sin(a)
-        loops.append([bm.verts.new(((wall_r(y) - w) * c, y, (wall_r(y) - w) * s)) for y, w in section])
-    n = len(section)
-    for la, lb in zip(loops, loops[1:]):
-        for j in range(n):
-            bm.faces.new((la[j], la[(j + 1) % n], lb[(j + 1) % n], lb[j]))
-    for lp in (loops[0], loops[-1]):
-        bm.faces.new(lp)
-    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 4])
+    faces_w = {'room': gap + t, 'wall': gap}
+    grid = {side: [[bm.verts.new(point(y, i / cols, w)) for i in range(cols + 1)] for y in rows]
+            for side, w in faces_w.items()}
+    for side in grid:
+        g = grid[side]
+        for j in range(len(rows) - 1):
+            for i in range(cols):
+                bm.faces.new((g[j][i], g[j][i + 1], g[j + 1][i + 1], g[j + 1][i]))
+    # 縁（厚み）の帯: 外周を一周（下の行 → 右の列 → 上の行 → 左の列）
+    loop = ([(0, i) for i in range(cols + 1)] + [(j, cols) for j in range(1, len(rows))]
+            + [(len(rows) - 1, i) for i in range(cols - 1, -1, -1)] + [(j, 0) for j in range(len(rows) - 2, 0, -1)])
+    for (ja, ia), (jb, ib) in zip(loop, loop[1:] + loop[:1]):
+        bm.faces.new((grid['room'][ja][ia], grid['room'][jb][ib], grid['wall'][jb][ib], grid['wall'][ja][ia]))
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
     p = Part()
     p.merge(bm, m['shade'])
     p.uv_rules['A0_shade'] = lambda co: (abs(((co.x + co.z) * 0.9) % 2.0 - 1.0), (co.y - y0) / (y1 - y0))
-    # 上の縁の真鍮
-    edge = [((wall_r(y1 + 0.004) - gap - t / 2) * math.cos(math.radians(d)), y1 + 0.004,
-             (wall_r(y1 + 0.004) - gap - t / 2) * math.sin(math.radians(d)))
-            for d in [a0 + (a1 - a0) * i / steps for i in range(steps + 1)]]
-    p.merge(tube_bm(edge, 0.011, 6), m['brass'])
+    # 真鍮の枠: 外周を一周、板の厚みの真ん中（管の太さが板の厚みより太く、縁を包む）
+    frame = [point(rows[j], i / cols, gap + t / 2) for j, i in loop]
+    p.merge(tube_bm(frame, t / 2 + 0.004, 5, closed=True), m['brass'])
     # 当たり判定: 8 度ずつと、高さで 3 つの帯に分けて包む（背板は球の壁に沿って縦にも曲がるので、高さごと包むと膨らみが部屋の側へ
     # 見えない壁になる）
-    rows_y = [y for y, _ in inner]
-    edges = [y0 - 0.01, rows_y[3], rows_y[6], y1 + 0.05]
+    edges = [y0 - 0.02, y0 + (y1 - y0) / 3, y0 + 2 * (y1 - y0) / 3, y1 + 0.05]
     hull = bmesh.new()
     pts = [v.co.copy() for v in p.bm.verts]
     for lo, hi in zip(edges, edges[1:]):
-        band = [q for q in pts if lo - 1e-4 <= q.y <= hi + 1e-4]
+        band = [q for q in pts if lo - 0.03 <= q.y <= hi + 0.03]
         for g in angular_slices(band):
             hull_into(hull, g)
     mid = math.radians((a0 + a1) / 2)
     r = wall_r(1.0) - gap - t / 2
-    build(p, 'A0_shlf_back01', (r * math.cos(mid), 0.0, r * math.sin(mid)), hull=hull)
+    build(p, 'A0_shlf_board01', (r * math.cos(mid), 0.0, r * math.sin(mid)), hull=hull)
 
 
 # ── 風鈴 ────────────────────────────────────────────────────────────────────
@@ -1668,7 +1693,7 @@ def render_previews(out_dir: str, cams: dict, ref_layer) -> None:
 PIECES = (bench, bench_wares, tea_cup, stool, furnace, grate, blowpipe_rack, marver, marver_ware, water_tub, annealer,
           annealer_wares, shelf, shelf_wares, wind_chime,
           # S-27
-          shelf_back, bench_shelf_wares, bench_tools, marver_tools, pipe_bucket, anneal_cart, anneal_tools, cart_wares)
+          shelf_board, bench_shelf_wares, bench_tools, marver_tools, pipe_bucket, anneal_cart, anneal_tools, cart_wares)
 
 
 def build_all(only: list[str] | None = None) -> None:
