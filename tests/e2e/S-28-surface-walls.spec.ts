@@ -140,6 +140,12 @@ async function stepInto(page: Page, minZ: number, maxZ: number): Promise<RoomPro
   );
 }
 
+// Hand the pointer lock back before the page closes: a page closed while it holds the lock can leave the browser refusing
+// the next page's lock with no event at all (seen on WebGL2 after S-27's e2e in a full check).
+test.afterEach(async ({ page }) => {
+  await page.evaluate(() => document.exitPointerLock()).catch(() => {});
+});
+
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-28', backend);
