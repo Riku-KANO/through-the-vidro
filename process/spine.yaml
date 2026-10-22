@@ -699,7 +699,9 @@ slices:
 
   - id: S-31
     title: 炉を作り直す — 徐冷炉と同じ「低く広い泡のドーム」の形の言葉で、口は開口、煙突はまっすぐ上
-    status: todo
+    status: integrated
+    branch: slice/S-31-furnace-shape
+    accepted: 発案者が上限（見た目の調整3巡、レビュー2巡、2巡目の後の再レビューなし）で受け入れ。低く広いドームの炉、口は開口、煙突はまっすぐ上、火の芯がブルームで少し滲む（2026-10-22）
     depends: [S-30]
     human: 見た目の最終判断は発案者
     requirements:

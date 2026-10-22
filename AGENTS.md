@@ -33,7 +33,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 整形 | `pnpm format` |
 | アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ |
 | 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
-| 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop`。アトラスの区画を (u, v) の式で描くときは、`atlas_uv` が 0〜1 を区画の 0.12〜0.88（`TILE_MARGIN`）に写す前提で描く（S-30） |
+| 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop`。アトラスの区画を (u, v) の式で描くときは、`atlas_uv` が 0〜1 を区画の 0.12〜0.88（`TILE_MARGIN`）に写す前提で描く（S-30）。開いた殻を EXACT のブーリアンでくり抜くときは底を閉じてから行い、元の面に乗らない面と底を消す。面の上の模様（煤など）は頂点の値でなく、面の座標の UV でアトラスの区画に描く（S-31） |
 
 URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto` `autoWindow=<秒>` `autoFrom=low|mid|high`
 `dynres=0|1` `webgl=1`（WebGL2経路の強制） `stats=1`。試験・調査用: `dynresTarget=<ms>` `autoForce=low|mid|high`（推奨を固定）
@@ -153,6 +153,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   このゲームのエンジンは `createVidroEngine(context, room)`（`src/audio/engine.ts`）で作る。`context` に `undefined` を渡すのは audio-lab だけ（S-21）。
 - **何が光るかは、ブルームのしきい値ではなく美術で決める（S-17）。** しきい値は線形の輝度 0.9（`PeekPipeline`、負荷シーン）。光として滲ませたい物
   （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
+  光源が滲むかは、同じ視点を仕上げのブルームありと `finish=aa` で比べ、その辺りを照らす灯りを黒くして確かめる。点光源は真鍮から離す
+  （数 cm の所の真鍮は白く飛んで光源より明るく滲む。S-31）。
 - **ブルームの明るい所を取り出すパスを画面の半分より小さくするときは、1画素が代表するブロック全体を読む（S-17）。** 4点のバイリニアなど。
   1点だけだと、小さい光が視点の動きでブルームに出入りしてちらつく。
 - **音の素材は `src/core/audio/bank.ts` の `SoundSource` で持つ（S-22）。** 合成は `synth(id, render)`、録音は `recording(id, ...urls)`（形式違いを
@@ -167,7 +169,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **層を使うシーンのカメラは `camera.layers.mask = viewMask('main')`（S-23）。** PeekPipeline を使うシーンはそれが設定する。使わないシーンで既定
   （channel 0 だけ）のままだと、表だけ・裏だけの物と透過のガラスが描かれない。
 - **工房の家具の当たり判定は glb の `_col`（S-24）。** 作業台・炉を physics.ts の箱や球で持たない。`_col` は見た目の部品ごとの凸包
-  （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉は泡ごと）を `make_workshop.py` が作る。球の壁に沿って縦にも曲がる部品（棚の背板）は高さでも分けて包む（S-27）。
+  （頭より上の 2.2m は除く、弧の部品は 8 度ずつ、炉のドームは一つの凸包で口の窪みは HOLLOWS で外す。S-31）を `make_workshop.py` が作る。球の壁に沿って縦にも曲がる部品（棚の背板）は高さでも分けて包む（S-27）。
   家具を足したら、目覚める位置から行ける床が家具の立つ所のほかに減らないことを確かめる（Blender の単体 `test_new_furniture_shuts_no_floor_off`。
   体の直径より広くても、傾く壁で頭がつかえて通れない隙間がある）。
   家具を足したら `WORKSHOP_OBJECTS`（layout.ts）にも足す（`workshop-asset.test.ts` が glb の物がすべてそこにあること、`physics.test.ts` が glb の
