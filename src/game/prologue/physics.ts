@@ -221,11 +221,6 @@ export class SurfaceColliders {
     return this.cut.length;
   }
 
-  /** Cut segment ids, in segment order. */
-  get cutIds(): readonly string[] {
-    return this.cut;
-  }
-
   /**
    * Switches the colliders for the current spheres (the same array as BackFooting.sync gets: session.spheres(), the
    * same until the orbs change). Returns whether any collider changed.

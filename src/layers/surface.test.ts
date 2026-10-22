@@ -20,18 +20,14 @@ const placed = (center: FootingSphere['center'], radius: number): FootingSphere 
 const BODY = { radius: 0.3, height: 1.75 };
 
 describe('surface-only walls in segments (技術設計 > 裏の層の実装 > 当たり判定: 細かい区画)', () => {
-  it('starts with segments of 0.4 m, like the back footing', () => {
-    expect(SURFACE_SEGMENT).toBe(0.4);
-  });
-
   it('splits a wall into segments no longer than the size on any axis that tile the wall exactly', () => {
-    const segs = splitSurface('wall', WALL, SURFACE_SEGMENT);
+    const segs = splitSurface('wall', WALL, 0.4);
     // 2 m → 5 across, 1.2 m → 3 high, 0.15 m → 1 thick
     expect(segs).toHaveLength(15);
     expect(new Set(segs.map((s) => s.id)).size).toBe(segs.length);
     for (const s of segs) {
       for (let a = 0; a < 3; a++) {
-        expect((s.max[a] ?? 0) - (s.min[a] ?? 0)).toBeLessThanOrEqual(SURFACE_SEGMENT + 1e-9);
+        expect((s.max[a] ?? 0) - (s.min[a] ?? 0)).toBeLessThanOrEqual(0.4 + 1e-9);
         expect(s.min[a] ?? 0).toBeGreaterThanOrEqual((WALL.min[a] ?? 0) - 1e-9);
         expect(s.max[a] ?? 0).toBeLessThanOrEqual((WALL.max[a] ?? 0) + 1e-9);
       }
@@ -42,7 +38,10 @@ describe('surface-only walls in segments (技術設計 > 裏の層の実装 > �
 
   it('a wall smaller than a segment stays one segment', () => {
     const small: Box = { min: [0, 0, 0], max: [0.3, 0.25, 0.1] };
-    expect(splitSurface('pillar', small, SURFACE_SEGMENT)).toEqual([{ id: 'pillar:0.0.0', ...small }]);
+    const segs = splitSurface('pillar', small, 0.4);
+    expect(segs).toHaveLength(1);
+    expect(segs[0]?.min).toEqual(small.min);
+    expect(segs[0]?.max).toEqual(small.max);
   });
 
   it('a box is inside a sphere only when all of it is', () => {

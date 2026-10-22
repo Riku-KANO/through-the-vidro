@@ -1,5 +1,4 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
-import type { BodyExtent } from '../../layers/surface';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
 import {
@@ -10,8 +9,7 @@ import {
   peekAmount,
   stepPeek,
 } from '../orb/peek';
-import { canPeek, canPickUp, canPlace } from '../orb/rules';
-import { BODY_HEIGHT, BODY_RADIUS, SKIN } from '../player/constants';
+import { canPeek, canPickUp, canPlace, PICKUP_BODY } from '../orb/rules';
 import type { MovementModifier } from '../player/motion';
 import { EventBus, type PrologueEvent } from './events';
 
@@ -29,11 +27,6 @@ export const SHAKE_AMPLITUDE = 0.012;
 export const HAND_SECONDS = PEEK_SECONDS;
 /** 仮: the touched light drop flies into the orb (光の雫の数: 手の玉の中に光の粒として入っていく). */
 export const DROP_FLIGHT_SECONDS = 1.2;
-/**
- * The body as the pickup check sees it (S-28): S-03's capsule and the gap its controller keeps all round, so a wall
- * coming back within that gap counts as around the body too.
- */
-export const PICKUP_BODY: BodyExtent = { radius: BODY_RADIUS + SKIN, height: BODY_HEIGHT + 2 * SKIN };
 
 export type InteractTarget = { kind: 'bench' } | { kind: 'pedestal'; id: string } | { kind: 'drop' };
 

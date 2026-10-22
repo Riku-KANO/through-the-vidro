@@ -1,5 +1,6 @@
 import { activeSegmentIds, type FootingSegment, segmentsUnder, type Vec3 } from '../../layers/footing';
 import { type BodyExtent, cutSurfaceIds, segmentsAroundBody } from '../../layers/surface';
+import { BODY_HEIGHT, BODY_RADIUS, SKIN } from '../player/constants';
 import { type Orb, orbById, orbSpheres, pedestalOccupied } from './orbs';
 
 /**
@@ -24,6 +25,12 @@ export function canPlace(orbs: readonly Orb[], id: string, pedestal: string): bo
   if (!orb || orb.pedestal !== null || pedestalOccupied(orbs, pedestal)) return false;
   return orb.lastPedestal === pedestal || orb.lastPedestal === null || orb.materialize.progress === 0;
 }
+
+/**
+ * The player's body as the pickup check sees it among surface-only walls (S-28): S-03's capsule and the gap its
+ * controller keeps all round, so a wall coming back within that gap counts as around the body too.
+ */
+export const PICKUP_BODY: BodyExtent = { radius: BODY_RADIUS + SKIN, height: BODY_HEIGHT + 2 * SKIN };
 
 export interface PickUpContext {
   pedestals: Readonly<Record<string, Vec3>>;

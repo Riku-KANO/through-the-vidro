@@ -13,6 +13,9 @@ import {
  * segments, the mirror of the back footing (技術設計 > 裏の層の実装 > 当たり判定: 細かい区画):
  *  - a segment loses its collider while it lies wholly inside the sphere of a placed orb (cutSurfaceIds), and gets it
  *    back the moment that orb is picked up. A segment the sphere's film crosses stays solid: part of it is still drawn
+ *  - on purpose, the collider does not wait for the drawing: after a pickup the wall is drawn back as the sphere shrinks
+ *    (MATERIALIZE_SECONDS, 0.8 s) but is solid at once. Following the shrinking sphere instead would let the body step
+ *    into a segment that is about to come back and be shut in (the pickup check only guards the moment of the pickup)
  *  - picking the orb up while the body stands in a cut segment would shut the body in, so the pickup asks first
  *    (segmentsAroundBody; game/orb/rules canPickUp refuses it like standing on the back footing)
  * Pure geometry; the Rapier side is game/prologue/physics.ts SurfaceColliders.
