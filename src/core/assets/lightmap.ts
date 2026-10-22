@@ -240,9 +240,14 @@ export function applyLightmaps(
     if (!mesh.isMesh) return;
     let ref: LightmapRef | null = null;
     let piece: THREE.Object3D | null = null;
-    for (let p: THREE.Object3D | null = mesh; p && !ref; p = p.parent) {
+    // up to the nearest object with a glTF name: the parts GLTFLoader split a mesh into have none, and a named object inside
+    // another (a level of detail under its parent…) has its own bake, or none
+    for (let p: THREE.Object3D | null = mesh; p; p = p.parent) {
       ref = lightmapOf(p.userData);
-      if (ref) piece = p;
+      if (ref || typeof p.userData.name === 'string') {
+        piece = p;
+        break;
+      }
     }
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     if (!ref) {

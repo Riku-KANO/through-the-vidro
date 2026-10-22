@@ -172,21 +172,74 @@ class BakeStage(unittest.TestCase):
             under, open_floor = lum_at(0.0, 0.0), lum_at(1.2, 1.2)
         self.assertGreater(open_floor, 0.1)
         self.assertAlmostEqual(under / open_floor, 1.0, delta=0.05)
+        # and nothing of the bake is left in the materials
+        for m in (self.clear, air):
+            self.assertNotIn('BSDF_TRANSPARENT', {n.type for n in m.node_tree.nodes}, m.name)
+
+    def test_glass_lets_the_sky_through_in_the_bake(self):
+        """空だけの光（一様な空）で、ガラスの箱の真下の床は開けた床と同じ明るさ（±5%）。拡散の光線もガラスを抜ける（影の光線だけ
+        透明にしても、コースティクスを切った屈折の先の空は数えられず、ガラスの下が暗くなる）"""
+        import pipeline
+        from mathutils import Vector
+        from mathutils.geometry import barycentric_transform, intersect_point_tri_2d
+        for o in (self.box, self.ware, self.col, bpy.data.objects['bake_sun']):
+            bpy.data.objects.remove(o)
+        world = bpy.data.worlds.new('sky')
+        world.node_tree.nodes['Background'].inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0)
+        bpy.context.scene.world = world
+        _mesh('A0_ware_clear03', lambda bm: bmesh.ops.create_cube(bm, size=0.8), [self.clear], location=(0.0, 0.0, 0.45))
+        bpy.context.view_layer.update()
+        objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+        with tempfile.TemporaryDirectory() as out:
+            record = pipeline.bake_stage(objects, self.named(), out, {'size': 64, 'samples': 64, 'margin': 2})
+            img = bpy.data.images.load(record['images'][0]['png'])
+            w, h = img.size
+            px = list(img.pixels)
+            me = self.floor.data
+            me.calc_loop_triangles()
+            lm = me.uv_layers['Lightmap'].data
+
+            def lum_at(x, y):
+                p = Vector((x, y, 0.0))
+                for t in me.loop_triangles:
+                    v = [me.vertices[i].co for i in t.vertices]
+                    if intersect_point_tri_2d(p.to_2d(), v[0].to_2d(), v[1].to_2d(), v[2].to_2d()):
+                        uv = [Vector((*lm[li].uv, 0.0)) for li in t.loops]
+                        u = barycentric_transform(p, v[0], v[1], v[2], uv[0], uv[1], uv[2])
+                        i = (min(h - 1, int(u.y * h)) * w + min(w - 1, int(u.x * w))) * 4
+                        return 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]
+                raise AssertionError(f'no floor at {x}, {y}')
+
+            # the open floor sampled as far from the box as its middle is from the floor's edge (the same sky)
+            under, open_floor = lum_at(0.0, 0.0), lum_at(-1.0, 1.0)
+        self.assertGreater(open_floor, 0.1)
+        self.assertAlmostEqual(under / open_floor, 1.0, delta=0.05)
 
     def test_the_atlas_reads_its_own_uv_during_the_bake_and_the_nodes_come_back(self):
         """焼く間は Lightmap が描画用の UV になる: UV のノードのない画像のノードには元の UV をつなぎ、終わったら外す"""
+        import pipeline
         from common import bake
         img = bpy.data.images.new('atlas', 4, 4)
         tex = self.brass.node_tree.nodes.new('ShaderNodeTexImage')
         tex.image = img
-        pinned = bake._pin_image_uvs([self.box], [self.brass], {self.box.name: 'UVMap'})
-        self.assertEqual(len(pinned), 1)
-        self.assertEqual(tex.inputs['Vector'].links[0].from_node.uv_map, 'UVMap')
         objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
-        import pipeline
-        self.brass.node_tree.nodes.remove(pinned[0][1])
-        with tempfile.TemporaryDirectory() as out:
-            pipeline.bake_stage(objects, self.named(), out, {'size': 32, 'samples': 2, 'margin': 1})
+        during = {}
+        real = bake._bake
+
+        def spy(margin):
+            link = tex.inputs['Vector'].links
+            during['uv'] = link[0].from_node.uv_map if link and link[0].from_node.type == 'UVMAP' else None
+            during['render'] = next(u.name for u in self.box.data.uv_layers if u.active_render)
+            return real(margin)
+
+        bake._bake = spy
+        try:
+            with tempfile.TemporaryDirectory() as out:
+                pipeline.bake_stage(objects, self.named(), out, {'size': 32, 'samples': 2, 'margin': 1})
+        finally:
+            bake._bake = real
+        # while it bakes the UV that renders is the lightmap's, and the atlas reads its own (the first) all the same
+        self.assertEqual(during, {'uv': 'UVMap', 'render': bake.UV_NAME})
         self.assertFalse(tex.inputs['Vector'].is_linked)
         self.assertNotIn('UVMAP', {n.type for n in self.brass.node_tree.nodes})
 

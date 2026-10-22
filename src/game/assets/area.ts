@@ -47,8 +47,12 @@ export async function loadAreaAsset(
       if (!mesh.isMesh) return;
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const glass = mats.some(readsBackdrop);
-      // a floor (kind flr) shadows nothing above it; drawn in code before S-26 it only received
-      mesh.castShadow = !glass && kindOf(mesh) !== 'flr';
+      // a floor (kind flr) shadows nothing above it (drawn in code before S-26 it only received); what the bake makes clear
+      // (blender/scripts/pipeline.py clear_in_bake: the air in the glass, kept out of the bake and not glowing) casts none either
+      const clear = mats.every(
+        (m) => m.userData.bake === false && !((m as THREE.MeshStandardMaterial).emissive?.getHex() ?? 0),
+      );
+      mesh.castShadow = !glass && !clear && kindOf(mesh) !== 'flr';
       mesh.receiveShadow = !glass;
     });
     return {

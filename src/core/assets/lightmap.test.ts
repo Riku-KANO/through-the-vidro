@@ -250,6 +250,16 @@ describe('applyLightmaps', () => {
     expect(report.unsupported).toEqual([]);
   });
 
+  it('a named object inside a baked one has its own bake, or none: it does not take its parent’s', () => {
+    const s = build();
+    const nested = new THREE.Mesh(new THREE.BoxGeometry(), s.brass);
+    nested.userData = { name: 'A0_frn_furnace01_LOD1' };
+    s.body.parent?.add(nested);
+    applyLightmaps(s.root, new Map([['A0_lightmap', new THREE.Texture()]]));
+    expect(nested.material).toBe(s.brass);
+    expect(s.body.material).toBeInstanceOf(BakedStandardNodeMaterial);
+  });
+
   it('leaves a baked physical material lit in real time and says so', () => {
     const s = build();
     const lacquer = new THREE.MeshPhysicalNodeMaterial({ name: 'A0_lacquer', clearcoat: 1 });

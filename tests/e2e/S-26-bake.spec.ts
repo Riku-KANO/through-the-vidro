@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
+import { readGlbJson } from '../../src/core/assets/glb';
 import { WORKSHOP_ASSET, WORKSHOP_OBJECTS } from '../../src/game/prologue/layout';
 
 /**
@@ -70,10 +72,13 @@ const VIEWS = [
 const KEEPS_LIGHT = 0.8;
 /**
  * (b), with the environment off as well: a matte place (the frosted top of the bench left of the vidro, nothing on it, CSS
- * pixels of the view from the bench) keeps at least this share. Its light is the bake's; the environment's diffuse light
- * counted a second time would go with it (before the bake, the lights alone took two thirds of it: 0.547 → 0.188).
+ * pixels of the view from the bench) keeps at least this share. Its light is the bake's; the environment adds a faint sheen.
+ * Measured: the bake as it is keeps 0.9875 (both paths); with the environment's diffuse light counted a second time (the
+ * sink in BakedLightingModel.indirect taken out, review round 2 of S-26) it kept 0.952, so the line is between. A coarse
+ * watch: the guard is src/core/assets/lightmap.test.ts. (Before the bake the lights alone took two thirds of it: the picture
+ * before/wake.png measured 0.547, wake-lights-off.png 0.188.)
  */
-const KEEPS_MATTE = 0.9;
+const KEEPS_MATTE = 0.975;
 const BENCH_TOP = { x0: 470, y0: 455, x1: 590, y1: 490 } as const;
 
 function collectErrors(page: Page): string[] {
@@ -228,11 +233,13 @@ async function realtimeLightsOff(page: Page): Promise<number> {
 
 /**
  * Boxes of open floor in the view from the door (CSS pixels of the 1280×720 page): between the furnace and the bench, and
- * nearer, under the dome's middle. No piece stands there; the furnace's fire is not the light there.
+ * nearer, under the dome's middle. No piece stands there; the furnace's fire is not the light there. `before`: their mean
+ * sRGB luminance in the realtime room before the bake (S-31's glb, `S26_PHASE=before`, artifacts/screens/S-26/<backend>/
+ * before/door.png), kept here so the check does not need that picture.
  */
 const OPEN_FLOOR = [
-  { x0: 560, y0: 430, x1: 720, y1: 520 },
-  { x0: 600, y0: 600, x1: 800, y1: 700 },
+  { x0: 560, y0: 430, x1: 720, y1: 520, before: { webgpu: 0.3542, webgl2: 0.3536 } },
+  { x0: 600, y0: 600, x1: 800, y1: 700, before: { webgpu: 0.4122, webgl2: 0.4113 } },
 ] as const;
 
 /** Mean sRGB luminance (0..1) of a box of a picture. */
@@ -376,10 +383,15 @@ for (const backend of backends) {
       if (name === 'wake') textures = await workshopTextures(page);
     }
     const textureBytes = textures.reduce((s, t) => s + t.bytes, 0);
-    const glbBytes = statSync(join(root, 'public', WORKSHOP_ASSET)).size;
+    const glbFile = join(root, 'public', WORKSHOP_ASSET);
+    const glbBytes = statSync(glbFile).size;
+    // what was baked (the glb's scene extras `bake`; the codec is not in it): pictures of two phases compare only one bake
+    const bakeRecord = (readGlbJson(readFileSync(glbFile)) as { scenes?: { extras?: { bake?: unknown } }[] })
+      .scenes?.[0]?.extras?.bake;
+    const bake = bakeRecord ? createHash('sha1').update(JSON.stringify(bakeRecord)).digest('hex') : null;
     writeFileSync(
       join(outDir, `views-${backend}-${phase}.json`),
-      JSON.stringify({ backend, phase, views, textures, textureBytes, glbBytes }, null, 2),
+      JSON.stringify({ backend, phase, bake, views, textures, textureBytes, glbBytes }, null, 2),
     );
     for (const [name, v] of Object.entries(views)) {
       expect(v.drawCalls, name).toBeLessThanOrEqual(BUDGET.drawCalls);
@@ -404,26 +416,32 @@ for (const backend of backends) {
         ),
       );
     }
-    if (phase === 'after' && existsSync(shot('before', 'door'))) {
+    if (phase !== 'before') {
       // the bake is the same light as the realtime room where nothing stands in its way: the open floor from the door, its
-      // sRGB luminance within a quarter of what it was (a strength off by π would be about three times darker or brighter)
-      const before = readFileSync(shot('before', 'door')).toString('base64');
-      const after = readFileSync(shot('after', 'door')).toString('base64');
+      // sRGB luminance within a quarter of what it was before the bake (a strength off by π would be about 1.5–1.7 times
+      // darker or brighter, through sRGB and AgX)
+      const door = readFileSync(shot(phase, 'door')).toString('base64');
       const ratios: number[] = [];
-      for (const box of OPEN_FLOOR) {
-        const [a, b] = await Promise.all([
-          regionLuminance(page, before, box),
-          regionLuminance(page, after, box),
-        ]);
-        ratios.push(b / a);
-      }
+      for (const box of OPEN_FLOOR)
+        ratios.push(
+          (await regionLuminance(page, door, box)) / box.before[backend === 'webgl2' ? 'webgl2' : 'webgpu'],
+        );
       keep('openFloor', { boxes: OPEN_FLOOR, ratios });
       for (const r of ratios) {
         expect(r, 'open floor from the door, after ÷ before').toBeGreaterThan(0.8);
         expect(r, 'open floor from the door, after ÷ before').toBeLessThan(1.25);
       }
     }
-    if (phase === 'after' && VIEWS.every(([, name]) => existsSync(shot('uastc', name)))) {
+    const uastcViews = join(outDir, `views-${backend}-uastc.json`);
+    const sameBake =
+      existsSync(uastcViews) &&
+      (JSON.parse(readFileSync(uastcViews, 'utf8')) as { bake?: string }).bake === bake;
+    if (phase === 'after' && VIEWS.every(([, name]) => existsSync(shot('uastc', name))) && !sameBake)
+      test.info().annotations.push({
+        type: 'compare-codec',
+        description: 'not written: the UASTC pictures are of another bake (take S26_PHASE=uastc again)',
+      });
+    if (phase === 'after' && sameBake && VIEWS.every(([, name]) => existsSync(shot('uastc', name)))) {
       writeFileSync(
         join(shotDir, 'compare-codec.png'),
         await sideBySide(page, ['wake', 'furnace', 'door'].map(row('after', 'uastc')), [

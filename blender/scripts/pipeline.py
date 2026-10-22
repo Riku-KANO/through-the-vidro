@@ -133,13 +133,13 @@ def bake_targets(objects: list, named: dict) -> list:
 
 
 def emits(material) -> bool:
-    """光る材質か（Principled の発光が 0 でない: 火・熾火・乳白の灯りの器）"""
+    """光る材質か（Principled の発光か Emission のノードが 0 でない: 火・熾火・乳白の灯りの器）。グループの中までは見ない"""
     if material is None or material.node_tree is None:
         return False
     for n in material.node_tree.nodes:
-        if n.type == 'BSDF_PRINCIPLED':
-            strength = n.inputs['Emission Strength']
-            colour = n.inputs['Emission Color']
+        if n.type in ('BSDF_PRINCIPLED', 'EMISSION'):
+            strength = n.inputs['Emission Strength' if n.type == 'BSDF_PRINCIPLED' else 'Strength']
+            colour = n.inputs['Emission Color' if n.type == 'BSDF_PRINCIPLED' else 'Color']
             lit = colour.is_linked or any(c > 0 for c in colour.default_value[:3])
             if lit and (strength.is_linked or strength.default_value > 0):
                 return True

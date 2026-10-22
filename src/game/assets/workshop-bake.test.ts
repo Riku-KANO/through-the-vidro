@@ -105,12 +105,25 @@ const linear = (hex: number) => {
   const c = new THREE.Color(hex);
   return [c.r, c.g, c.b];
 };
+const smoothstep = (e0: number, e1: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
 /**
- * Cycles' spot_blend for a three SpotLight's penumbra: three is at full strength within angle × (1 − penumbra), Cycles within
- * cos θ ≥ cos A + (1 − cos A) × blend (its smoothstep runs over the cosine). The same edge of full strength.
+ * The largest difference, over the cone, between how a three SpotLight fades toward its edge (smoothstep from cos A to
+ * cos(A(1 − penumbra)) over cos θ) and how a Cycles spot light with that full size and `blend` does (Blender 5.2's kernel,
+ * light/spot.h: smoothstep of (cos θ − cos A) / ((1 − cos A) × blend)). Zero when the bake fades its spots as the game does.
  */
-const spotBlend = (angle: number, penumbra: number) =>
-  (Math.cos(angle * (1 - penumbra)) - Math.cos(angle)) / (1 - Math.cos(angle));
+function spotMismatch(angle: number, penumbra: number, blend: number): number {
+  let worst = 0;
+  for (let i = 0; i <= 200; i++) {
+    const c = Math.cos((angle * i) / 200);
+    const three = smoothstep(Math.cos(angle), Math.cos(angle * (1 - penumbra)), c);
+    const cycles = smoothstep(0, 1, (c - Math.cos(angle)) / ((1 - Math.cos(angle)) * blend));
+    worst = Math.max(worst, Math.abs(three - cycles));
+  }
+  return worst;
+}
 
 describe('S-26 the workshop’s light, baked into the glb', () => {
   it('the opaque pieces carry one lightmap of the area and its scale; the glass and the colliders none', () => {
@@ -253,7 +266,7 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     const reach = Math.hypot(...k.target.map((t, i) => t - (k.at[i] ?? 0)));
     expect(sky.energy).toBeCloseTo(4 * Math.PI * k.intensity * reach ** (2 - k.decay), 1);
     expect(sky.spot_size).toBeCloseTo(2 * k.angle, 4);
-    expect(sky.spot_blend).toBeCloseTo(spotBlend(k.angle, k.penumbra), 4);
+    expect(spotMismatch(k.angle, k.penumbra, sky.spot_blend ?? 0)).toBeLessThan(1e-3);
 
     const fire = byType('bake_fire');
     if (!fire) throw new Error('no fire baked');
@@ -263,7 +276,7 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     // a point or spot light's candela × 4π: Blender's watts
     expect(fire.energy).toBeCloseTo(4 * Math.PI * f.intensity, 2);
     expect(fire.spot_size).toBeCloseTo(2 * f.angle, 4);
-    expect(fire.spot_blend).toBeCloseTo(spotBlend(f.angle, f.penumbra), 4);
+    expect(spotMismatch(f.angle, f.penumbra, fire.spot_blend ?? 0)).toBeLessThan(1e-3);
     for (const l of bake.lights) expect(l.shadow, l.name).toBe(true);
   });
 
