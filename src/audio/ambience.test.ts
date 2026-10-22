@@ -329,18 +329,46 @@ describe('扉の上の風鈴 (S-25: 扉から入る風でときどき鳴る。�
 class Param {
   value = 1;
   readonly calls: [string, number, number][] = [];
+  /** The automation as Web Audio would run it: set and setTarget events in time (cancel drops the later ones). */
+  private readonly events: { kind: 'set' | 'target'; v: number; t: number; tau: number }[] = [];
   setValueAtTime(v: number, t: number): this {
     this.calls.push(['set', v, t]);
+    this.events.push({ kind: 'set', v, t, tau: 0 });
     this.value = v;
     return this;
   }
-  setTargetAtTime(v: number, t: number): this {
+  setTargetAtTime(v: number, t: number, tau = 0): this {
     this.calls.push(['target', v, t]);
+    this.events.push({ kind: 'target', v, t, tau });
     return this;
   }
   cancelScheduledValues(t: number): this {
     this.calls.push(['cancel', 0, t]);
+    for (let i = this.events.length - 1; i >= 0; i--)
+      if ((this.events[i]?.t ?? 0) >= t) this.events.splice(i, 1);
     return this;
+  }
+  /** The value at time `t`. */
+  at(t: number): number {
+    const events = [...this.events].sort((a, b) => a.t - b.t);
+    let value = 1;
+    let from = 0;
+    let target: { v: number; tau: number } | null = null;
+    const run = (until: number): void => {
+      if (target)
+        value = target.v + (value - target.v) * Math.exp(-(until - from) / Math.max(1e-9, target.tau));
+      from = until;
+    };
+    for (const e of events) {
+      if (e.t > t) break;
+      run(e.t);
+      if (e.kind === 'set') {
+        value = e.v;
+        target = null;
+      } else target = { v: e.v, tau: e.tau };
+    }
+    run(t);
+    return value;
   }
 }
 
@@ -625,13 +653,59 @@ describe('the furnace and the chime above the door in the player (S-25)', () => 
     expect(r.player.sources.find((s) => s.id === 'chimes:door')?.plays).toBe(door.length);
     // the door's wind swells as each draught comes in and settles back after; the other gap is left alone
     const loops = r.ctx.sources.filter((s) => s.loop);
-    const swells = loopGain(loops[1]).gain.calls.filter((c) => c[0] === 'target');
+    const doorWind = loopGain(loops[1]).gain;
+    const other = loopGain(loops[0]).gain;
     const w = AMBIENCE.wind.level;
+    const up = w * AMBIENCE.draught.swell;
     for (const d of draughts) {
-      expect(swells).toContainEqual(['target', w * AMBIENCE.draught.swell, d.at]);
-      expect(swells).toContainEqual(['target', w, d.held]);
+      // quiet before it, up while it holds, back after it has fallen
+      expect(doorWind.at(d.at - 0.05), `before ${d.at}`).toBeCloseTo(w, 3);
+      expect(doorWind.at(d.at + AMBIENCE.draught.rise / 2)).toBeGreaterThan(w * 1.2);
+      expect(doorWind.at(d.held)).toBeGreaterThan(up * 0.94);
+      expect(doorWind.at(d.until + 1)).toBeLessThan(w * 1.05);
+      // the other gap's wind is left as it was
+      expect(other.at(d.held)).toBeCloseTo(w, 6);
     }
-    expect(loopGain(loops[0]).gain.calls.filter((c) => c[0] === 'target')).toEqual([]);
+  });
+
+  it('a place with a stream of its own leaves the others striking when they did; one sharing the player’s does not', () => {
+    const run = (extra: 'none' | 'own' | 'shared'): [string, number][] => {
+      const ctx = new Ctx();
+      const node = () => new Node() as unknown as AudioNode;
+      const places: AmbiencePlace[] = [
+        { id: 'chimes', kind: 'chimes', input: node() },
+        { id: 'drops', kind: 'drops', input: node(), notes: [2, 3] },
+      ];
+      if (extra !== 'none')
+        places.unshift({
+          id: 'chimes:door',
+          kind: 'chimes',
+          bells: 'door',
+          input: node(),
+          rng: extra === 'own' ? mulberry32(99) : undefined,
+        });
+      const banks: AmbienceBanks = {
+        wind: null,
+        fire: null,
+        chimes: CHIME_NOTES.map((m) => buf(`chime${m}`, 2.8)),
+        doorChime: DOOR_CHIME_STRIKES.map((_, v) => buf(`door${v}`, 1.6)),
+        drops: DROP_NOTES.map((m) => buf(`drop${m}`, 0.25)),
+      };
+      const player = new AmbiencePlayer(ctx as unknown as BaseAudioContext, banks, places, mulberry32(21));
+      player.start(0);
+      for (let t = 0; t <= 60; t += 1 / 60) {
+        ctx.currentTime = t;
+        player.update(t);
+      }
+      return ctx.sources
+        .map((s): [string, number] => [s.buffer?.tag ?? '', s.started?.[0] ?? Number.NaN])
+        .filter(([tag]) => !tag.startsWith('door'))
+        .sort((a, b) => a[1] - b[1]);
+    };
+    const alone = run('none');
+    expect(alone.length).toBeGreaterThan(10);
+    expect(run('own')).toEqual(alone);
+    expect(run('shared')).not.toEqual(alone);
   });
 
   it('logs its strikes in the order they sound, though a draught’s are planned seconds ahead of the others', () => {

@@ -52,12 +52,20 @@ export const FURNACE_HUM_NOTES: readonly number[] = [38, 45];
 /**
  * 扉の上の風鈴 (S-25): S-24 drew one clear glass bell 8.3 cm across with a glass clapper (make_workshop.py wind_chime,
  * the bell's profile up to a radius of 4.15 cm). It rings the note the game's glass rule gives that size
- * (サウンドデザイン > ガラスの音: 大きい物ほど低く): B5, below the far chimes (D6 … B6) and none of theirs.
+ * (サウンドデザイン > ガラスの音: 大きい物ほど低く): B5, below the far chimes (D6 … B6) and none of theirs. The rule turns to
+ * D6 below 8.17 cm, so the e2e measures the drawn bell and checks it still gives this note (S-27 may reshape it).
  */
 export const DOOR_CHIME_SIZE = 0.083;
 export const DOOR_CHIME_NOTE = glassPitch(DOOR_CHIME_SIZE).midi;
 /** How the clapper meets the rim, one sound each: a graze, two taps, a full swing (DOOR_CHIME_SOURCES, in order). */
 export const DOOR_CHIME_STRIKES: readonly GlassStrength[] = ['touch', 'tap', 'tap', 'hit'];
+/** Which of DOOR_CHIME_STRIKES a swing of the clapper meets the rim with (a tap or a full swing) … */
+export const DOOR_SWING_STRIKES: readonly number[] = [1, 2, 3];
+/** … and which a bounce back onto the rim does (a graze or a tap). */
+export const DOOR_BOUNCE_STRIKES: readonly number[] = [0, 1];
+/** The clapper's swings in a draught and its bounces after each (AMBIENCE.doorChime). */
+const DOOR_SWINGS = [1, 3] as const;
+const DOOR_BOUNCES = 2;
 
 export const AMBIENCE = {
   /** Seconds to fade in when the workshop is entered, and out when it is left. */
@@ -71,7 +79,8 @@ export const AMBIENCE = {
   fire: { level: 0.28 },
   /**
    * 扉から入る風 (S-25): now and then a draught comes in at the door; the door's wind swells to `swell` times its level
-   * over `rise` seconds, holds while it rings the chime above the door (at least `hold`), and falls back over `fall`.
+   * over `rise` seconds, holds (at least `hold`, and past the chime's last strike), and falls back over `fall`. The chime
+   * above the door rings from the draught's start until it begins to fall.
    */
   draught: {
     gap: [8, 18] as const,
@@ -91,14 +100,14 @@ export const AMBIENCE = {
     // under it (the door's view), the whole mix peaks about -9 dBFS with it, as loud as the po-pen at the hand (-10)
     level: 0.4,
     delay: [0.25, 0.6] as const,
-    swings: [1, 3] as const,
+    swings: DOOR_SWINGS,
     swingGap: [0.45, 1.1] as const,
     fall: [0.55, 0.85] as const,
-    bounces: 2,
+    bounces: DOOR_BOUNCES,
     bounceGap: [0.05, 0.12] as const,
     bounceFall: [0.35, 0.65] as const,
-    /** Every strike of a draught can ring at once: swings × (1 + bounces). */
-    maxActive: 9,
+    /** Every strike of a draught can ring at once. */
+    maxActive: DOOR_SWINGS[1] * (1 + DOOR_BOUNCES),
   },
   chimes: {
     // above 1: they hang 26 m off at the bench (1/26 by distance); from the far shore, 6.5 m, they are as loud as a step
@@ -418,9 +427,12 @@ export interface Draught {
   rise: number;
   hold: number;
   fall: number;
-  /** Strikes of the chime above the door (indices into DOOR_CHIME_SOURCES), all while it holds. */
+  /** Strikes of the chime above the door (indices into DOOR_CHIME_SOURCES), from its start until it begins to fall. */
   hits: Hit[];
 }
+
+const pick = (rng: Rng, from: readonly number[]): number =>
+  from[Math.floor(rng() * from.length) % from.length] as number;
 
 /**
  * A draught from `at`: the air reaches the bell a moment later; the clapper swings against the rim one to three times,
@@ -434,16 +446,16 @@ export function planDraught(rng: Rng, at: number): Draught {
   let t = at + between(rng, c.delay);
   let gain = 0.7 + rng() * 0.3;
   for (let k = 0; k < swings; k++) {
-    // a swing meets the rim with a tap or a full swing (DOOR_CHIME_STRIKES 1 … 3) …
-    hits.push({ at: t, index: 1 + Math.floor(rng() * 3), gain });
-    // … and may bounce back onto it, with a graze or a tap (0 … 1)
+    // a swing meets the rim with a tap or a full swing …
+    hits.push({ at: t, index: pick(rng, DOOR_SWING_STRIKES), gain });
+    // … and may bounce back onto it, with a graze or a tap
     const bounces = Math.floor(rng() * (c.bounces + 1));
     let bt = t;
     let bg = gain;
     for (let b = 0; b < bounces; b++) {
       bt += between(rng, c.bounceGap);
       bg *= between(rng, c.bounceFall);
-      hits.push({ at: bt, index: Math.floor(rng() * 2), gain: bg });
+      hits.push({ at: bt, index: pick(rng, DOOR_BOUNCE_STRIKES), gain: bg });
     }
     t += between(rng, c.swingGap);
     gain *= between(rng, c.fall);
@@ -638,7 +650,8 @@ export class AmbiencePlayer {
 
   /**
    * A draught through the door (S-25): the door's wind swells as it comes in and settles back once it has passed, and
-   * the chime above the door rings while it holds. Its strikes are planned with it, ahead of the clock.
+   * the chime above the door rings from its start until it begins to fall. Its strikes are planned with it, ahead of
+   * the clock.
    */
   private draught(s: PlaceState, d: Draught, now: number): void {
     const held = d.at + d.rise + d.hold;

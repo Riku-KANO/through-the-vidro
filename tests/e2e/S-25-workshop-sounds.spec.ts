@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import type * as THREE from 'three/webgpu';
 import { CHIME_NOTES, DOOR_CHIME_NOTE, DOOR_CHIME_STRIKES } from '../../src/audio/ambience';
-import { VIDRO_SCALE } from '../../src/audio/tuning';
+import { glassPitch, VIDRO_SCALE } from '../../src/audio/tuning';
 import { estimatePitch, peak, rms } from '../../src/core/audio/analysis';
 import { Biquad } from '../../src/core/audio/dsp';
 import { isInScale, midiToHz } from '../../src/core/audio/scale';
@@ -63,6 +63,8 @@ interface Box {
   min: [number, number, number];
   max: [number, number, number];
   meshes: number;
+  /** Objects of that name among what was drawn (the box is taken only when there is exactly one). */
+  objects: number;
 }
 
 const root = process.cwd();
@@ -289,9 +291,11 @@ for (const backend of backends) {
     report.draughts = { draughts, doorHits: doorHits.length, swells, calm };
     if (write) wav(join(wavDir, 'door-draughts-45s.wav'), sr, [rung.left, rung.right]);
 
-    // S-22's sounds as they were: at the bench, the whole ambience against S-22's spots alone (same seed). The door's
-    // chime strikes on a stream of its own, so the far chimes and the drops fall at the same moments; and the fire and
-    // the door's draughts hardly raise the bed above 1 kHz, where S-22 hears the far chimes over the wind
+    // S-22's sounds as they were: at the bench, the whole ambience against S-22's spots alone (same seed, S-22's 30 s).
+    // The door's chime strikes on a stream of its own, so the far chimes and the drops fall at the same moments; each
+    // far chime stands out above 1 kHz (S-22's measure: the 0.3 s from its strike against the 0.3 s before) about as
+    // much with the fire and the door's wind as without, away from the door's chime and draughts (they ring over it:
+    // those strikes are recorded, not judged)
     const s22 = [
       'wind:skylight',
       'wind:door',
@@ -301,11 +305,11 @@ for (const backend of backends) {
       'drops:tub',
       'drops:lamp',
     ];
-    const benchSeconds = 40;
+    const benchSeconds = 30;
     const all = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed: 7, at: 'bench' });
     const old = await lab(page, { kind: 'ambience', seconds: benchSeconds, seed: 7, at: 'bench', only: s22 });
-    // every strike is in the player's log (it keeps the last 64)
-    expect((all.hits ?? []).length).toBeLessThan(64);
+    // every strike is in the player's log (it keeps the last 64; about 47 here)
+    expect((all.hits ?? []).length).toBeLessThan(56);
     const strikesOf = (r: LabResult, id: string) =>
       (r.hits ?? []).filter((h) => h.id === id).map((h) => Math.round(h.at * 1000) / 1000);
     for (const id of ['chimes:town', 'drops:skylight', 'drops:tub', 'drops:lamp'])
@@ -314,16 +318,34 @@ for (const backend of backends) {
       const f = new Biquad(sr).highpass(1000);
       return x.map((v) => f.process(v));
     };
-    // the bed: the quietest fifth of 250 ms windows (strikes and the draughts' swells lie above it)
+    const brightAll = hp(all.mono);
+    const brightOld = hp(old.mono);
+    const over = (x: Float32Array, t: number) => rmsAt(x, sr, t, t + 0.3) / rmsAt(x, sr, t - 0.35, t - 0.05);
+    const doorStrikes = (all.hits ?? []).filter((h) => h.id === 'chimes:door').map((h) => h.at);
+    const benchDraughts = all.draughts ?? [];
+    const far: { at: number; s22: number; s25: number; door: boolean }[] = [];
+    for (const h of (all.hits ?? []).filter((q) => q.id === 'chimes:town')) {
+      const door =
+        doorStrikes.some((t) => t > h.at - 3 && t < h.at + 0.3) ||
+        benchDraughts.some((d) => h.at > d.at - 0.35 && h.at < d.until + 0.3);
+      far.push({ at: h.at, s22: over(brightOld, h.at), s25: over(brightAll, h.at), door });
+    }
+    const clear = far.filter((f) => !f.door);
+    expect(clear.length).toBeGreaterThan(0);
+    for (const f of clear)
+      expect(f.s25 / f.s22, `far chime at ${f.at.toFixed(2)} s: as heard over S-22's bed`).toBeGreaterThan(
+        0.95,
+      );
+    // and the bed itself (the quietest fifth of 250 ms windows above 1 kHz) is hardly raised
     const bed = (x: Float32Array): number => {
       const w: number[] = [];
       for (let t = 3; t + 0.25 <= benchSeconds; t += 0.25) w.push(rmsAt(x, sr, t, t + 0.25));
       w.sort((a, b) => a - b);
       return w[Math.floor(w.length * 0.2)] as number;
     };
-    const bedRise = bed(hp(all.mono)) / bed(hp(old.mono));
-    expect(bedRise, 'the bed above 1 kHz at the bench, S-25 against S-22').toBeLessThan(1.15);
-    report.bench = { bedRiseAbove1k: bedRise, hits: (all.hits ?? []).length };
+    const bedRise = bed(brightAll) / bed(brightOld);
+    expect(bedRise, 'the bed above 1 kHz at the bench, S-25 against S-22').toBeLessThan(1.03);
+    report.bench = { bedRiseAbove1k: bedRise, hits: (all.hits ?? []).length, farChimes: far };
 
     // the whole ambience where you stand, for the ear (and its levels for the record: the bed is the quietest fifth of
     // 250 ms windows, the peak the loudest strike)
@@ -379,23 +401,23 @@ for (const backend of backends) {
           requestAnimationFrame(tick);
         });
         renderer.render = sensorRender;
-        const find = (name: string): THREE.Object3D | null => {
-          for (const r of roots) {
-            let hit: THREE.Object3D | null = null;
+        // every object of that name in what was drawn: one, the room's own (a copy drawn elsewhere would be another)
+        const find = (name: string): THREE.Object3D[] => {
+          const hits = new Set<THREE.Object3D>();
+          for (const r of roots)
             r.traverse((o) => {
-              if (!hit && o.userData?.name === name) hit = o;
+              if (o.userData?.name === name) hits.add(o);
             });
-            if (hit) return hit;
-          }
-          return null;
+          return [...hits];
         };
         const materials = (m: THREE.Mesh): string =>
           (Array.isArray(m.material) ? m.material : [m.material])
             .map((x) => `${x.name}|${String(x.userData?.mark ?? '')}`)
             .join(',');
         const box = (name: string, part: string) => {
-          const o = find(name);
-          if (!o) return null;
+          const found = find(name);
+          const o = found[0];
+          if (!o || found.length !== 1) return { min: [], max: [], meshes: 0, objects: found.length };
           const min = [Infinity, Infinity, Infinity];
           const max = [-Infinity, -Infinity, -Infinity];
           let meshes = 0;
@@ -416,7 +438,7 @@ for (const backend of backends) {
               }
             }
           });
-          return { min, max, meshes };
+          return { min, max, meshes, objects: 1 };
         };
         return {
           fire: box(names.furnace, 'A0_fire'),
@@ -433,10 +455,18 @@ for (const backend of backends) {
       },
     )) as { error?: string; fire: Box | null; water: Box | null; bell: Box | null };
     expect(drawn.error).toBeUndefined();
-    for (const k of ['fire', 'water', 'bell'] as const) expect(drawn[k]?.meshes, k).toBeGreaterThan(0);
+    for (const k of ['fire', 'water', 'bell'] as const) {
+      expect(drawn[k]?.objects, `${k}: one such object drawn`).toBe(1);
+      expect(drawn[k]?.meshes, k).toBeGreaterThan(0);
+    }
     const fire = drawn.fire as Box;
     const water = drawn.water as Box;
     const bell = drawn.bell as Box;
+    // the chime's note is the glass rule's for the bell as drawn (B5 turns to D6 below 8.17 cm: S-27 may reshape it)
+    const bellWidth = Math.max(bell.max[0] - bell.min[0], bell.max[2] - bell.min[2]);
+    expect(glassPitch(bellWidth).midi, `the drawn bell is ${bellWidth.toFixed(4)} m across`).toBe(
+      DOOR_CHIME_NOTE,
+    );
 
     // the first gesture starts the audio (AGENTS.md: S-16)
     expect((await sound(page)).ambience.places).toEqual([]);
