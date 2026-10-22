@@ -456,7 +456,7 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
         facingAway(q.dir, toCentre(ANNEALER.center), ANNEALER.mouthHalfDeg),
     },
     [WORKSHOP_OBJECTS.furnace.name]: {
-      why: "straight into the furnace's mouth: a brass tube 0.34 m across, the fire at its back",
+      why: "straight into the furnace's mouth: an opening 0.42 m across in the dome's front, the fire 0.4 m in (S-31)",
       skip: (q) => Math.abs(q.h - FURNACE_MOUTH[1]) < 0.25 && facingAway(q.dir, FURNACE_FACING, 20),
     },
   };
@@ -541,8 +541,8 @@ describe('the workshop’s furniture (S-24: 当たり判定は見た目に正直
     const s = walk(r, p, forward, 5);
     const closest = Math.min(...s.map((q) => Math.hypot(q.x - cx, q.z - cz)));
     for (const q of s) expect(offPipe(q.x, q.z)).toBeGreaterThan(BODY_RADIUS - 0.02);
-    // it got right up to the furnace (it was pushed toward it all along) but never into its bubbles (about 0.9 m out
-    // at body height) — a round thing makes the body slide along it rather than come to rest
+    // it got right up to the furnace (it was pushed toward it all along) but never into its dome (its foot about 0.88 m
+    // out in front, S-31) — a round thing makes the body slide along it rather than come to rest
     expect(closest).toBeLessThan(GRATE.near + 0.5);
     expect(closest).toBeGreaterThan(1.0);
   });

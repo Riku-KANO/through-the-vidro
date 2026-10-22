@@ -160,18 +160,21 @@ async function project(page: Page, points: [number, number, number][]): Promise<
 }
 
 /**
- * The furnace's mouth on the screen: a disc over the brass collar's opening (radius 0.2 m, 0.955 m off the centre: the collar
- * of blender/scripts/make_workshop.py furnace(); change both together).
+ * The furnace's mouth on the screen: a disc over its opening. S-31: an opening in the dome's front (radius 0.21 m, MOUTH_HOLE
+ * of blender/scripts/make_workshop.py furnace(); its middle where the dome's surface crosses the mouth's axis, 0.79 m off
+ * the centre); until S-30 the brass collar's opening (radius 0.2 m, 0.955 m off the centre). Change both together
+ * (tests/e2e/S-31-furnace-shape.spec.ts OPENING too).
  */
 async function mouthRegion(page: Page): Promise<Region> {
   const [fx, fz] = FURNACE_FACING;
-  const reach = 0.335; // from FURNACE_MOUTH (0.62 m off the centre) to the opening
+  const reach = 0.17; // from FURNACE_MOUTH (0.62 m off the centre) to the opening
+  const radius = 0.21;
   const c: [number, number, number] = [
     FURNACE_MOUTH[0] + fx * reach,
     FURNACE_MOUTH[1],
     FURNACE_MOUTH[2] + fz * reach,
   ];
-  const [centre, edge] = await project(page, [c, [c[0], c[1] + 0.2, c[2]]]);
+  const [centre, edge] = await project(page, [c, [c[0], c[1] + radius, c[2]]]);
   if (!centre || !edge) throw new Error('the mouth was not projected');
   return { cx: centre[0], cy: centre[1], r: Math.hypot(edge[0] - centre[0], edge[1] - centre[1]) };
 }
