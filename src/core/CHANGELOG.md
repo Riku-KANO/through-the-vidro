@@ -18,9 +18,12 @@
   - 直し方: 描画先の背景画像（公開の `ViewportTextureNode.getTextureForReference(target)`、透過の前面が使う
     `viewportOpaqueMipTexture()` の写し）に、image を写した新しい `THREE.TextureSource` を持たせる。r187 の直し
     （mrdoob/three.js#34636、`FramebufferTexture.copy()`）と同じ形。既に分かれていれば何もしない（r187 以上では何もしない）
-  - 使う所: 透過を描く描画先が2つ以上あり、別の時に描くとき、最初に描く前に1回。ゲームではホームの玉の中の像
-    （`src/ui/home/dive-host.ts`）と序章の仕上げの scene pass（`src/game/orb/peek-pipeline.ts`）。描画先が1つだけのシーンは要らない
-  - 裏面（`side: BackSide`）の透過の背景画像は three の内側にあって届かない（このゲームに BackSide の透過はない）
+  - 使う所: 透過を描く描画先が2つ以上あり、別の時に描くとき、なるべく最初に描く前に1回（後から呼んでも、次の描画で背景画像を
+    作り直させる）。ゲームではホームの玉の中の像（`src/ui/home/dive-host.ts`）と序章の仕上げの scene pass
+    （`src/game/orb/peek-pipeline.ts`）。描画先が1つだけのシーンは要らない
+  - 届くのは前面の背景画像だけ。`side: BackSide` の透過と、`forceSinglePass` のない `DoubleSide` の透過（three は先に裏面だけを
+    別のパスで描く。RenderList の needsDoublePass）は、three の内側の別の背景画像を読むので、r186 では共有のまま残る。そういう
+    ガラスには `forceSinglePass = true` を立てる（前面だけで描く。序章のパネルのガラス `room-art.ts` と同じ）。今のゲームには該当がない
   - 単体テスト（`backdrop.test.ts`）は three 自身の `ViewportTextureNode.updateBefore` を偽の renderer で回し、r186 で後の描画先が
     古い大きさのまま残ること（three を上げて直っていれば落ちる＝回避策を外す合図）と、回避策で上下どちらの変化にも追従することを確かめる
 - 最小の再現: `tools/three-repro/s29-backdrop-shared-size.html`（0.186.1 で再現、r187dev で直っている）

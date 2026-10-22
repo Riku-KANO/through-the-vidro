@@ -75,9 +75,13 @@ export function followBackdropResize<T extends THREE.MeshPhysicalNodeMaterial>(m
  * the same for one target, through public API only (ViewportTextureNode.getTextureForReference, Texture.source).
  *
  * Call it once for every render target that draws transmissive materials while another target (or the canvas) also
- * does at other moments, before the first draw. A target left sharing is safe only while it is the last one sharing.
- * Covers the front-side backdrop, the one every transmissive material reads except `side: BackSide` ones (three keeps
- * that backdrop out of reach; no glass here is BackSide). With a three that already separates them, it does nothing.
+ * does at other moments, best before the first draw (called later, the backdrop is re-made at the next draw). A target
+ * left sharing is safe only while it is the last one sharing. With a three that already separates them, it does nothing.
+ *
+ * Covers the front-side backdrop only. three draws a transmissive material with `side: BackSide`, or `DoubleSide`
+ * without `forceSinglePass` (a separate back-side pass first, RenderList needsDoublePass), from another backdrop that
+ * it keeps out of reach, so those still share in r186. Give such glass `forceSinglePass = true` (front side only, as
+ * the prologue's panel glass in room-art.ts does). None in the game reads it today (S-29 review).
  */
 export function ownBackdropImage(target: THREE.RenderTarget): void {
   const copies = viewportOpaqueMipTexture() as unknown as BackdropCopies;
@@ -85,6 +89,8 @@ export function ownBackdropImage(target: THREE.RenderTarget): void {
   if (sharesBackdropImage(target)) {
     const image = own.image as { width?: number; height?: number };
     own.source = new THREE.TextureSource({ width: image.width, height: image.height });
+    // if three already made it, the shared record may have moved on since: re-make it at the next draw
+    own.needsUpdate = true;
   }
 }
 
