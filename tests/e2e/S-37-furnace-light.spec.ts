@@ -16,7 +16,9 @@ import { FURNACE, FURNACE_FACING, FURNACE_MOUTH } from '../../src/game/prologue/
  *               commit with this file copied in and `S37_ROOT` pointing here (process/slices/S-37.md)
  *        s26    S-26 (main before this slice: the fire baked with the sky and the sun into one lightmap, behind the dome)
  *        after  this slice (the default): the warmth is back to about S-31's (WARMTH), and S-31 | S-26 | S-37 side by side
- *  (b) (after) the fire's lightmap breathes: every frame its strength is the fire light's (intensity ÷ its base), it moves
+ *      WARMTH holds what S-31 and S-26 measured on the machine of S-37 (Apple M5 Pro, Metal). On another machine (another
+ *      GPU draws the colours a little apart) measure them again there with S37_PHASE=s31 and s26 before judging `after`.
+ *  (b) (after) the fire's lightmap breathes: every frame the fire light's intensity ÷ the lightmap's strength is the same, it moves
  *      within ±8%, every baked material of the furnace's light uses the same strength, and with it held at 0 the warm floor
  *      in front of the furnace goes (the warmth is the fire's lightmap)
  *  (c) the weight of one more lightmap: the workshop's textures on the GPU (≤ 80MB: 設計書 ポリゴンとテクスチャの予算), the glb,

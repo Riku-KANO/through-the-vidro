@@ -423,6 +423,12 @@ class BakeStage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out, self.assertRaises(ValueError):
             bake.bake_lightmaps([self.floor], out, 16, 1, passes=[bake.BakePass('a'), bake.BakePass('a')])
 
+    def test_the_first_pass_is_the_main_lightmap(self):
+        """2 枚目からの島の間の塗りは 1 枚目の焼いた画素を島とみなす: 空のない層の枚を先に焼かせない"""
+        from common import bake
+        with tempfile.TemporaryDirectory() as out, self.assertRaises(ValueError):
+            bake.bake_lightmaps([self.floor], out, 16, 1, passes=[bake.BakePass('fire'), bake.BakePass()])
+
     def test_density_makes_a_piece_finer_than_the_rest(self):
         from common import bake, uv
         a = _mesh('A0_pan_a01', lambda bm: bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=1.0), [self.brass])

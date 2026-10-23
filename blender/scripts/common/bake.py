@@ -380,7 +380,8 @@ def bake_lightmaps(
     焼く間は、UV のノードを持たない画像のノードに元の描画用の UV をつなぐ（焼く間は Lightmap が描画用の UV になり、アトラスの
     色が Lightmap の UV で読まれて、光る面の色と跳ね返りの色が狂う）。終わったら外す。
     passes（0.2.4）: 光を分けて焼く（BakePass）。既定は 1 枚（いつものライトマップ、場面のまま）。UV は 1 回だけ作り、枚ごとに
-    その文脈の中で焼いて、枚ごとの百分位で正規化する。層の名前は重ならないこと。
+    その文脈の中で焼いて、枚ごとの百分位で正規化する。層の名前は重ならないこと。1 枚目はいつものライトマップ（layer ''）であること
+    （2 枚目からの島の間の塗りは、1 枚目で焼いた値が 0 でない画素を島とみなす。空のない層の枚が先だと島が欠ける）。
     戻り値: [{'object': 物の名前, 'layer': 層（'' はいつもの）, 'image': PNG の絶対パス, 'scale': lightmap_scale,
               'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合,
               'device': 焼いた計算機（METAL / CPU …）}, ...]（枚の順、その中は物の順）
@@ -389,6 +390,8 @@ def bake_lightmaps(
     layers = [bp.layer for bp in passes]
     if len(set(layers)) != len(layers):
         raise ValueError(f'焼き込みの枚の層の名前が重なっています: {layers}')
+    if layers[0] != '':
+        raise ValueError(f"焼き込みの 1 枚目はいつものライトマップ（layer ''）にしてください（島の覆いになる）: {layers}")
     objs = [o for o in objects if o.type == 'MESH']
     if not objs:
         return []
