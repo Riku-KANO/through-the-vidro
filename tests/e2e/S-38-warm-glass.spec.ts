@@ -7,21 +7,30 @@ import { expect, type Page, test } from '@playwright/test';
  *
  * The stall (S-34 review P2-3): the scripted play (?autoplay=1) looks back from the far shore at the workshop, and the
  * transmissive glass wares on the dome's +Z side (A0_ware_anneal01, A0_ware_cart01 …) were drawn for the first time
- * there: three built their render pipelines in those frames, one per frame (the longest frame of the play, 40–65 ms,
- * 195 ms on a busy GPU). The loading's warm-up draw saw only what its pose (the miniature view) saw.
+ * there: three built their render pipelines in those frames, one per frame (the longest frame of the play: 36–52 ms on
+ * WebGPU, 53–64 ms on WebGL2, a fresh browser each time; 195 ms on a busy GPU in S-34; process/slices/S-38.md 計測). The
+ * loading's warm-up draw saw only what its pose (the miniature view) saw.
  *
  * A tracer installed before the page's script wraps the renderer's backend (?debug=1 publishes it) and notes every
  * render pipeline three creates, with where the game was: the autoplay step once playing, else the home's screen or
- * transition. Checked on both paths: after landing, no pipeline is made for anything whose material reads the backdrop
- * (glass), none at all while looking back; the culprits got theirs while loading (so the test cannot pass by tracing
- * nothing); no console error or warning. Pipelines by step, the longest frame of each step and the loading's steps go
- * to artifacts/S-38/pipelines-<backend>.json.
+ * transition. Checked on both paths:
+ *   - the script: after landing, no pipeline is made for anything whose material reads the backdrop (glass), none at all
+ *     while looking back; the culprits got theirs while loading (so the test cannot pass by tracing nothing)
+ *   - peeking all around right after landing (S-38 review round 2 P2-1): no pipeline for the glass, nor for the
+ *     peek image's stand-ins that LayerField hangs under shared transmissive glass (drawn only in the peek image)
+ *   - no console error or warning, nor a GPU validation message of another level
+ * Pipelines by step, the longest frame of each step and the loading's steps go to artifacts/S-38/pipelines-<backend>.json,
+ * those of the turn to artifacts/S-38/peek-around-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
 
 const root = process.cwd();
 const backends = (process.env.BACKENDS ?? 'webgpu,webgl2').split(',');
 const BENIGN = /GPU stall|powerPreference/i;
+/** As in S-06: WebGPU validation errors can arrive at any level and silently drop frames. */
+const GPU_VALIDATION = /Destroyed texture|GPUValidationError|\[Invalid |used in a submit/i;
+/** S-03 mouse sensitivity (rad per pixel). */
+const SENSITIVITY = 0.0022;
 /** The workshop's glass first seen when looking back (S-34's trace; layout.ts WORKSHOP_OBJECTS annealerWares, cartWares). */
 const LOOK_BACK_GLASS = ['A0_ware_anneal01', 'A0_ware_cart01'];
 
@@ -31,6 +40,8 @@ interface Made {
   object: string;
   material: string;
   glass: boolean;
+  /** The peek image's stand-in of a transmissive object (LayerField: `<name>:peek-stand-in`, drawn only there). */
+  standIn: boolean;
   /** A full-screen pass of the finishing (three's QuadMesh), not a thing in the scene. */
   quad: boolean;
 }
@@ -101,6 +112,7 @@ function installTracer(): void {
         object: named(ro.object),
         material: ro.material?.name || ro.material?.type || '?',
         glass: readsBackdrop(ro.material),
+        standIn: /:peek-stand-in$/.test(ro.object?.name ?? ''),
         quad: ro.object?.isQuadMesh === true,
       });
       return create.call(this, ro, promises);
@@ -119,8 +131,10 @@ function collectConsole(page: Page): string[] {
   const seen: string[] = [];
   page.on('pageerror', (e) => seen.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
-    if ((m.type() === 'error' || m.type() === 'warning') && !BENIGN.test(m.text()))
-      seen.push(`${m.type()}: ${m.text().slice(0, 300)}`);
+    const text = m.text();
+    if (BENIGN.test(text)) return;
+    if (m.type() === 'error' || m.type() === 'warning' || GPU_VALIDATION.test(text))
+      seen.push(`${m.type()}: ${text.slice(0, 300)}`);
   });
   return seen;
 }
@@ -202,4 +216,110 @@ for (const backend of backends) {
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
+
+  test(`S-38 peeking all around right after landing compiles no glass, nor the peek image's stand-ins [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const errors = collectConsole(page);
+    await page.addInitScript(installTracer);
+    await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
+    // home → dive by the same clicks a player makes (as S-06)
+    await waitHome(page, 'p.load.ready === true', 90_000);
+    await page.locator('[data-ui="loading-start"]').click();
+    await waitHome(page, "p.screen === 'home' && p.transition === null", 30_000);
+    await page.locator('[data-item="start"]').click();
+    await waitHome(page, "p.screen === 'game' && p.transition === null", 30_000);
+    await waitRoom(page, 'r.ready && r.playing');
+    expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
+    // take the vidro from the bench (the first click only locks the mouse), then hold the right button and turn once round
+    const cursor = { x: 640, y: 360 };
+    await page.mouse.move(cursor.x, cursor.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await waitRoom(page, 'r.locked === true');
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, "r.orb === 'hand' && r.handPresence > 0.99");
+    const before = await room(page);
+    await page.mouse.down({ button: 'right' });
+    await waitRoom(page, 'r.peekAmount > 0.999');
+    const turns = 16;
+    let turned = 0;
+    let yaw = (await room(page)).yaw;
+    for (let i = 0; i < turns; i++) {
+      cursor.x -= (2 * Math.PI) / turns / SENSITIVITY;
+      await page.mouse.move(cursor.x, cursor.y, { steps: 4 });
+      await page.waitForTimeout(250);
+      const r = await room(page);
+      turned += Math.abs(Math.atan2(Math.sin(r.yaw - yaw), Math.cos(r.yaw - yaw)));
+      yaw = r.yaw;
+    }
+    const after = await room(page);
+    await page.mouse.up({ button: 'right' });
+
+    const made = await page.evaluate(() => window.__s38 ?? []);
+    const inPlay = made.filter((m) => m.at === 'game');
+    mkdirSync(join(root, 'artifacts/S-38'), { recursive: true });
+    writeFileSync(
+      join(root, `artifacts/S-38/peek-around-${backend}.json`),
+      JSON.stringify(
+        {
+          backend,
+          turned,
+          backPassFrames: after.backPassFrames,
+          inPlay,
+          standIns: made.filter((m) => m.standIn),
+          errors,
+        },
+        null,
+        2,
+      ),
+    );
+    // it really turned once round while peeking, and the peek image was drawn all the way
+    expect(turned).toBeGreaterThan(2 * Math.PI * 0.9);
+    expect(after.peeking).toBe(true);
+    expect(after.backPassFrames - before.backPassFrames).toBeGreaterThan(turns * 4);
+    // the tracer saw the stand-ins at all (so the check below cannot pass by tracing nothing)
+    expect(made.filter((m) => m.standIn).length, 'stand-ins compiled at some point').toBeGreaterThan(0);
+    expect(
+      inPlay
+        .filter((m) => m.glass || m.standIn)
+        .map((m) => `${m.object} ${m.material}${m.standIn ? ' (stand-in)' : ''}`),
+      'glass or stand-in pipelines made while peeking all around',
+    ).toEqual([]);
+
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
+interface RoomState {
+  ready: boolean;
+  playing: boolean;
+  locked: boolean;
+  orb: string;
+  handPresence: number;
+  peeking: boolean;
+  peekAmount: number;
+  yaw: number;
+  backPassFrames: number;
+}
+
+const room = (page: Page): Promise<RoomState> =>
+  page.evaluate(() => (window.__vidro.sceneProbe as { room: RoomState }).room);
+
+async function waitRoom(page: Page, fn: string, timeout = 20_000): Promise<void> {
+  await page.waitForFunction(
+    `(() => { try { const r = window.__vidro?.sceneProbe?.room; return !!r && !!(${fn}); } catch { return false; } })()`,
+    undefined,
+    { timeout },
+  );
+}
+
+async function waitHome(page: Page, fn: string, timeout: number): Promise<void> {
+  await page.waitForFunction(
+    `(() => { try { const p = window.__vidro?.sceneProbe; return !!p && !!p.load && !!(${fn}); } catch { return false; } })()`,
+    undefined,
+    { timeout },
+  );
 }

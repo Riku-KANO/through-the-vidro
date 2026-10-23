@@ -10,23 +10,31 @@ import { readsBackdrop } from './backdrop';
  * three runs; the other frames 18–20 ms; process/slices/S-38.md). A warm-up draw while loading compiles only what that pose
  * sees: three culls by the view frustum before it draws, and so does `compileAsync`.
  *
- * `withGlassUnculled` runs one draw with the frustum culling of every object whose material reads the backdrop
- * switched off, so the glass all around gets its pipelines in that draw, whatever the pose. Make it the game's own draw
- * (the same render target, backdrop and layer masks as in play): a pipeline belongs to its draw's state, and in r186 the
- * pipelines `compileAsync` made into another target of the same formats were made again by the scene pass (S-38).
+ * `withGlassUnculled` runs one draw with the frustum culling switched off for every object whose material reads the
+ * backdrop and for everything under it (a game may hang a cheaper copy under its glass to draw it in another pass, as
+ * the prologue's peek image does), so the glass all around gets its pipelines in that draw, whatever the pose. Make it
+ * the game's own draw (the same render targets, backdrop and layer masks as in play): a pipeline belongs to its draw's
+ * state, and in r186 the pipelines `compileAsync` made into another target of the same formats were made again by the
+ * scene pass (S-38).
  *
  * Only the glass, not everything: switching the culling off for everything also draws every shadow caster into the
  * shadow maps and the whole back layer into the peek image in that frame (in the prologue 345 draw calls, over the
- * budget of 300), while the opaque pieces mostly share a few materials that are compiled by what is in view anyway.
- * Hidden objects stay hidden (three skips them and their children). The flags are put back when `draw` returns or
- * throws.
+ * budget of 300), while the opaque pieces mostly share a few materials that are compiled by what is in view anyway. The
+ * draw calls of that frame still grow with the number of glass objects.
+ *
+ * Not warmed: what is hidden at that moment (three skips it and its children): the levels of an LOD that are not shown
+ * from the warm-up pose, glass under a hidden parent. Show them for the draw, or draw once per level. The flags are put
+ * back when `draw` returns or throws.
  */
 export function withGlassUnculled<T>(root: THREE.Object3D, draw: () => T): T {
   const unculled: THREE.Object3D[] = [];
-  root.traverse((o) => {
-    if (!o.frustumCulled || !drawsGlass(o)) return;
+  const uncull = (o: THREE.Object3D): void => {
+    if (!o.frustumCulled) return;
     o.frustumCulled = false;
     unculled.push(o);
+  };
+  root.traverse((o) => {
+    if (drawsGlass(o)) o.traverse(uncull);
   });
   try {
     return draw();
