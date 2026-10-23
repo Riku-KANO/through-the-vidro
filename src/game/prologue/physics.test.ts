@@ -66,6 +66,7 @@ import {
 } from './physics';
 import { LIGHTHOUSE_RAIL } from './plaza';
 import { FINALE_SECONDS, membraneHolds, type OrbPlace, PrologueSession, vidroCalls } from './session';
+import { SLOPE_RAIL, SLOPE_RAIL_X } from './slope';
 
 /**
  * The prologue room in a real Rapier world (Node): the same colliders the scene builds (the room's own, and the
@@ -770,8 +771,10 @@ describe('S-35: down the slope to the central plaza (落下なし, やわらか�
         const s = walk(r, p, intent, 3);
         expect(s.every((q) => q.grounded && Math.abs(q.y - slopeHeight(q.z)) < 0.05)).toBe(true);
         const x = p.feet.x * sign;
-        expect(x, `side ${sign} at z ${z}`).toBeGreaterThan(SLOPE.maxX - BODY_RADIUS - 0.35);
-        expect(x).toBeLessThan(SLOPE.maxX - BODY_RADIUS + 0.02);
+        // the railing stops it, against its inner face (before the stone's edge would: the soft edge stops 0.3 m in)
+        const face = SLOPE_RAIL_X - SLOPE_RAIL.thickness / 2 - BODY_RADIUS;
+        expect(x, `side ${sign} at z ${z}`).toBeGreaterThan(face - 0.05);
+        expect(x).toBeLessThan(face + 0.02);
         expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
       }
     }

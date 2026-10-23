@@ -6,6 +6,7 @@ import {
   fract,
   hash,
   length,
+  max,
   min,
   mix,
   normalWorld,
@@ -26,6 +27,7 @@ import {
   EAST_ROAD,
   EAST_ROAD_END_X,
   GATE,
+  GATE_OPEN_DEG,
   LAMP_POST_RADIUS,
   LIGHTHOUSE,
   LIGHTHOUSE_BASE,
@@ -81,7 +83,7 @@ export function rimArcs(): { from: number; to: number }[] {
   });
 }
 
-/** Unit (x, z) along the rim at a gate, to the right seen from inside the plaza (the gate's local +X; its +Z points out). */
+/** Unit (x, z) along the rim at a gate, to the left seen from inside the plaza (the gate's local +X; its +Z points out). */
 export function gateTangent(dir: readonly [number, number]): [number, number] {
   return [dir[1], -dir[0]];
 }
@@ -123,17 +125,22 @@ export const FOG_WAY = { near: 18, far: 150 } as const;
  */
 export const FOG_TOWN = { near: 30, far: 300 } as const;
 
-/** The fog's distances for someone standing at z: the way's in the workshop and up to the gate, the town's past its brow. */
-export function fogRangeAt(z: number): { near: number; far: number } {
+/**
+ * The fog's distances for someone standing at z: the way's in the workshop and up to the gate, the town's past its brow.
+ * Written into `out` (the room asks every frame).
+ */
+export function fogRangeAt(
+  z: number,
+  out: { near: number; far: number } = { near: 0, far: 0 },
+): { near: number; far: number } {
   // it clears as you go through the gate, to the town's by the slope's brow
   const from = GATE.z + 2;
   const to = SLOPE.fromZ;
   const t = Math.min(1, Math.max(0, (from - z) / (from - to)));
   const s = t * t * (3 - 2 * t);
-  return {
-    near: FOG_WAY.near + (FOG_TOWN.near - FOG_WAY.near) * s,
-    far: FOG_WAY.far + (FOG_TOWN.far - FOG_WAY.far) * s,
-  };
+  out.near = FOG_WAY.near + (FOG_TOWN.near - FOG_WAY.near) * s;
+  out.far = FOG_WAY.far + (FOG_TOWN.far - FOG_WAY.far) * s;
+  return out;
 }
 
 /* ---------- the drawing ---------- */
@@ -175,8 +182,22 @@ function plazaStoneMaterial(): THREE.MeshStandardNodeMaterial {
   const r = length(d);
   const tile = 0.62;
   const ring = floor(r.div(tile));
-  // along each ring the stones keep about their size; every other ring is shifted by half a stone
-  const along = atan(d.y, d.x).mul(r).div(tile).add(ring.mul(0.5));
+  // along each ring the stones keep about their size, a whole number of them round it (so no seam where the angle wraps);
+  // every other ring is shifted by half a stone
+  const count = max(
+    float(1),
+    floor(
+      ring
+        .add(0.5)
+        .mul(Math.PI * 2)
+        .add(0.5),
+    ),
+  );
+  const along = atan(d.y, d.x)
+    .div(Math.PI * 2)
+    .add(0.5)
+    .mul(count)
+    .add(ring.mul(0.5));
   const cell = vec2(fract(along), fract(r.div(tile)));
   const edge = min(min(cell.x, float(1).sub(cell.x)), min(cell.y, float(1).sub(cell.y)));
   const grout = smoothstep(0.0, 0.05, edge);
@@ -401,7 +422,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         for (const p of parts) local.push(p.applyMatrix4(m));
       };
       // shut, the two leaves meet in the middle; open (east), they have swung out of the plaza along its road's sides
-      const open = g.open ? (96 * Math.PI) / 180 : 0;
+      const open = g.open ? (GATE_OPEN_DEG * Math.PI) / 180 : 0;
       leaf(1, open);
       leaf(-1, open);
       const m = gateMatrix(g.dir);
@@ -631,7 +652,12 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   // ---- the town round the plaza, below the slope and on エリア1's hill: bubbles of glass fused in clusters ------------
   {
     const rand = rng(20261023);
-    const spheres: { p: THREE.Vector3; r: number }[] = [];
+    // each part of the town is its own instanced mesh, so what is out of the view is left out (the bubbles round the plaza,
+    // below the slope, on エリア1's hill, and far off); the hill's and the far ones, seen only from afar, have fewer facets
+    // (空間の可読性と導線 8: 遠景のガラスは単純な表現に)
+    type Zone = 'plaza' | 'slope' | 'hill' | 'far';
+    let zone: Zone = 'plaza';
+    const spheres: { p: THREE.Vector3; r: number; zone: Zone }[] = [];
     /** A cluster of bubbles round (x, z) on `base`; with `maxTop`, sunk so that none of it rises above that height. */
     const cluster = (x: number, base: number, z: number, main: number, maxTop?: number): void => {
       const parts: { p: THREE.Vector3; r: number }[] = [];
@@ -653,7 +679,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       }
       const top = Math.max(...parts.map((b) => b.p.y + b.r));
       const sink = maxTop !== undefined ? Math.max(0, top - maxTop) : 0;
-      for (const b of parts) spheres.push({ p: b.p.setY(b.p.y - sink), r: b.r });
+      for (const b of parts) spheres.push({ p: b.p.setY(b.p.y - sink), r: b.r, zone });
     };
     // round the plaza, leaving the slope and the gates their views. On the slope's side they stand lower than the plaza
     // (the plaza is a terrace): from the slope's brow they do not hide it (ルール6: 次に行く場所が先に見えている)
@@ -674,6 +700,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       );
     }
     // below the slope on both sides as it comes down into the town: glass roofs under its railings, out of the mist
+    zone = 'slope';
     for (let k = 0; k < 14; k++) {
       const z = -48 - k * 3.6 - rand() * 2;
       const side = k % 2 === 0 ? 1 : -1;
@@ -682,6 +709,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
     // エリア1's hill: the workshop street's houses climbing it toward the chimney, each on bigger ones below it down into
     // the mist (the hill is the houses)
+    zone = 'hill';
     const fromX = cx - PLAZA.radius - 30;
     for (let k = 0; k < 22; k++) {
       const u = k / 21;
@@ -695,6 +723,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         cluster(x + (rand() - 0.5) * 3, y - 3, z + (rand() - 0.5) * 3, 3.2 + rand() * 1.8);
     }
     // far to the south and the west, round the canal and the greenhouse: silhouettes in the haze
+    zone = 'far';
     for (let k = 0; k < 8; k++) {
       const south = k < 4;
       const x = south ? cx + (rand() - 0.5) * 60 : cx + 70 + rand() * 30;
@@ -705,16 +734,24 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     // far → near from the slope's middle, so the bubbles blend in order from where the town is first seen
     const from = new THREE.Vector3(0, -4, -60);
     spheres.sort((a, b) => b.p.distanceToSquared(from) - a.p.distanceToSquared(from));
-    const town = new THREE.InstancedMesh(keep(new THREE.SphereGeometry(1, 24, 16)), clear, spheres.length);
+    const near = keep(new THREE.SphereGeometry(1, 24, 16));
+    const coarse = keep(new THREE.SphereGeometry(1, 16, 10));
     const m4 = new THREE.Matrix4();
     const q = new THREE.Quaternion();
-    spheres.forEach((b, i) => {
-      town.setMatrixAt(i, m4.compose(b.p, q, new THREE.Vector3(b.r, b.r, b.r)));
-    });
-    town.computeBoundingSphere();
-    town.renderOrder = 1;
-    instanced.push(town);
-    put(town);
+    const scale = new THREE.Vector3();
+    for (const z of ['plaza', 'slope', 'hill', 'far'] as const) {
+      const mine = spheres.filter((b) => b.zone === z);
+      if (mine.length === 0) continue;
+      const town = new THREE.InstancedMesh(z === 'hill' || z === 'far' ? coarse : near, clear, mine.length);
+      town.name = `town-${z}`;
+      mine.forEach((b, i) => {
+        town.setMatrixAt(i, m4.compose(b.p, q, scale.setScalar(b.r)));
+      });
+      town.computeBoundingSphere();
+      town.renderOrder = 1;
+      instanced.push(town);
+      put(town);
+    }
   }
 
   // ---- 工房街の煙突 on エリア1's hill (the area's landmark, ルール5): frosted stacks ringed with brass, the tallest at the top -
@@ -837,7 +874,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   moteMat.opacityNode = smoothstep(0.8, 3.0, positionView.length());
   moteMat.fog = false;
   const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.022, 0)), moteMat, MOTES);
-  motes.frustumCulled = false;
+  // they drift over the plaza: left out of the view's work wherever the plaza is not in it
+  motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx - 6, PLAZA_Y + 2, cz + 6), PLAZA.radius);
   instanced.push(motes);
   put(motes);
   const [ex, ez] = plazaGateAt(COMPASS.east);

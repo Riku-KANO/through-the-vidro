@@ -612,6 +612,24 @@ export const SPAWNS = {
     yaw: Math.atan2(5, 22),
     pitch: 0.58,
   },
+  /** S-35: held at the film in the gate's arch (without the vidro, after the close), looking back at its pedestal. */
+  film: {
+    feet: [0.2, 0, MEMBRANE.z + 0.3] as Vec3,
+    yaw: Math.atan2(1.15, -6.8),
+    pitch: -0.08,
+  },
+  /** S-35: in the plaza, looking at the shut south gate: the canal and its drop towers beyond the bars (エリア2). */
+  south: {
+    feet: [PLAZA.center[0] + 5, PLAZA_Y, PLAZA.center[2] - 13] as Vec3,
+    yaw: Math.atan2(5, 12),
+    pitch: 0.05,
+  },
+  /** S-35: in the plaza, looking at the shut west gate: the greenhouse's dome beyond the bars (エリア3). */
+  west: {
+    feet: [PLAZA.center[0] + 13, PLAZA_Y, PLAZA.center[2] + 5] as Vec3,
+    yaw: Math.atan2(-12, 5),
+    pitch: 0.05,
+  },
   /** S-35: in the plaza, looking at the open east gate (エリア1), its short road and the chimney's hill beyond. */
   east: {
     feet: [PLAZA.center[0] - 9, PLAZA_Y, PLAZA.center[2] + 4] as Vec3,

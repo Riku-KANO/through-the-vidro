@@ -253,6 +253,12 @@ export interface AmbientSpot {
    * was — live as in the seeded renders the ear and the sensors were tuned on.
    */
   readonly ownStream?: boolean;
+  /**
+   * S-35: hung far away (the town's chimes, about 195 m from the workshop): its level is set by 1/d, so its panner is told
+   * to keep lowering it however far it is (Web Audio's inverse law does already; a browser that bounds it at maxDistance,
+   * 100 m in the core engine, would play it about twice as loud in the workshop).
+   */
+  readonly far?: boolean;
 }
 
 const [, LAMP] = LAMPS;
@@ -308,7 +314,7 @@ export const PROLOGUE_AMBIENCE: readonly AmbientSpot[] = [
     position: WIND_CHIME,
     ownStream: true,
   },
-  { id: 'chimes:town', kind: 'chimes', position: TOWN_CHIMES },
+  { id: 'chimes:town', kind: 'chimes', position: TOWN_CHIMES, far: true },
   { id: 'drops:skylight', kind: 'drops', position: [0.55, 0.02, 0.55], notes: [3, 4, 5] },
   { id: 'drops:tub', kind: 'drops', position: TUB_DRIP, notes: [0, 1, 2, 3] },
   {
@@ -351,14 +357,17 @@ function placeAmbience(
   const { only } = opts;
   const seed = opts.seed ?? randomSeed();
   const spots = only ? PROLOGUE_AMBIENCE.filter((s) => only.includes(s.id)) : PROLOGUE_AMBIENCE;
-  const placed = spots.map((spot) => ({
-    spot,
-    emitter: engine.createEmitter('ambience', {
+  const placed = spots.map((spot) => {
+    const emitter = engine.createEmitter('ambience', {
       x: spot.position[0],
       y: spot.position[1],
       z: spot.position[2],
-    }),
-  }));
+    });
+    // S-35: a far place's panner lowers it by distance however far it is (AmbientSpot.far)
+    const panner = emitter.input as Partial<PannerNode>;
+    if (spot.far && typeof panner.maxDistance === 'number') panner.maxDistance = 10_000;
+    return { spot, emitter };
+  });
   const places = placed.map(({ spot, emitter }) => ({
     id: spot.id,
     kind: spot.kind,

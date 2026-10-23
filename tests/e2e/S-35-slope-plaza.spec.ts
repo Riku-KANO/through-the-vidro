@@ -425,41 +425,21 @@ for (const backend of backends) {
     }
     expect(stop.position.z).toBeLessThan(membraneZ + 0.6);
     expect(stop.membrane.holding).toBe(true);
-    // そのとき台座の玉がかすかに光って知らせる: pushing on at the film, the vidro calls. Look back at it and push on backwards
-    // (S: the film behind you): it glows; let go where you stand and it falls quiet — the same view, the same spot
+    // そのとき台座の玉がかすかに光って知らせる: pushing on at the film, the vidro calls — and keeps calling while you stay at the
+    // film: let go, turn round with the mouse to look for it, and it is still glowing
     await lookAt(page, pedestalOrb);
-    await page.waitForTimeout(200);
-    await page.keyboard.down('KeyS');
-    const calling = await waitRoom(page, 'r.membrane.call > 0.95', 3_000);
-    expect(calling.orb).toBe('pedestal');
-    expect(calling.position.z).toBeGreaterThan(membraneZ);
-    await page.waitForTimeout(200);
-    const callR = await room(page);
-    const callPng = await page.screenshot({ path: join(shotDir, 'call.png') });
-    await page.keyboard.up('KeyS');
-    shots.call = await luminance(page, callPng);
-    const quietR = await waitRoom(page, 'r.membrane.call === 0', 5_000);
-    await page.waitForTimeout(200);
-    const quietPng = await page.screenshot({ path: join(shotDir, 'quiet.png') });
-    shots.quiet = await luminance(page, quietPng);
-    expect(Math.abs(quietR.position.z - callR.position.z)).toBeLessThan(0.08);
-    expect(quietR.membrane.holding).toBe(true);
-    // the vidro's sphere on the screen (its film, and the seams where it cuts the bridge and the stone): brighter while
-    // it calls — seen from the gate even where the bridge's glass stands in front of the vidro itself
-    const [ox, oy, oz] = pedestalOrb;
-    const R = 4;
-    const sphereBox = screenBox(callR, [
-      [ox - R, oy - R, oz],
-      [ox + R, oy + R, oz],
-      [ox, oy + R, oz - R],
-      [ox, oy - R, oz + R],
-    ]);
-    expect(sphereBox.x1 - sphereBox.x0).toBeGreaterThan(200);
-    const brighter = await brightenedShare(page, callPng, quietPng, sphereBox);
-    const darker = await brightenedShare(page, quietPng, callPng, sphereBox);
-    // (the body may settle a few centimetres when you let go: some edges shift either way, so it is weighed against that)
-    expect(brighter, 'share of the vidro’s sphere brighter while it calls').toBeGreaterThan(0.03);
-    expect(brighter, 'brighter, not merely shifted').toBeGreaterThan(darker * 3);
+    await page.waitForTimeout(1500);
+    const turned = await room(page);
+    expect(turned.orb).toBe('pedestal');
+    expect(turned.membrane.call, 'still calling after letting go and turning round').toBeGreaterThan(0.95);
+    const turnedPng = await page.screenshot({ path: join(shotDir, 'call-turned.png') });
+    shots.turned = await luminance(page, turnedPng);
+    // and a step back from the film toward it: quiet again
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(800);
+    await page.keyboard.up('KeyW');
+    const away = await waitRoom(page, 'r.membrane.call === 0', 5_000);
+    expect(away.position.z - membraneZ).toBeGreaterThan(0.9);
 
     // back over the settled bridge, the vidro picked up on it: the film goes, and lets you through
     await walkTo(page, 0.1, edgeZ - 0.8, 0.3);
@@ -478,13 +458,103 @@ for (const backend of backends) {
     const final = await room(page);
     writeFileSync(
       join(root, `artifacts/S-35/film-${backend}.json`),
-      JSON.stringify({ backend, stop: stop.position, brighter, darker, shots, final, errors }, null, 2),
+      JSON.stringify(
+        { backend, stop: stop.position, turned: turned.membrane, shots, final, errors },
+        null,
+        2,
+      ),
     );
     expect(final.fallRescues).toBe(0);
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
       expect(l.mean, `mean luminance in ${name}`).toBeGreaterThan(0.12);
       expect(l.white, `near-white share in ${name}`).toBeLessThan(0.08);
+    }
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-35 the vidro's call is seen from the film: its sphere brightens, the same view before and while it calls [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    mkdirSync(shotDir, { recursive: true });
+    mkdirSync(join(root, 'artifacts/S-35'), { recursive: true });
+    const errors = collectErrors(page);
+    // held at the film after the close, the vidro on its pedestal, looking back at it: standing there, it is quiet
+    await page.goto(`/?scene=prologue-proto&spawn=film&finaleHold=4.5${webgl}`);
+    const start = await waitRoom(
+      page,
+      "r.ready && r.playing && r.orb === 'pedestal' && r.membrane.film === 1",
+      60_000,
+    );
+    const { membraneZ, pedestalOrb } = start.layout;
+    expect(start.membrane.holding).toBe(true);
+    await lock(page);
+    await page.waitForTimeout(600);
+    const quietR = await room(page);
+    expect(quietR.membrane.call).toBe(0);
+    const quietPng = await page.screenshot({ path: join(shotDir, 'quiet.png') });
+    // push on backwards into the film (S: it is behind you): the vidro calls, and the same view shows it
+    await page.keyboard.down('KeyS');
+    const calling = await waitRoom(page, 'r.membrane.call > 0.95', 3_000);
+    await page.keyboard.up('KeyS');
+    expect(calling.position.z).toBeGreaterThan(membraneZ);
+    await page.waitForTimeout(300);
+    const callR = await room(page);
+    expect(callR.membrane.call, 'still calling, let go where you stand').toBeGreaterThan(0.95);
+    const callPng = await page.screenshot({ path: join(shotDir, 'call.png') });
+    expect(Math.abs(callR.position.z - quietR.position.z)).toBeLessThan(0.08);
+    // the vidro's sphere on the screen (its film, and the seams where it cuts the bridge and the stone): brighter while
+    // it calls — seen from the gate even where the bridge's glass stands in front of the vidro itself
+    const [ox, oy, oz] = pedestalOrb;
+    const R = 4;
+    const sphereBox = screenBox(callR, [
+      [ox - R, oy - R, oz],
+      [ox + R, oy + R, oz],
+      [ox, oy + R, oz - R],
+      [ox, oy - R, oz + R],
+    ]);
+    expect(sphereBox.x1 - sphereBox.x0).toBeGreaterThan(200);
+    const brighter = await brightenedShare(page, callPng, quietPng, sphereBox);
+    const darker = await brightenedShare(page, quietPng, callPng, sphereBox);
+    writeFileSync(
+      join(root, `artifacts/S-35/call-${backend}.json`),
+      JSON.stringify(
+        { backend, quiet: quietR.position, call: callR.position, brighter, darker, errors },
+        null,
+        2,
+      ),
+    );
+    // (the body may settle a few centimetres: some edges shift either way, so it is weighed against that)
+    expect(brighter, 'share of the vidro’s sphere brighter while it calls').toBeGreaterThan(0.03);
+    expect(brighter, 'brighter, not merely shifted').toBeGreaterThan(darker * 3);
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-35 through the shut south and west gates, the canal and the greenhouse are glimpsed (格子越しの気配) [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    mkdirSync(shotDir, { recursive: true });
+    const errors = collectErrors(page);
+    for (const [name, spawn] of [
+      ['plaza-south', 'south'],
+      ['plaza-west', 'west'],
+    ] as const) {
+      await page.goto(`/?scene=prologue-proto&spawn=${spawn}&finaleHold=4.5&finaleOrb=hand${webgl}`);
+      await waitRoom(page, "r.ready === true && r.orb === 'hand'", 60_000);
+      await lock(page);
+      await page.waitForTimeout(800);
+      const png = await page.screenshot({ path: join(shotDir, `${name}.png`) });
+      const l = await luminance(page, png);
+      const r = await room(page);
+      expect(r.grounded).toBe(true);
+      expect(r.drawCalls, `draw calls in ${name}`).toBeLessThanOrEqual(BUDGET.drawCalls);
+      expect(r.triangles, `triangles in ${name}`).toBeLessThanOrEqual(BUDGET.triangles);
+      expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
+      expect(l.mean, `mean luminance in ${name}`).toBeGreaterThan(0.12);
     }
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);

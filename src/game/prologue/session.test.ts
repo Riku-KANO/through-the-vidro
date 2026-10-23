@@ -415,8 +415,12 @@ describe('S-35: the film at the slope’s entrance holds whoever has left the vi
 
   it('the vidro calls only while the film — there once the gate opens — holds someone right at it, pushing on', () => {
     expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, true)).toBe(true);
-    // standing by the film, not trying to go through: quiet
+    // standing by the film, not trying to go through: quiet — unless it was already calling (you let go and turn round)
     expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, false)).toBe(false);
+    expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, false, true)).toBe(true);
+    // once you step back from the film, or have the vidro in hand, it stops even so
+    expect(vidroCalls('pedestal', FILM.z + FILM.callReach + 0.1, FILM, true, false, true)).toBe(false);
+    expect(vidroCalls('hand', AT_FILM[2], FILM, true, false, true)).toBe(false);
     // the gate still shut: no film yet, so nothing to call about (the shut gate stops you on its own)
     expect(vidroCalls('pedestal', AT_FILM[2], FILM, false, true)).toBe(false);
     // further back on the shore, past the film, or with the vidro in hand: quiet
@@ -450,7 +454,7 @@ describe('S-35: the session’s film and the vidro’s call (そのとき台座�
     expect(s.film).toBe(0);
   });
 
-  it('the vidro calls while you push on at the film, and falls quiet again once you stop or step back', () => {
+  it('the vidro calls once you push on at the film, still while you stand there and turn round, and falls quiet as you step back', () => {
     const s = gateOpen();
     expect(s.call).toBe(0);
     // standing at the film: nothing yet
@@ -459,11 +463,8 @@ describe('S-35: the session’s film and the vidro’s call (そのとき台座�
     for (let t = 0; t < CALL_RISE_SECONDS + 0.02; t += DT)
       s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
     expect(s.call).toBe(1);
-    // let go where you stand: it fades
-    for (let t = 0; t < CALL_FALL_SECONDS + 0.02; t += DT) s.step(DT, { wantPeek: false, feet: AT_FILM });
-    expect(s.call).toBe(0);
-    for (let t = 0; t < CALL_RISE_SECONDS + 0.02; t += DT)
-      s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    // let go where you stand (and turn round to look for it): it keeps calling
+    for (let t = 0; t < 3; t += DT) s.step(DT, { wantPeek: false, feet: AT_FILM });
     expect(s.call).toBe(1);
     // a step back: it fades slower than it came
     for (let t = 0; t < CALL_FALL_SECONDS / 2; t += DT)

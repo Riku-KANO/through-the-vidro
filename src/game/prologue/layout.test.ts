@@ -580,6 +580,26 @@ describe('S-35: the central plaza, its broken lighthouse and its three gates', (
     const [gx, gz] = plazaGateAt(COMPASS.east);
     const e = SPAWNS.east;
     expect(angleDeg(eye(e), look(e), [gx, PLAZA_Y + 2, gz])).toBeLessThan(10);
+    // and the shut gates, the canal and the greenhouse glimpsed through their bars
+    for (const [name, dir] of [
+      ['south', COMPASS.south],
+      ['west', COMPASS.west],
+    ] as const) {
+      const s = SPAWNS[name];
+      const [x, z] = plazaGateAt(dir);
+      expect(angleDeg(eye(s), look(s), [x, PLAZA_Y + 2, z]), name).toBeLessThan(10);
+      expect(Math.hypot(s.feet[0] - PLAZA.center[0], s.feet[2] - PLAZA.center[2])).toBeGreaterThan(
+        LIGHTHOUSE_BASE.radius + 2,
+      );
+    }
+  });
+
+  it('the film’s view stands held at the film, on the shore’s side, looking back at the pedestal', () => {
+    const s = SPAWNS.film;
+    expect(s.feet[2]).toBeGreaterThan(MEMBRANE.z);
+    expect(s.feet[2] - MEMBRANE.z).toBeLessThan(MEMBRANE.callReach);
+    const eye: Vec3 = [s.feet[0], EYE_HEIGHT, s.feet[2]];
+    expect(angleDeg(eye, lookDirection(s.yaw, s.pitch), PEDESTAL_ORB)).toBeLessThan(3);
   });
 });
 

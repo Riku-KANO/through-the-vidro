@@ -81,6 +81,16 @@ describe('S-34: the gate as drawn (finale.ts buildFinale; S-35: the lookout at t
     art.dispose();
   });
 
+  it('S-35: nothing of it stands past the gate’s open leaves any more (S-34’s railing and lamps at the road’s end are gone)', () => {
+    const { art, scene } = build();
+    art.setGate(OPEN);
+    scene.updateMatrixWorld(true);
+    const all = new THREE.Box3().setFromObject(scene);
+    expect(all.min.z).toBeGreaterThan(GATE.z - GATE.halfWidth - 0.2);
+    expect(all.min.z).toBeGreaterThan(ROAD.minZ + 2);
+    art.dispose();
+  });
+
   it('everything of the close is on the shared layer (drawn in the main view), and the swinging leaves cast no shadow', () => {
     const { art, scene } = build();
     let meshes = 0;

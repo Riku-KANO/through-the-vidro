@@ -243,7 +243,7 @@ const CALL_GLOW = 0.42;
 const CALL_BREATH = 0.16;
 const CALL_RATE = (2 * Math.PI) / 1.6;
 const CALL_FILM = 0.8;
-const CALL_LIGHT = 2.0;
+const CALL_LIGHT = 1.0;
 /**
  * 仮 (S-35): and the rim of the pedestal's milky cup lights up with it (the same warm rim as when you can act on it): the
  * cup is opaque, so it shows from the gate even where the bridge's glass stands between (透過は不透明な物しか映さない).
@@ -646,6 +646,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     feetZ = f.z;
   };
   const feetNow: [number, number, number] = [spawn.feet[0], spawn.feet[1], spawn.feet[2]];
+  /** S-35: the haze's distances where the body stands (plaza.ts fogRangeAt), written each frame. */
+  const fogNow = { near: 0, far: 0 };
   peekInput.feet = feetNow;
   /** S-34 review: the longest frames of the scripted play, by step (probe.autoplay). */
   let frameAt: number | null = null;
@@ -888,7 +890,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       if (on) {
         hintFor = 0;
         // the way's haze in the workshop, the town's out on the slope (S-35: plaza.ts fogRangeAt)
-        const fog = fogRangeAt(feetZ);
+        const fog = fogRangeAt(feetZ, fogNow);
         art.fogRange.near.value = fog.near;
         art.fogRange.far.value = fog.far;
         // the dive ends exactly at the player's eye; from here the body owns the camera
@@ -982,7 +984,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         player.applyToCamera(camera);
         camera.updateMatrixWorld();
         // S-35: the haze reaches further out in the town than on the way
-        const fog = fogRangeAt(body.fz);
+        const fog = fogRangeAt(body.fz, fogNow);
         art.fogRange.near.value = fog.near;
         art.fogRange.far.value = fog.far;
       } else readBody();

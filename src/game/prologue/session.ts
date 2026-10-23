@@ -64,9 +64,11 @@ export function membraneHolds(orb: OrbPlace, feetZ: number, membraneZ: number): 
 }
 
 /**
- * S-35: the vidro left behind calls — glows faintly where it stands (そのとき台座の玉がかすかに光って知らせる) — while the film,
- * there once the gate has started to open, holds a body within `callReach` of it that is pushing on through it (`pushing`:
- * walking toward the slope). Standing by the film, or turning back, it falls quiet.
+ * S-35: the vidro left behind calls — glows faintly where it stands (そのとき台座の玉がかすかに光って知らせる) — once the film,
+ * there once the gate has started to open, has held a body pushing on through it (`pushing`: walking toward the slope), and
+ * for as long as that body stays within `callReach` of the film (`calling`: it was calling a moment ago) — so it is still
+ * glowing when you let go and turn round to look for it. Stepping back from the film, or the vidro in hand, and it falls
+ * quiet; just walking up to the film and standing there, it does not start.
  */
 export function vidroCalls(
   orb: OrbPlace,
@@ -74,9 +76,10 @@ export function vidroCalls(
   membrane: { z: number; callReach: number },
   gateOpening: boolean,
   pushing: boolean,
+  calling = false,
 ): boolean {
   return (
-    pushing &&
+    (pushing || calling) &&
     gateOpening &&
     membraneHolds(orb, feetZ, membrane.z) &&
     feetZ - membrane.z <= membrane.callReach
@@ -179,6 +182,7 @@ export class PrologueSession {
   /** S-35: the film at the slope's entrance (up while the vidro is not in hand) and the left-behind vidro's call, linear. */
   private filmTween: Tween;
   private callValue = 0;
+  private calling = false;
   private feetZ = Number.POSITIVE_INFINITY;
   private pushing = false;
 
@@ -383,9 +387,17 @@ export class PrologueSession {
     const m = this.options.membrane;
     if (!m) return;
     const away = this.orbPlace !== 'hand';
-    this.filmTween = stepTween({ ...this.filmTween, target: away ? 1 : 0 }, dt, FILM_SECONDS);
-    const calling = vidroCalls(this.orbPlace, this.feetZ, m, this.gateProgress > 0, this.pushing);
-    this.callValue = calling
+    this.filmTween.target = away ? 1 : 0;
+    this.filmTween = stepTween(this.filmTween, dt, FILM_SECONDS);
+    this.calling = vidroCalls(
+      this.orbPlace,
+      this.feetZ,
+      m,
+      this.gateProgress > 0,
+      this.pushing,
+      this.calling,
+    );
+    this.callValue = this.calling
       ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)
       : Math.max(0, this.callValue - dt / CALL_FALL_SECONDS);
   }
