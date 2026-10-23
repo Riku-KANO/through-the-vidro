@@ -390,40 +390,40 @@ type Kept = Pick<Warmth, 'amount' | 'warmShare' | 'red'>;
 /**
  * The warmth of the floor in front of the furnace in S-31 (S37_PHASE=s31, run in a checkout of a3fd76d: the realtime fire,
  * its spot without a shadow) and in S-26 (S37_PHASE=s26, main 2d30c73: the fire baked with the sky into one lightmap),
- * per backend and view, measured on 2026-10-23 (artifacts/S-37/sensors-<backend>-<phase>.json; process/slices/S-37.md).
+ * per backend and view, measured on 2026-10-23 with SHOTS pictures each (artifacts/S-37/sensors-<backend>-<phase>.json; process/slices/S-37.md).
  * After, "about as much as S-31": the amount of warm colour (red − blue) and of the fire's red (red − green), and the share
  * of warm pixels, at least KEPT of S-31's, the amount not past OVER times it (the dawn's blue stays: no orange room).
- * From in front of the furnace and from the door, where S-26 lost it (8.7 and 18.3 of S-31's 15.1 and 22.1), the amount is
+ * From in front of the furnace and from the door, where S-26 lost it (8.9 and 18.4 of S-31's 15.4 and 22.4), the amount is
  * also more than halfway back from S-26 to S-31. In the first picture the floor on the right is warm with the dawn's sun as
  * well (S-26 is as warm there as S-31), so only the bounds hold there.
  */
 const WARMTH: Record<string, Record<string, { s31: Kept; s26: Kept }>> = {
   webgpu: {
     furnace: {
-      s31: { amount: 15.08, warmShare: 0.355, red: 17.9 },
-      s26: { amount: 8.699, warmShare: 0.201, red: 13.75 },
+      s31: { amount: 15.41, warmShare: 0.36, red: 18.18 },
+      s26: { amount: 8.885, warmShare: 0.203, red: 13.94 },
     },
     wake: {
-      s31: { amount: 30.25, warmShare: 0.928, red: 24.25 },
-      s26: { amount: 31.37, warmShare: 0.996, red: 23.53 },
+      s31: { amount: 30.35, warmShare: 0.93, red: 24.33 },
+      s26: { amount: 31.38, warmShare: 0.996, red: 23.54 },
     },
     door: {
-      s31: { amount: 22.06, warmShare: 0.492, red: 25.42 },
-      s26: { amount: 18.28, warmShare: 0.458, red: 23.57 },
+      s31: { amount: 22.34, warmShare: 0.497, red: 25.61 },
+      s26: { amount: 18.42, warmShare: 0.459, red: 23.64 },
     },
   },
   webgl2: {
     furnace: {
-      s31: { amount: 15.27, warmShare: 0.358, red: 18.05 },
-      s26: { amount: 8.755, warmShare: 0.201, red: 13.77 },
+      s31: { amount: 15.44, warmShare: 0.361, red: 18.2 },
+      s26: { amount: 8.905, warmShare: 0.204, red: 13.96 },
     },
     wake: {
-      s31: { amount: 30.45, warmShare: 0.932, red: 24.41 },
+      s31: { amount: 30.35, warmShare: 0.93, red: 24.34 },
       s26: { amount: 31.38, warmShare: 0.996, red: 23.54 },
     },
     door: {
-      s31: { amount: 22.37, warmShare: 0.497, red: 25.68 },
-      s26: { amount: 18.35, warmShare: 0.458, red: 23.62 },
+      s31: { amount: 22.38, warmShare: 0.497, red: 25.64 },
+      s26: { amount: 18.42, warmShare: 0.459, red: 23.64 },
     },
   },
 };
