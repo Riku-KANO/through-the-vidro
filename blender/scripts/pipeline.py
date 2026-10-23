@@ -12,7 +12,9 @@
 6. 焼き込み（S-26。--bake があるとき）: エリアごとに、焼ける材質（bakeable_material）を持つ見た目の物の光と影を、1 枚の
    ライトマップに Cycles で焼く（common/bake.py。2つ目の UV はそこで詰め直す。焼けない材質の面は UV を潰す）。
    物の extras に lightmap（画像の名前 `<エリア>_lightmap`）と lightmap_scale、scene の extras に bake（大きさ・サンプル数・
-   かかった秒・焼いた光と空）を書く。画像は --out の lightmaps/ に PNG で置き、scripts/assets が glb の中へ KTX2 で入れる
+   焼いた光と空）を書く。画像は --out の lightmaps/ に PNG で置き、scripts/assets が glb の中へ KTX2 で入れる。
+   S-37: 光と光る材質の `bake_layer` があれば、その層の光は別のライトマップ（`<エリア>_lightmap_<層>`、同じ 2つ目の UV、
+   物の extras の lightmap_layers）に焼き、いつものライトマップからは外す（bake_layers、LightPass。ゲームが強さを変える光: 炉の火）
 7. エリアごとに glb を書く（A1 → a1.glb、CM → common.glb）。透過・屈折率・吸収（ボリューム）・スペキュラーの拡張は
    材質が使っていれば Blender の glTF 書き出しが書く。画像は glb に埋め込む（圧縮で KTX2 にするため）
 
@@ -223,6 +225,145 @@ class BakeScene:
         return False
 
 
+# ── 光を分けて焼く（S-37。設計書 アートディレクション > 光と時間帯: 静止した光は焼き込み。ゲームが強さを変える光は別の画像に） ──
+#: 光と光る材質のカスタムプロパティ: その光を分けて焼く層の名前（工房: 炉の火のスポット、火・熾火・覗き窓の乳白 → 'fire'）
+LAYER_PROP = 'bake_layer'
+#: 材質のカスタムプロパティ: その層の光を通す（影の光線に透明）層の名前の並び（工房: 炉の体の厚い曇りガラス → ['fire']）
+CLEAR_FOR_PROP = 'bake_clear_for'
+
+
+def _names(value) -> list[str]:
+    value = plain(value)
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value or []]
+
+
+def bake_layers(lights: list, materials) -> dict:
+    """分けて焼く光の層: {層: {'lights': 光の名前, 'emitters': 光る材質の名前, 'clear': その層の光を通す材質の名前}}。
+    光（ライトの物）と光る材質の `bake_layer`、材質の `bake_clear_for` から読む（.blend が自分で言う）"""
+    out: dict = {}
+
+    def entry(layer: str) -> dict:
+        return out.setdefault(layer, {'lights': [], 'emitters': [], 'clear': []})
+
+    for o in lights:
+        layer = o.get(LAYER_PROP)
+        if layer:
+            entry(str(layer))['lights'].append(o.name)
+    for m in materials:
+        if m is None:
+            continue
+        layer = m.get(LAYER_PROP)
+        if layer and emits(m):
+            entry(str(layer))['emitters'].append(m.name)
+    for m in materials:
+        if m is None:
+            continue
+        for layer in _names(m.get(CLEAR_FOR_PROP)):
+            if layer in out:
+                entry(layer)['clear'].append(m.name)
+    for rec in out.values():
+        for k in rec:
+            rec[k] = sorted(set(rec[k]))
+    return out
+
+
+def _emission_inputs(material) -> list:
+    """光る材質の強さの入力（Principled の Emission Strength、Emission の Strength）"""
+    if material is None or material.node_tree is None:
+        return []
+    out = []
+    for n in material.node_tree.nodes:
+        if n.type == 'BSDF_PRINCIPLED':
+            out.append(n.inputs['Emission Strength'])
+        elif n.type == 'EMISSION':
+            out.append(n.inputs['Strength'])
+    return out
+
+
+class LightPass:
+    """焼き込みの 1 枚の光（S-37。common/bake.py の BakePass の文脈）。layer '' はいつものライトマップ: 分けて焼く層の光と光る材質を
+    消す。ほかは分けて焼く層: その層の光と光る材質だけ（空も暗く、ほかの光と光る材質は消す）、その層の光を通す材質（`bake_clear_for`）は
+    影の光線に透明。終わったら元に戻す"""
+
+    def __init__(self, layer: str, layers: dict, lights: list, materials):
+        self.layer = layer
+        self.layers = layers
+        self.lights = list(lights)
+        self.materials = [m for m in materials if m is not None and m.node_tree is not None]
+        self.undo = []
+
+    def _hide(self, o):
+        if not o.hide_render:
+            o.hide_render = True
+            self.undo.append(lambda o=o: setattr(o, 'hide_render', False))
+
+    def _dark(self, m):
+        for socket in _emission_inputs(m):
+            if socket.is_linked:
+                src = socket.links[0].from_socket
+                m.node_tree.links.remove(socket.links[0])
+                self.undo.append(lambda m=m, src=src, socket=socket: m.node_tree.links.new(src, socket))
+            was = socket.default_value
+            socket.default_value = 0.0
+            self.undo.append(lambda socket=socket, was=was: setattr(socket, 'default_value', was))
+
+    def _clear_to_shadows(self, m):
+        nt = m.node_tree
+        out = next((n for n in nt.nodes if n.type == 'OUTPUT_MATERIAL' and n.is_active_output), None)
+        if out is None or not out.inputs['Surface'].is_linked:
+            return
+        surface = out.inputs['Surface']
+        was = surface.links[0].from_socket
+        path = nt.nodes.new('ShaderNodeLightPath')
+        clear = nt.nodes.new('ShaderNodeBsdfTransparent')
+        mix = nt.nodes.new('ShaderNodeMixShader')
+        nt.links.new(path.outputs['Is Shadow Ray'], mix.inputs['Fac'])
+        nt.links.new(was, mix.inputs[1])
+        nt.links.new(clear.outputs['BSDF'], mix.inputs[2])
+        nt.links.new(mix.outputs['Shader'], surface)
+
+        def back(nt=nt, was=was, surface=surface, made=(path, clear, mix)):
+            for n in made:
+                nt.nodes.remove(n)
+            nt.links.new(was, surface)
+
+        self.undo.append(back)
+
+    def __enter__(self):
+        scene = bpy.context.scene
+        apart = {name for rec in self.layers.values() for name in rec['lights']}
+        glowing = {name for rec in self.layers.values() for name in rec['emitters']}
+        if not self.layer:
+            for o in self.lights:
+                if o.name in apart:
+                    self._hide(o)
+            for m in self.materials:
+                if m.name in glowing:
+                    self._dark(m)
+            return self
+        rec = self.layers[self.layer]
+        world = scene.world
+        scene.world = None  # no sky: only this layer's light
+        self.undo.append(lambda world=world: setattr(scene, 'world', world))
+        for o in self.lights:
+            if o.name not in rec['lights']:
+                self._hide(o)
+        for m in self.materials:
+            if emits(m) and m.name not in rec['emitters']:
+                self._dark(m)
+            if m.name in rec['clear']:
+                self._clear_to_shadows(m)
+        return self
+
+    def __exit__(self, *exc):
+        for step in reversed(self.undo):
+            step()
+        self.undo.clear()
+        return False
+
+
 def light_record(obj) -> dict:
     """焼いた光（three の座標）。ゲームの単体テストが room-art.ts の実時間の光と照らし合わせる"""
     data = obj.data
@@ -248,12 +389,17 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
     """エリアごとに 1 枚のライトマップを焼き、物と scene に記録を書く。焼いた画像・物・倍率・かかった秒を返す。
 
     settings（blender/pipeline.json の job の bake）: size（画素）、samples（Cycles のサンプル数）、percentile（正規化の百分位、
-    既定 common/bake.py の 99.99）、margin（島の外へ伸ばす画素。島の間はその倍）、density（物の名前 → 画素の細かさの倍率）
+    既定 common/bake.py の 99.99）、margin（島の外へ伸ばす画素。島の間はその倍）、density（物の名前 → 画素の細かさの倍率）、
+    layers（S-37: 分けて焼く層の名前 → {percentile}。層そのものは .blend の `bake_layer` が決める: bake_layers）
+
+    分けて焼く層（S-37）があれば、エリアごとに いつものライトマップ（その層の光と光る材質を消して）と、層ごとのライトマップ
+    （`<エリア>_lightmap_<層>`。その層の光と光る材質だけ、空なし）を同じ 2つ目の UV に焼く。物の extras に lightmap_layers
     """
     size, samples = int(settings['size']), int(settings['samples'])
     percentile = float(settings.get('percentile', bake.PERCENTILE))
     margin = settings.get('margin')
     density = {str(k): float(v) for k, v in (settings.get('density') or {}).items()}
+    layer_settings = {str(k): dict(v or {}) for k, v in (settings.get('layers') or {}).items()}
     scene = bpy.context.scene
     targets = bake_targets(objects, named)
     by_group: dict = {}
@@ -264,6 +410,15 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
         print(f'WARNING: bake density names objects that are not baked here (renamed?): {", ".join(unknown)}')
     used = {s.material for o in bpy.context.view_layer.objects if o.type == 'MESH' for s in o.material_slots}
     lights = [o for o in bpy.context.view_layer.objects if o.type == 'LIGHT' and not o.hide_render]
+    layers = bake_layers(lights, used)
+    unknown = sorted(set(layer_settings) - set(layers))
+    if unknown:
+        print(f'WARNING: bake layers named in the settings have no light in the scene: {", ".join(unknown)}')
+    passes = [bake.BakePass('', lambda: LightPass('', layers, lights, used))] + [
+        bake.BakePass(layer, lambda layer=layer: LightPass(layer, layers, lights, used),
+                      percentile=layer_settings.get(layer, {}).get('percentile'))
+        for layer in sorted(layers)
+    ]
     hidden = []
     for o in objects:
         owner = owner_of(o, named)
@@ -284,15 +439,22 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
             t0 = time.monotonic()
             results = bake.bake_lightmaps(objs, os.path.join(out_dir, LIGHTMAP_DIR), size, samples, name=name,
                                           percentile=percentile, exclude_materials=excluded, density=density,
-                                          margin=None if margin is None else int(margin))
+                                          margin=None if margin is None else int(margin), passes=passes)
             seconds = time.monotonic() - t0
+            names = {bp.layer: f'{name}_{bp.layer}' if bp.layer else name for bp in passes}
             for o in objs:
-                o[bake.PROP] = name
-            first = results[0] if results else {}
-            images.append({'group': group, 'name': name, 'png': first.get('image'), 'scale': first.get('scale'),
-                           'max_over_scale': first.get('max_over_scale'), 'clipped_frac': first.get('clipped_frac'),
-                           'device': first.get('device'), 'seconds': round(seconds, 1),
-                           'objects': sorted(o.name for o in objs), 'excluded_materials': excluded})
+                o[bake.PROP] = names['']
+                if bake.PROP_LAYERS in o:
+                    o[bake.PROP_LAYERS] = {layer: {bake.PROP: names[layer], bake.PROP_SCALE: rec[bake.PROP_SCALE]}
+                                           for layer, rec in plain(o[bake.PROP_LAYERS]).items()}
+            for bp in passes:
+                first = next((r for r in results if r['layer'] == bp.layer), {})
+                images.append({'group': group, 'name': names[bp.layer], 'layer': bp.layer, 'png': first.get('image'),
+                               'scale': first.get('scale'), 'max_over_scale': first.get('max_over_scale'),
+                               'clipped_frac': first.get('clipped_frac'), 'device': first.get('device'),
+                               'percentile': percentile if bp.percentile is None else bp.percentile,
+                               'seconds': round(seconds / len(passes), 1),
+                               'objects': sorted(o.name for o in objs), 'excluded_materials': excluded})
     seconds = time.monotonic() - started
     # what was baked, into the glb (scene extras): only what decides the light, so the same bake writes the same glb
     record = {
@@ -304,6 +466,8 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
         'world': {'name': scene.world.name, **{k: plain(v) for k, v in scene.world.items() if k != 'about'}}
         if scene.world else None,
         'lights': [light_record(o) for o in sorted(lights, key=lambda o: o.name)],
+        # S-37: what each lightmap apart holds (its lights, its glowing materials, what lets its light through)
+        'layers': layers,
         'images': [{k: v for k, v in i.items() if k not in ('png', 'seconds', 'device')} for i in images],
     }
     scene['bake'] = record

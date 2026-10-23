@@ -46,7 +46,9 @@ KTX2・meshopt）。ゲームは src/game/prologue/room.ts で読み、名前と
 
 焼き込み（S-26）: 書き出さない光の集まり `bake_lights`（太陽・天窓の空の青・炉の火）と世界 `A0_dawn`（夜明け前の空と半球光の
 正距円筒の画像）を置く。値はゲームの実時間の光（src/game/prologue/room-art.ts の WORKSHOP_LIGHTS）と同じ。`pnpm assets` が
-不透明な物の光を 2つ目の UV に焼き、glb の中に KTX2 で入れる（blender/scripts/pipeline.py）。
+不透明な物の光を 2つ目の UV に焼き、glb の中に KTX2 で入れる（blender/scripts/pipeline.py）。S-37: 炉の火の光（スポットと、火・
+熾火・覗き窓の乳白の発光）は `bake_layer` の fire で別のライトマップ（A0_lightmap_fire）に焼き、ゲームが火の揺らぎで強さを変える。
+炉の体と火の洞は `bake_clear_for` で炉の光を通す（S-31 の影のない実時間の火と同じく、炉の前の床を広く暖める）。
 
 材質: ガラスは印（glass_clear / glass_frosted / glass_bubble / glass_milky）でゲームが作り直す。不透明な物（真鍮・曇りガラスの
 天板・炉の体・乳白の作品・棚の背板・水・火・熾火）は 1 枚のアトラス（A0_atlas、512×256px の 4×2 区画）を共有する。泡は A0_air。
@@ -609,6 +611,16 @@ def materials() -> dict:
     # are their own light, the air bubbles sit inside glass. Exported as the material's extras (`bake: false`)
     for key in ('fire', 'ember', 'air'):
         out[key]['bake'] = False
+    # S-37: the furnace's light is baked apart (its own lightmap, which the game breathes with the fire: room-art.ts): the fire,
+    # the embers (the annealer's and the furnace's peep windows) and the peep windows' milky ring glow into it. Its light
+    # comes through the furnace's body, thick frosted glass, and through the fire's own cave (the spot stands in the fire: the
+    # flames do not shadow their own light), as the realtime spot of S-31 (no shadow) warmed the floor round the furnace, not
+    # only what the mouth's opening sees (温度のある透明; S-26 baked it behind the cave and the dome and the warmth shrank to
+    # the grate). pipeline.py bake_layers reads these
+    for key in ('fire', 'ember', 'milky'):
+        out[key][BAKE_LAYER] = FIRE_LAYER
+    for key in ('kiln', 'fire'):
+        out[key][BAKE_CLEAR_FOR] = [FIRE_LAYER]
     # ビューポート（と確かめ用の Workbench）での色。書き出しには関わらない
     for key, color in (('brass', (0.69, 0.55, 0.34, 1)), ('frost', (0.66, 0.7, 0.74, 1)),
                        ('kiln', (0.62, 0.66, 0.72, 1)), ('opal', (0.9, 0.9, 0.88, 1)), ('shade', (0.36, 0.39, 0.44, 1)),
@@ -1815,6 +1827,11 @@ FIRE_REACH, FIRE_SIDE, FIRE_LIFT = 0.1, 0.1, 0.04
 FIRE_AIM, FIRE_AIM_TURN = 1.6, 0.75
 #: 光の玉の大きさ（m。焼いた影の柔らかさ）
 LIGHT_RADIUS = {'skylight': 0.1, 'fire': 0.06}
+#: S-37: 炉の光は別のライトマップに焼く（ゲームが火の揺らぎで強さを変える: room-art.ts）。光と光る材質の `bake_layer`、その光を通す
+#: 材質の `bake_clear_for`（blender/scripts/pipeline.py bake_layers）
+BAKE_LAYER = 'bake_layer'
+BAKE_CLEAR_FOR = 'bake_clear_for'
+FIRE_LAYER = 'fire'
 #: 空の画像（正距円筒）の大きさ
 SKY_PX = (512, 256)
 
@@ -1937,6 +1954,7 @@ def bake_lights(collection) -> dict:
     fire = light('bake_fire', 'SPOT', at, aim - at, srgb_hex(FIRE_COLOR), 4 * math.pi * FIRE_CD,
                  spot_size=2 * FIRE_ANGLE, spot_blend=spot_blend(FIRE_ANGLE, FIRE_PENUMBRA),
                  shadow_soft_size=LIGHT_RADIUS['fire'])
+    fire[BAKE_LAYER] = FIRE_LAYER  # S-37: baked apart, with the fire and the embers that glow
     return {'sun': sun, 'skylight': sky, 'fire': fire}
 
 

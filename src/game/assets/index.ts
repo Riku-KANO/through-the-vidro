@@ -4,6 +4,7 @@
  */
 export * from './area';
 export * from './assemble';
+export * from './baked-light';
 export * from './glass';
 export * from './naming';
 export * from './physics';

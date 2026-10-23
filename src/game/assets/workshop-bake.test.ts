@@ -7,12 +7,14 @@ import { readGlbJson } from '../../core/assets/glb';
 import {
   applyLightmaps,
   BakedStandardNodeMaterial,
+  lightmapLayersOf,
   lightmapOf,
   loadLightmaps,
 } from '../../core/assets/lightmap';
 import { convertMaterials } from '../../core/assets/materials';
 import { WORKSHOP_ASSET, WORKSHOP_OBJECTS } from '../prologue/layout';
 import { WORKSHOP_LIGHTS } from '../prologue/room-art';
+import { bakedLightGain, FIRE_LIGHT_LAYER } from './baked-light';
 import { parseAssetName, parseGlassMark } from './naming';
 import { loadGlbInNode } from './node-glb.test-helper';
 import { proceduralMaterial } from './procedural';
@@ -44,7 +46,9 @@ interface Bake {
     hemisphere: { sky: string; ground: string; intensity: number };
   };
   lights: Light[];
-  images: { name: string; scale: number; objects: string[]; excluded_materials: string[] }[];
+  /** S-37: the lights baked apart, by layer. */
+  layers?: Record<string, { lights: string[]; emitters: string[]; clear: string[] }>;
+  images: { name: string; layer?: string; scale: number; objects: string[]; excluded_materials: string[] }[];
 }
 interface Json {
   scenes?: { extras?: { bake?: Bake } }[];
@@ -155,21 +159,39 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     for (const n of baked) expect(lightmapOf(named.get(n) ?? {})?.scale, n).toBeGreaterThan(0);
   });
 
-  it('the lightmap is in the file: KTX2 (sRGB, ETC1S or UASTC), clamped at its edges, with mip levels, used by no material', () => {
-    const index = (json.textures ?? []).findIndex((t) => t.name === 'A0_lightmap');
-    expect(index).toBeGreaterThanOrEqual(0);
-    const texture = json.textures?.[index];
-    const image = json.images?.[texture?.extensions?.KHR_texture_basisu?.source ?? -1];
-    expect(image?.mimeType).toBe('image/ktx2');
-    const sampler = json.samplers?.[texture?.sampler ?? -1];
-    expect(sampler?.wrapS).toBe(33071);
-    expect(sampler?.wrapT).toBe(33071);
-    // with mip levels (a mipmap filter: 9984–9987)
-    expect(sampler?.minFilter).toBeGreaterThanOrEqual(9984);
-    expect(sampler?.minFilter).toBeLessThanOrEqual(9987);
-    // no material points at it: the game finds it by name
-    const text = JSON.stringify(json.materials);
-    expect(text).not.toMatch(new RegExp(`"index":${index}[,}]`));
+  it('S-37: the furnace’s light is baked apart: every baked piece carries the fire’s lightmap too, with its own scale', () => {
+    const named = new Map<string, Record<string, unknown>>();
+    for (const n of json.nodes ?? [])
+      if (n.name && parseAssetName(n.name).ok) named.set(n.name, n.extras ?? {});
+    const baked = [...named].filter(([, e]) => lightmapOf(e) !== null);
+    expect(baked.length).toBeGreaterThan(20);
+    for (const [name, extras] of baked) {
+      const layers = lightmapLayersOf(extras);
+      expect(
+        layers.map((l) => [l.layer, l.name]),
+        name,
+      ).toEqual([[FIRE_LIGHT_LAYER, 'A0_lightmap_fire']]);
+      expect(layers[0]?.scale, name).toBeGreaterThan(0);
+    }
+  });
+
+  it('the lightmaps are in the file: KTX2 (sRGB, ETC1S or UASTC), clamped at its edges, with mip levels, used by no material', () => {
+    for (const name of ['A0_lightmap', 'A0_lightmap_fire']) {
+      const index = (json.textures ?? []).findIndex((t) => t.name === name);
+      expect(index, name).toBeGreaterThanOrEqual(0);
+      const texture = json.textures?.[index];
+      const image = json.images?.[texture?.extensions?.KHR_texture_basisu?.source ?? -1];
+      expect(image?.mimeType, name).toBe('image/ktx2');
+      const sampler = json.samplers?.[texture?.sampler ?? -1];
+      expect(sampler?.wrapS, name).toBe(33071);
+      expect(sampler?.wrapT, name).toBe(33071);
+      // with mip levels (a mipmap filter: 9984–9987)
+      expect(sampler?.minFilter, name).toBeGreaterThanOrEqual(9984);
+      expect(sampler?.minFilter, name).toBeLessThanOrEqual(9987);
+      // no material points at it: the game finds it by name
+      const text = JSON.stringify(json.materials);
+      expect(text, name).not.toMatch(new RegExp(`"index":${index}[,}]`));
+    }
   });
 
   it('baked pieces draw their opaque faces with the second UV, inside the unit square', () => {
@@ -208,8 +230,8 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     const scene = gltf.scene.clone(true);
     convertMaterials(scene, (m) => proceduralMaterial(m));
     const maps = await loadLightmaps({ ...gltf, scene } as GLTF);
-    expect([...maps.keys()]).toEqual(['A0_lightmap']);
-    applyLightmaps(scene, maps);
+    expect([...maps.keys()].sort()).toEqual(['A0_lightmap', 'A0_lightmap_fire']);
+    applyLightmaps(scene, maps, { gain: bakedLightGain });
     const materialsOf = (name: string): THREE.Material[] => {
       const out: THREE.Material[] = [];
       scene.traverse((o) => {
@@ -227,6 +249,16 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     expect((floor[0] as BakedStandardNodeMaterial).colorNode).not.toBeNull();
     const furnace = materialsOf(WORKSHOP_OBJECTS.furnace.name);
     expect(furnace.some((m) => m instanceof BakedStandardNodeMaterial && m.name === 'A0_kiln')).toBe(true);
+    // S-37: the fire's light baked apart, added with the strength the room breathes (one uniform for the whole room)
+    for (const m of [...floor, ...furnace].filter((x) => x instanceof BakedStandardNodeMaterial)) {
+      const layers = (m as BakedStandardNodeMaterial).lightMapLayers;
+      expect(
+        layers.map((l) => l.layer),
+        m.name,
+      ).toEqual([FIRE_LIGHT_LAYER]);
+      expect(layers[0]?.map, m.name).toBe(maps.get('A0_lightmap_fire'));
+      expect(layers[0]?.gain, m.name).toBe(bakedLightGain(FIRE_LIGHT_LAYER));
+    }
     expect(
       furnace.filter((m) => m.name === 'A0_fire').every((m) => !(m instanceof BakedStandardNodeMaterial)),
     ).toBe(true);
@@ -240,10 +272,27 @@ describe('S-26 the workshop’s light, baked into the glb', () => {
     expect(Object.keys(bake)).not.toContain('seconds');
     expect(Object.keys(bake)).not.toContain('device');
     expect(bake.world.name).toBe('A0_dawn');
-    expect(bake.images.map((i) => i.name)).toEqual(['A0_lightmap']);
+    expect(bake.images.map((i) => i.name)).toEqual(['A0_lightmap', 'A0_lightmap_fire']);
+    expect(bake.images.map((i) => i.layer)).toEqual(['', FIRE_LIGHT_LAYER]);
     expect(bake.images[0]?.excluded_materials).toEqual(
       expect.arrayContaining(['A0_fire', 'A0_ember', 'glass_clear']),
     );
+    // both on the same second UV: the same objects
+    expect(bake.images[1]?.objects).toEqual(bake.images[0]?.objects);
+  });
+
+  it('S-37: the fire’s lightmap holds the furnace’s light only: the fire’s spot, what glows in the furnace and the annealer', () => {
+    const fire = bake.layers?.[FIRE_LIGHT_LAYER];
+    if (!fire) throw new Error('no fire layer in the bake record');
+    // its light: the realtime fire's spot (room-art.ts WORKSHOP_LIGHTS.fire, checked below with the others), no sun, no sky
+    expect(fire.lights).toEqual(['bake_fire']);
+    // what glows into it: the fire in the mouth, the embers (the annealer's, the peep windows'), the peep windows' milky ring
+    expect(fire.emitters).toEqual(['A0_ember', 'A0_fire', 'glass_milky']);
+    // what lets it through (温度のある透明): the furnace's body of thick frosted glass and the fire's own cave, as S-31's
+    // realtime spot without a shadow did (process/slices/S-37.md)
+    expect(fire.clear).toEqual(['A0_fire', 'A0_kiln']);
+    // the others are the sky's lightmap's
+    expect(Object.keys(bake.layers ?? {})).toEqual([FIRE_LIGHT_LAYER]);
   });
 
   it('baked the dawn the game lights with (room-art.ts WORKSHOP_LIGHTS): the sun, the skylight’s blue, the fire', () => {

@@ -184,6 +184,9 @@ async function workshopTextures(page: Page): Promise<TextureSize[]> {
           const v = m[key] as Tex | null;
           if (v?.isTexture) seen.set(v.uuid, v);
         }
+        // S-37: the lightmaps of the lights baked apart (the furnace's fire), held in the baked material's layers
+        for (const l of (m.lightMapLayers as { map?: Tex }[] | undefined) ?? [])
+          if (l.map?.isTexture) seen.set(l.map.uuid, l.map);
       }
     });
     return [...seen.values()].map((t) => {

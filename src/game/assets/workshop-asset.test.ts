@@ -4,6 +4,7 @@ import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import * as THREE from 'three/webgpu';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { readGlbJson } from '../../core/assets/glb';
+import { lightmapLayersOf } from '../../core/assets/lightmap';
 import {
   FURNACE_FACING,
   FURNACE_MOUTH,
@@ -238,10 +239,12 @@ describe('the workshop interior as exported (public/assets/workshop/a0.glb)', ()
   });
 
   it('the opaque props share one texture atlas (KTX2), the glass has none', () => {
-    // S-26: the other images are the area's lightmaps (workshop-bake.test.ts), which no material uses
+    // S-26: the other images are the area's lightmaps (workshop-bake.test.ts), which no material uses; S-37: and the
+    // lightmaps of the lights baked apart (the furnace's fire)
     const lightmaps = new Set<string>();
     gltf.scene.traverse((o) => {
       if (typeof o.userData.lightmap === 'string') lightmaps.add(o.userData.lightmap);
+      for (const l of lightmapLayersOf(o.userData)) lightmaps.add(l.name);
     });
     expect(json.images?.length).toBe(1 + lightmaps.size);
     for (const i of json.images ?? []) expect(i.mimeType).toBe('image/ktx2');

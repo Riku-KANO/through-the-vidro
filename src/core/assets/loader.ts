@@ -2,7 +2,7 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { type GLTF, GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import type * as THREE from 'three/webgpu';
-import { applyLightmaps, type LightmapReport, loadLightmaps } from './lightmap';
+import { type ApplyLightmapsOptions, applyLightmaps, type LightmapReport, loadLightmaps } from './lightmap';
 import { convertMaterials, disposeObject, type MaterialHook, texturesOf } from './materials';
 
 /**
@@ -43,9 +43,10 @@ export interface LoadOptions {
   material?: MaterialHook;
   /**
    * Draws the baked objects with their lightmap (S-26, lightmap.ts: the extras `lightmap` and `lightmap_scale`, the texture
-   * of that name in the file), after the materials are converted. Off by default.
+   * of that name in the file), after the materials are converted. Off by default. With options (S-37): the strength of each
+   * light baked apart (`gain`, by layer: e.g. a uniform the game breathes with a fire).
    */
-  lightmaps?: boolean;
+  lightmaps?: boolean | ApplyLightmapsOptions;
 }
 
 export interface GltfAssetLoader {
@@ -83,7 +84,7 @@ export function createGltfLoader(
       if (lightmaps) {
         const maps = await loadLightmaps(gltf);
         for (const t of maps.values()) textures.add(t);
-        const report = applyLightmaps(scene, maps);
+        const report = applyLightmaps(scene, maps, lightmaps === true ? {} : lightmaps);
         for (const m of report.replaced) m.dispose();
         baked = {
           meshes: report.meshes,

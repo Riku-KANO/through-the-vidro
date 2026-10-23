@@ -1,5 +1,5 @@
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import { float, luminance, materialLightMap, max, metalness, mix, vec3 } from 'three/tsl';
+import { float, luminance, materialLightMap, max, metalness, mix, texture, vec3 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 
 /**
@@ -19,10 +19,17 @@ import * as THREE from 'three/webgpu';
  * What is baked follows the pipeline's rule (blender/scripts/pipeline.py bakeable_material): opaque, not the game's glass
  * (a material the hook made glass is marked in userData.mark), and not `bake: false` in the material's extras (the fire,
  * the embers, the air in the glass). Pure three, no GPU: the unit tests run in Node.
+ *
+ * Lights baked apart (S-37: layers). A light whose strength changes while the game runs (a fire that breathes) is baked into
+ * a lightmap of its own, on the same second UV, and named by the extras too:
+ *   extras.lightmap_layers  { <layer>: { lightmap: <texture name>, lightmap_scale: <what it was divided by> } }
+ * The baked material adds each layer's light to the lightmap's, times a strength (a float node: a uniform the game changes
+ * every frame; 1 = as baked), in the same draw (no pass of its own).
  */
 
 export const LIGHTMAP = 'lightmap';
 export const LIGHTMAP_SCALE = 'lightmap_scale';
+export const LIGHTMAP_LAYERS = 'lightmap_layers';
 
 export interface LightmapRef {
   /** The name of the lightmap's texture in the glb. */
@@ -31,12 +38,46 @@ export interface LightmapRef {
   scale: number;
 }
 
+/** A light baked apart into a lightmap of its own (S-37). */
+export interface LightmapLayerRef extends LightmapRef {
+  /** The layer's name in the bake (e.g. `fire`). */
+  layer: string;
+}
+
 /** The lightmap an object's extras (GLTFLoader's userData) point at, or null. */
 export function lightmapOf(extras: Readonly<Record<string, unknown>>): LightmapRef | null {
   const name = extras[LIGHTMAP];
   const scale = Number(extras[LIGHTMAP_SCALE]);
   if (typeof name !== 'string' || name === '' || !Number.isFinite(scale) || scale <= 0) return null;
   return { name, scale };
+}
+
+/** The lights an object's extras say were baked apart (`lightmap_layers`), by layer name; none if malformed. */
+export function lightmapLayersOf(extras: Readonly<Record<string, unknown>>): LightmapLayerRef[] {
+  const layers = extras[LIGHTMAP_LAYERS];
+  if (!layers || typeof layers !== 'object' || Array.isArray(layers)) return [];
+  const out: LightmapLayerRef[] = [];
+  for (const [layer, value] of Object.entries(layers as Record<string, unknown>)) {
+    if (!value || typeof value !== 'object') continue;
+    const ref = lightmapOf(value as Record<string, unknown>);
+    if (ref) out.push({ layer, ...ref });
+  }
+  return out.sort((a, b) => (a.layer < b.layer ? -1 : a.layer > b.layer ? 1 : 0));
+}
+
+/** A float the shader reads: a number (fixed), or a node (a uniform the game changes). */
+export type LightmapGain = number | THREE.Node;
+
+/** A light baked apart, as a baked material draws it (S-37). */
+export interface BakedLightLayer {
+  /** The layer's name in the bake (e.g. `fire`). */
+  readonly layer: string;
+  /** Its lightmap: the same second UV as the material's lightMap, sRGB. */
+  readonly map: THREE.Texture;
+  /** π × its lightmap_scale (lightmapIntensity), as the lightMap's. */
+  readonly intensity: number;
+  /** Its strength now: 1 = as baked. A node (a uniform) can change every frame without rebuilding the material. */
+  readonly gain: LightmapGain;
 }
 
 /** material.lightMapIntensity for a bake divided by `scale`: π × scale (× gain, the game's own adjustment). */
@@ -52,8 +93,19 @@ export function lightmapIntensity(scale: number, gain = 1): number {
  * reflection, the latter darkened on non-metals where the bake is darker than the open sky (under a bench, the frosted
  * shelf does not mirror the open sky). Metal has no diffuse light, so a diffuse bake does not change how it looks: its
  * reflection stays the environment's (darkening it by the bake turned thin brass black in patches; process/slices/S-26.md).
+ *
+ * `baked` is the baked irradiance: the lightmap's (materialLightMap), and with lights baked apart, theirs added
+ * (BakedStandardNodeMaterial.bakedIrradiance). It must be the node the material's IrradianceNode adds (the scene's other
+ * irradiance is told apart by taking it away).
  */
 export class BakedLightingModel extends THREE.PhysicalLightingModel {
+  readonly baked: THREE.Node<'vec3'>;
+
+  constructor(baked: THREE.Node<'vec3'> = materialLightMap as unknown as THREE.Node<'vec3'>) {
+    super();
+    this.baked = baked;
+  }
+
   override direct(
     input: Parameters<THREE.PhysicalLightingModel['direct']>[0],
     builder: THREE.NodeBuilder,
@@ -83,8 +135,9 @@ export class BakedLightingModel extends THREE.PhysicalLightingModel {
       radiance: THREE.Node<'vec3'>;
       reflectedLight: Record<string, THREE.Node>;
     };
-    // the lightmap's irradiance (texel × lightMapIntensity); the context's irradiance also holds a hemisphere light's
-    const baked = materialLightMap as unknown as THREE.Node<'vec3'>;
+    // the lightmap's irradiance (texel × lightMapIntensity, and the lights baked apart); the context's irradiance also holds a
+    // hemisphere light's
+    const baked = this.baked;
     // the open sky as the realtime room sees it: the environment's irradiance and the other irradiance of the scene
     const open = context.iblIrradiance.add(context.irradiance.sub(baked));
     // not on metal: its look is all reflection, and where a thin piece (a tube of a few texels) got too few texels in the
@@ -111,7 +164,11 @@ export class BakedLightingModel extends THREE.PhysicalLightingModel {
   }
 }
 
-/** A MeshStandardNodeMaterial lit by its lightmap (BakedLightingModel). Its own type, so three compiles it apart. */
+/**
+ * A MeshStandardNodeMaterial lit by its lightmap (BakedLightingModel). Its own type, so three compiles it apart.
+ * `lightMapLayers` (S-37): lights baked apart, added to the lightmap's light in the same draw, each × its gain (set them
+ * before the material is first drawn: changing the list later needs `needsUpdate`; a gain node's value can change any time).
+ */
 export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
   static override get type(): string {
     return 'BakedStandardNodeMaterial';
@@ -119,8 +176,45 @@ export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
 
   readonly isBakedStandardNodeMaterial = true;
 
+  lightMapLayers: BakedLightLayer[] = [];
+
+  /** The baked irradiance node of the current build: setupLightMap makes it, setupLightingModel (later) reads it. */
+  #baked: THREE.Node<'vec3'> | null = null;
+
+  /**
+   * The baked irradiance: the lightmap's (texel × lightMapIntensity) and each layer's (its texel × its intensity × its gain),
+   * sampled on the layer map's own channel (the second UV).
+   */
+  bakedIrradiance(): THREE.Node<'vec3'> {
+    let sum = materialLightMap as unknown as THREE.Node<'vec3'>;
+    for (const l of this.lightMapLayers) {
+      const light = texture(l.map).rgb.mul(l.intensity);
+      sum = sum.add(
+        typeof l.gain === 'number' ? light.mul(l.gain) : light.mul(l.gain as THREE.Node<'float'>),
+      );
+    }
+    return sum;
+  }
+
+  override setupLightMap(builder: THREE.NodeBuilder): THREE.Node {
+    if (!this.lightMap || this.lightMapLayers.length === 0) {
+      this.#baked = null;
+      return super.setupLightMap(builder);
+    }
+    this.#baked = this.bakedIrradiance();
+    return new THREE.IrradianceNode(this.#baked);
+  }
+
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new BakedLightingModel();
+    return new BakedLightingModel(this.#baked ?? undefined);
+  }
+
+  /** A copy keeps the lights baked apart (LayerField clones a material it cuts for a second kind of layer). */
+  override copy(source: THREE.MeshStandardNodeMaterial): this {
+    super.copy(source);
+    const layers = (source as Partial<BakedStandardNodeMaterial>).lightMapLayers;
+    this.lightMapLayers = layers ? [...layers] : [];
+    return this;
   }
 }
 
@@ -131,12 +225,13 @@ const OWN_FIELDS = new Set(['uuid', 'id', 'type', 'version', '_listeners']);
  * The baked material for `source`: the same values (colours and vectors copied, userData a shallow copy), nodes and
  * textures (shared), with `lightMap` on the second UV and its strength. Only a MeshStandardNodeMaterial (what the
  * pipeline's opaque materials become) can be baked. An aoMap would darken the baked light a second time (the bake holds the
- * occlusion): the pipeline's materials have none.
+ * occlusion): the pipeline's materials have none. `layers` (S-37): the lights baked apart, added to it.
  */
 export function toBakedMaterial(
   source: THREE.MeshStandardNodeMaterial,
   lightMap: THREE.Texture,
   scale: number,
+  layers: readonly BakedLightLayer[] = [],
 ): BakedStandardNodeMaterial {
   const out = new BakedStandardNodeMaterial();
   const src = source as unknown as Record<string, unknown>;
@@ -155,6 +250,7 @@ export function toBakedMaterial(
   out.name = source.name;
   out.lightMap = lightMap;
   out.lightMapIntensity = lightmapIntensity(scale);
+  out.lightMapLayers = [...layers];
   return out;
 }
 
@@ -183,6 +279,7 @@ export async function loadLightmaps(gltf: GLTF): Promise<Map<string, THREE.Textu
   gltf.scene.traverse((o) => {
     const ref = lightmapOf(o.userData);
     if (ref) names.add(ref.name);
+    for (const layer of lightmapLayersOf(o.userData)) names.add(layer.name);
   });
   const json = gltf.parser.json as {
     textures?: { name?: string; source?: number; extensions?: Record<string, { source?: number }> }[];
@@ -221,14 +318,34 @@ export interface LightmapReport {
   unsupported: string[];
 }
 
+export interface ApplyLightmapsOptions {
+  /**
+   * The strength of each light baked apart (S-37), by layer name: a number, or a node the game changes (a uniform: every
+   * baked material with that layer shares it). Default 1 (as baked).
+   */
+  gain?: (layer: string) => LightmapGain;
+}
+
 /**
  * Gives every mesh of an object with a lightmap (itself or its nearest ancestor with the extras: GLTFLoader splits a mesh
  * with several materials into children) the baked material for each of its bakeable materials. Others stay as they are.
+ * The lights the object's extras say were baked apart (lightmap_layers) are added to it (a layer whose image is not in the
+ * file is left out and reported as missing: `<object> (<layer>)`).
  */
 export function applyLightmaps(
   root: THREE.Object3D,
   lightmaps: ReadonlyMap<string, THREE.Texture>,
+  options: ApplyLightmapsOptions = {},
 ): LightmapReport {
+  const gains = new Map<string, LightmapGain>();
+  const gainOf = (layer: string): LightmapGain => {
+    let g = gains.get(layer);
+    if (g === undefined) {
+      g = options.gain?.(layer) ?? 1;
+      gains.set(layer, g);
+    }
+    return g;
+  };
   const made = new Map<string, BakedStandardNodeMaterial>();
   const used = new Set<THREE.Material>();
   const sources = new Set<THREE.Material>();
@@ -262,6 +379,16 @@ export function applyLightmaps(
       return;
     }
     const lightmapRef = ref;
+    const layers: BakedLightLayer[] = [];
+    for (const l of lightmapLayersOf(piece?.userData ?? {})) {
+      const map = lightmaps.get(l.name);
+      if (!map) {
+        missing.add(`${name} (${l.layer})`);
+        continue;
+      }
+      layers.push({ layer: l.layer, map, intensity: lightmapIntensity(l.scale), gain: gainOf(l.layer) });
+    }
+    const layerKey = layers.map((l) => `${l.layer}:${l.map.uuid}:${l.intensity}`).join(',');
     const one = (m: THREE.Material): THREE.Material => {
       if (!bakesMaterial(m)) {
         used.add(m);
@@ -273,10 +400,10 @@ export function applyLightmaps(
         return m;
       }
       sources.add(m);
-      const key = `${m.uuid}|${texture.uuid}|${lightmapRef.scale}`;
+      const key = `${m.uuid}|${texture.uuid}|${lightmapRef.scale}|${layerKey}`;
       let baked = made.get(key);
       if (!baked) {
-        baked = toBakedMaterial(m, texture, lightmapRef.scale);
+        baked = toBakedMaterial(m, texture, lightmapRef.scale, layers);
         made.set(key, baked);
       }
       return baked;

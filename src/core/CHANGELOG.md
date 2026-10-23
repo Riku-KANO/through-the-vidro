@@ -3,6 +3,32 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.12.0（案。版は親が決める） — 2026-10-23（S-37 光を分けて焼く: ライトマップを重ねる受け口）
+
+足しただけ。分けて焼いた光（extras の `lightmap_layers`）のない glb と `lightmaps: true` の呼び方の振る舞いは変えていない
+（焼いた材質の光は 0.11.0 と同じ節点: `materialLightMap` だけ）。
+
+- `assets/lightmap.ts`:
+  - glb の書き方: 焼いた物の extras に `lightmap_layers`（`{ <層>: { lightmap: <glb の中のテクスチャの名前>, lightmap_scale } }`）。
+    ゲームが走りながら強さを変える光（揺らぐ炉の火）を、いつものライトマップと同じ 2つ目の UV に別の画像として焼いたもの
+    （`blender/scripts/common/bake.py` 0.3.0 の `BakePass`）。`lightmapLayersOf(extras)`（層の名前の順）
+  - `BakedStandardNodeMaterial.lightMapLayers`（`BakedLightLayer`: 層、画像、強さ π × scale、`gain`。gain は数か節点。uniform を
+    渡せば毎フレーム変えられ、材質を作り直さない）。焼いた光の放射照度 = ライトマップ ＋ Σ 層の画像 × 強さ × gain を、
+    `setupLightMap` が `IrradianceNode` にして、同じ節点を `BakedLightingModel` が「焼いた光」として読む（場面のほかの放射照度
+    〈半球光〉と見分けるため。three の内側に頼る: `setupMaterialLightings`〈`setupLightMap`〉が `setupLightingModel` より前に
+    呼ばれること。崩れると焼いた光が `materialLightMap` だけになり、層の光が半球光と同じ扱い〈拡散に足されず、映り込みの暗さの
+    計算に入る〉になる。`lightmap.test.ts` が同じ節点であることを確かめる）。描画呼び出しは増えない（同じ材質で 1 回多く読むだけ）
+  - `BakedLightingModel(baked = materialLightMap)`: 焼いた光の節点を受け取る
+  - `BakedStandardNodeMaterial.copy`（と `clone`）は層を写す（`LayerField` は 2 つ目の種類の層に切る材質を `clone()` で作る。
+    three の copy は知らない欄を写さない）
+  - `toBakedMaterial(source, lightMap, scale, layers = [])`、`applyLightmaps(root, maps, { gain })`: 物の extras の層の画像を
+    足す。`gain(layer)` は層ごとに 1 回だけ聞き、同じ層の材質は同じ値（節点）を共有する。既定は 1。層の画像がファイルにない
+    ときは層を外し、`missing` に `<物> (<層>)` で知らせる
+  - `loadLightmaps`: 層の画像も名前で読む（2つ目の UV、sRGB）
+- `assets/loader.ts`: `load(url, { lightmaps: { gain } })`（`true` も今までどおり）
+- 泡沫回廊へ写すとき: 層の画像は glb の中のテクスチャ（案1）。焼く側は `blender/scripts/common` 0.3.0 と一緒に
+- 単体テスト `assets/lightmap.test.ts`（23 件。S-37 で 8 件足した）
+
 ## 0.11.0 — 2026-10-23（S-26 焼いた光の受け口）
 
 足しただけ。`load()` の既定の振る舞いは変えていない（焼いた光は `lightmaps: true` のときだけ）。
