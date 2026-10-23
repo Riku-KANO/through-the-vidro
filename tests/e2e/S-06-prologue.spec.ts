@@ -577,6 +577,21 @@ for (const backend of backends) {
     // 200 ms as in S-04: headless jitter and other sessions sharing the GPU, but a compile stall shows
     for (const phase of ['loading-home', 'home', 'home-game', 'game'])
       expect(phases[phase]?.maxFrameMs ?? 0, `worst frame in ${phase}`).toBeLessThan(200);
+    // S-38: by step, looking back from the far shore (the workshop's glass behind the landing pose first in view; its
+    // pipelines were built in those frames until S-38) is about as long as the other steps: 30 ms, or 1.5 × their median
+    // when the whole run is slower (a busy GPU). The pipelines themselves are counted in tests/e2e/S-38-*.spec.ts.
+    const byStep = steps?.steps ?? {};
+    const others = Object.entries(byStep)
+      .filter(([step]) => step !== 'look-back')
+      .map(([, ms]) => ms)
+      .sort((a, b) => a - b);
+    const median = others[Math.floor(others.length / 2)] ?? 0;
+    const lookBack = byStep['look-back'] ?? 0;
+    expect(lookBack, 'the look-back step was played').toBeGreaterThan(0);
+    expect(
+      lookBack,
+      `worst frame in look-back (the other steps' median ${median.toFixed(1)} ms)`,
+    ).toBeLessThanOrEqual(Math.max(30, 1.5 * median));
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
