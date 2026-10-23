@@ -16,10 +16,13 @@ import {
   BRIDGE_RISE,
   BRIDGE_SETTLE,
   bridgeFooting,
+  CANAL,
   CHAIR,
   COMPASS,
   DROP,
   DROP_REACH,
+  DROP_TOWER_FOOT,
+  DROP_TOWERS,
   deckHeight,
   domeWallRadius,
   EAST_ROAD,
@@ -36,6 +39,7 @@ import {
   GATE_OPEN_DEG,
   GRATE,
   GRATE_CENTER,
+  GREENHOUSE,
   groundHeight,
   LIGHTHOUSE,
   LIGHTHOUSE_BASE,
@@ -592,6 +596,45 @@ describe('S-35: the central plaza, its broken lighthouse and its three gates', (
         LIGHTHOUSE_BASE.radius + 2,
       );
     }
+  });
+
+  it('through the shut gates’ bars, the canal’s drop towers and the greenhouse’s dome show (格子越しに水路と温室の気配)', () => {
+    /** Degrees across and up, from a view, at which a point lies (yaw 0 looks down -Z). */
+    const seen = (s: (typeof SPAWNS)[SpawnName], p: Vec3): [number, number] => {
+      const e: Vec3 = [s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]];
+      const a = Math.atan2(-(p[0] - e[0]), -(p[2] - e[2]));
+      const across = (Math.atan2(Math.sin(a - s.yaw), Math.cos(a - s.yaw)) * 180) / Math.PI;
+      const up = (Math.atan2(p[1] - e[1], Math.hypot(p[0] - e[0], p[2] - e[2])) * 180) / Math.PI;
+      return [across, up];
+    };
+    /** The gate's opening as seen from a view: half its width across, and from the floor to its arch's top, in degrees. */
+    const opening = (s: (typeof SPAWNS)[SpawnName], dir: readonly [number, number]) => {
+      const [gx, gz] = plazaGateAt(dir);
+      const d = Math.hypot(gx - s.feet[0], gz - s.feet[2]);
+      const half = (Math.atan2(PLAZA_GATE.halfWidth - 0.1, d) * 180) / Math.PI;
+      const top = (Math.atan2(PLAZA_GATE.height - EYE_HEIGHT, d) * 180) / Math.PI;
+      const bottom = (Math.atan2(-EYE_HEIGHT, d) * 180) / Math.PI;
+      return { half, top, bottom };
+    };
+    // south: at least two of the drop towers stand between the posts, their bodies inside the arch
+    const s = SPAWNS.south;
+    const so = opening(s, COMPASS.south);
+    const [sx, sz] = plazaGateAt(COMPASS.south);
+    const inGate = DROP_TOWERS.filter(([dx, along, h]) => {
+      const [across, up] = seen(s, [sx + dx, PLAZA_Y - DROP_TOWER_FOOT + h * 0.35, sz - along]);
+      return Math.abs(across) < so.half && up < so.top && up > so.bottom;
+    });
+    expect(inGate.length).toBeGreaterThanOrEqual(2);
+    // and the canal's water runs away from the gate along its middle
+    expect(Math.abs(seen(s, [sx, PLAZA_Y - CANAL.drop, sz - CANAL.from - 10])[0])).toBeLessThan(so.half);
+    // west: the greenhouse's dome fills the gate, its top under the arch's
+    const w = SPAWNS.west;
+    const wo = opening(w, COMPASS.west);
+    const [gx, gy, gz] = GREENHOUSE.center;
+    const [across, up] = seen(w, [gx, gy + GREENHOUSE.radius, gz]);
+    expect(Math.abs(across)).toBeLessThan(wo.half);
+    expect(up).toBeLessThan(wo.top);
+    expect(up).toBeGreaterThan(wo.bottom);
   });
 
   it('the film’s view stands held at the film, on the shore’s side, looking back at the pedestal', () => {

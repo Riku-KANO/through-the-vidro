@@ -9,6 +9,7 @@ import {
   max,
   min,
   mix,
+  mod,
   normalWorld,
   positionView,
   positionWorld,
@@ -23,11 +24,15 @@ import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import {
   AREA1_CHIMNEY,
+  CANAL,
   COMPASS,
+  DROP_TOWER_FOOT,
+  DROP_TOWERS,
   EAST_ROAD,
   EAST_ROAD_END_X,
   GATE,
   GATE_OPEN_DEG,
+  GREENHOUSE,
   LAMP_POST_RADIUS,
   LIGHTHOUSE,
   LIGHTHOUSE_BASE,
@@ -201,7 +206,7 @@ function plazaStoneMaterial(): THREE.MeshStandardNodeMaterial {
   const cell = vec2(fract(along), fract(r.div(tile)));
   const edge = min(min(cell.x, float(1).sub(cell.x)), min(cell.y, float(1).sub(cell.y)));
   const grout = smoothstep(0.0, 0.05, edge);
-  const n = hash(vec2(floor(along), ring).dot(vec2(1, 57)));
+  const n = hash(vec2(mod(floor(along), count), ring).dot(vec2(1, 57)));
   const stone = vec3(0.47, 0.5, 0.55).mul(n.mul(0.16).add(0.84));
   const top = mix(vec3(0.21, 0.23, 0.27), stone, grout);
   const side = vec3(0.11, 0.13, 0.18).mul(
@@ -213,7 +218,7 @@ function plazaStoneMaterial(): THREE.MeshStandardNodeMaterial {
   return m;
 }
 
-/** A rotation about +Y and a place: a plaza gate's local frame (+X along the rim to the right, +Z out of the plaza). */
+/** A rotation about +Y and a place: a plaza gate's local frame (+X along the rim to the left seen from inside it, +Z out of it). */
 function gateMatrix(dir: readonly [number, number]): THREE.Matrix4 {
   const [gx, gz] = plazaGateAt(dir);
   const [tx, tz] = gateTangent(dir);
@@ -260,9 +265,12 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   const keystoneLit = keep(createGlass('milky', quality, { glow: KEYSTONE_OPEN }).material);
   const keystoneDim = keep(createGlass('milky', quality, { glow: KEYSTONE_SHUT }).material);
   const water = keep(
-    new THREE.MeshStandardNodeMaterial({ color: 0x1a2a3c, roughness: 0.06, metalness: 0.2 }),
+    new THREE.MeshStandardNodeMaterial({ color: 0x0c1826, roughness: 0.06, metalness: 0.2 }),
   );
   const brassParts: THREE.BufferGeometry[] = [];
+  // the far brass apart from the plaza's, so each is left out of the views it is not in: the chimneys' bands, the dome's ribs
+  const hillBrass: THREE.BufferGeometry[] = [];
+  const westBrass: THREE.BufferGeometry[] = [];
   const globes: THREE.BufferGeometry[] = [];
   const keystones: THREE.BufferGeometry[] = [];
   const embers: THREE.BufferGeometry[] = [];
@@ -311,7 +319,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     for (const { from, to } of rimArcs()) {
       curbs.push(arcTorus(R, 0.16, 0.0, from, to, 8));
       brassParts.push(arcTorus(R, 0.028, PLAZA_RIM.height, from, to, 8));
-      brassParts.push(arcTorus(R, 0.013, 0.55, from, to));
+      brassParts.push(arcTorus(R, 0.018, 0.55, from, to));
       const posts = Math.max(1, Math.round(((to - from) * R) / 2.2));
       for (let i = 0; i <= posts; i++) {
         const a = from + ((to - from) * i) / posts;
@@ -391,7 +399,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         };
         bar(0.04, 0.024);
         bar(hw - 0.02, 0.022);
-        for (let i = 1; i < 6; i++) bar((hw * i) / 6, 0.014);
+        for (let i = 1; i < 6; i++) bar((hw * i) / 6, 0.021);
         for (const [y, r] of [
           [0.12, 0.02],
           [1.15, 0.022],
@@ -787,7 +795,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         ).translate(x, y0, z),
       );
       for (const f of [0.3, 0.62, 0.95])
-        brassParts.push(
+        hillBrass.push(
           new THREE.TorusGeometry(r * 1.02, Math.max(0.07, r * 0.09), 6, 32)
             .rotateX(Math.PI / 2)
             .translate(x, y0 + h * f, z),
@@ -802,38 +810,39 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
 
   // ---- beyond the shut gates: the canal and its drop towers (south), the greenhouse's dome (west): 気配だけ --------------
   {
+    // 水路: dark water sunk between low stone banks, running south from just past the gate into the mist
     const [sx, sz] = plazaGateAt(COMPASS.south);
-    const len = 120;
-    const canal = new THREE.Mesh(keep(new THREE.PlaneGeometry(3.4, len)), water);
+    const len = CANAL.to - CANAL.from;
+    const midZ = sz - (CANAL.from + CANAL.to) / 2;
+    const canal = new THREE.Mesh(keep(new THREE.PlaneGeometry(2 * CANAL.halfWidth, len)), water);
     canal.rotation.x = -Math.PI / 2;
-    canal.position.set(sx, PLAZA_Y - 0.35, sz - 6 - len / 2);
+    canal.position.set(sx, PLAZA_Y - CANAL.drop, midZ);
     put(canal);
-    for (const x of [sx - 1.75, sx + 1.75])
-      brassParts.push(
-        new THREE.CylinderGeometry(0.03, 0.03, len, 6)
-          .rotateX(Math.PI / 2)
-          .translate(x, PLAZA_Y - 0.3, sz - 6 - len / 2),
+    const banks: THREE.BufferGeometry[] = [];
+    for (const side of [-1, 1])
+      banks.push(
+        new THREE.BoxGeometry(0.7, 3, len).translate(
+          sx + side * (CANAL.halfWidth + 0.35),
+          PLAZA_Y - CANAL.drop + 0.3 - 1.5,
+          midZ,
+        ),
       );
-    // 雫塔 (水路の目印): tall drops of glass
+    put(new THREE.Mesh(merged(banks), stone));
+    // 雫塔 (水路の目印): tall drops of glass along it
     const drops: THREE.BufferGeometry[] = [];
-    for (const [dx, dz, h] of [
-      [-14, -92, 26],
-      [10, -110, 32],
-      [-2, -128, 22],
-    ] as const) {
+    for (const [dx, along, h] of DROP_TOWERS) {
       const pts = Array.from({ length: 22 }, (_, i) => {
         const t = i / 21;
         // a drop: round at the foot, drawn out to a point at the top
         const r = Math.sin(Math.PI * Math.min(1, t * 1.6)) * (1 - t) * h * 0.22;
         return new THREE.Vector2(Math.max(0, r), t * h);
       });
-      drops.push(new THREE.LatheGeometry(pts, 24).translate(sx + dx, PLAZA_Y - 4, sz + dz));
+      drops.push(new THREE.LatheGeometry(pts, 24).translate(sx + dx, PLAZA_Y - DROP_TOWER_FOOT, sz - along));
     }
     put(new THREE.Mesh(merged(drops), clear));
     // 温室のドーム (温室の目印), far to the west, its brass ribs
-    const [wx, wz] = plazaGateAt(COMPASS.west);
-    const R = 24;
-    const domeAt = new THREE.Vector3(wx + 120, PLAZA_Y - 5, wz + 4);
+    const R = GREENHOUSE.radius;
+    const domeAt = new THREE.Vector3(...GREENHOUSE.center);
     const dome = new THREE.Mesh(
       keep(new THREE.SphereGeometry(R, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2)),
       clear,
@@ -842,14 +851,14 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     dome.renderOrder = 1;
     put(dome);
     for (let i = 0; i < 6; i++)
-      brassParts.push(
+      westBrass.push(
         new THREE.TorusGeometry(R + 0.05, 0.12, 6, 96, Math.PI)
           .rotateY((i * Math.PI) / 6)
           .translate(domeAt.x, domeAt.y, domeAt.z),
       );
     for (const f of [0.35, 0.7]) {
       const y = R * f;
-      brassParts.push(
+      westBrass.push(
         new THREE.TorusGeometry(Math.sqrt(R * R - y * y), 0.1, 6, 96)
           .rotateX(Math.PI / 2)
           .translate(domeAt.x, domeAt.y + y, domeAt.z),
@@ -858,6 +867,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   }
 
   put(new THREE.Mesh(merged(brassParts), brass));
+  put(new THREE.Mesh(merged(hillBrass), brass));
+  put(new THREE.Mesh(merged(westBrass), brass));
   put(new THREE.Mesh(merged(globes), lampMilk));
   put(new THREE.Mesh(merged(keystones), keystoneLit));
   put(new THREE.Mesh(merged(embers), keystoneDim));

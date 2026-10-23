@@ -495,16 +495,22 @@ for (const backend of backends) {
     const quietR = await room(page);
     expect(quietR.membrane.call).toBe(0);
     const quietPng = await page.screenshot({ path: join(shotDir, 'quiet.png') });
-    // push on backwards into the film (S: it is behind you): the vidro calls, and the same view shows it
+    // turn straight back from the film and push on backwards into it (S: straight at it, so the body does not slide along
+    // it): the vidro calls. Let go, turn to the vidro again: the same view, and it is still calling
+    await lookAt(page, [quietR.position.x, 1.4, quietR.position.z + 30]);
     await page.keyboard.down('KeyS');
     const calling = await waitRoom(page, 'r.membrane.call > 0.95', 3_000);
     await page.keyboard.up('KeyS');
     expect(calling.position.z).toBeGreaterThan(membraneZ);
+    await lookAt(page, pedestalOrb);
     await page.waitForTimeout(300);
     const callR = await room(page);
     expect(callR.membrane.call, 'still calling, let go where you stand').toBeGreaterThan(0.95);
     const callPng = await page.screenshot({ path: join(shotDir, 'call.png') });
-    expect(Math.abs(callR.position.z - quietR.position.z)).toBeLessThan(0.08);
+    expect(
+      Math.hypot(callR.position.x - quietR.position.x, callR.position.z - quietR.position.z),
+    ).toBeLessThan(0.05);
+    expect(Math.abs(callR.yaw - quietR.yaw)).toBeLessThan(0.02);
     // the vidro's sphere on the screen (its film, and the seams where it cuts the bridge and the stone): brighter while
     // it calls — seen from the gate even where the bridge's glass stands in front of the vidro itself
     const [ox, oy, oz] = pedestalOrb;
@@ -533,7 +539,7 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-35 through the shut south and west gates, the canal and the greenhouse are glimpsed (格子越しの気配) [${backend}]`, async ({
+  test(`S-35 the views through the shut south and west gates (the canal and the greenhouse between the posts: layout.test) in budget, not dark [${backend}]`, async ({
     page,
   }) => {
     test.setTimeout(120_000);

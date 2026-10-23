@@ -123,15 +123,24 @@ describe('S-35: the plaza as drawn (plaza.ts buildPlaza)', () => {
     art.dispose();
   });
 
-  it('the town is drawn in parts, each left out when out of view (no part spans the whole town)', () => {
+  it('looking back into the workshop from its door, nothing of the plaza and its town is drawn (all left out of that view)', () => {
     const { scene, art } = build();
-    const parts = scene.children.filter((o) => o.name.startsWith('town-')) as THREE.InstancedMesh[];
-    expect(parts.length).toBeGreaterThanOrEqual(3);
-    for (const p of parts) {
-      expect(p.frustumCulled).toBe(true);
-      p.computeBoundingSphere();
-      expect(p.boundingSphere?.radius ?? 0, p.name).toBeLessThan(150);
-    }
+    // at the door, looking back into the dome (+Z): the plaza and the town are all behind
+    const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 420);
+    camera.position.set(0, 1.6, -3.75);
+    camera.lookAt(0, 1.4, 5);
+    camera.updateMatrixWorld();
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+    );
+    scene.updateMatrixWorld(true);
+    const drawn: string[] = [];
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      if (!mesh.frustumCulled || frustum.intersectsObject(mesh)) drawn.push(mesh.name || mesh.type);
+    });
+    expect(drawn).toEqual([]);
     art.dispose();
   });
 });

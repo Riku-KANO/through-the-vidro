@@ -423,6 +423,26 @@ export const AREA1_CHIMNEY = {
 } as const;
 
 /**
+ * Beyond the shut gates (S-35, 仮: 格子越しに水路と温室の気配): エリア2's canal running south from past the south gate, with its
+ * landmark the drop towers (雫塔) along it, and エリア3's greenhouse dome (温室のドーム) far to the west. Placed so that from the
+ * plaza, on a gate's axis, they show between its posts. `CANAL`: from `from` to `to` metres past the gate, `halfWidth` of
+ * water, its surface `drop` below the plaza's floor. A tower: x off the canal's line, metres past the gate, height.
+ */
+export const CANAL = { from: 6, to: 110, halfWidth: 1.7, drop: 0.9 } as const;
+export const DROP_TOWERS: readonly (readonly [number, number, number])[] = [
+  [-6, 60, 24],
+  [6, 85, 30],
+  [0, 115, 22],
+] as const;
+/** The towers stand on ground this far below the plaza's floor (in the mist). */
+export const DROP_TOWER_FOOT = 4;
+/** エリア3's greenhouse: its dome's centre (on the ground, in the mist) and radius, west of the plaza. */
+export const GREENHOUSE = {
+  center: [PLAZA.center[0] + PLAZA.radius + 120, PLAZA_Y - 5, PLAZA.center[2]] as Vec3,
+  radius: 24,
+} as const;
+
+/**
  * 光の膜 (S-35; 発案者 2026-10-23: 玉を持たずに坂道へは出られない): a film of light in the gate's arch — the slope's entrance,
  * whose first 4 m are the road — that softly holds whoever comes to it from the far shore without the vidro in hand; the vidro
  * left on its pedestal then glows faintly to say where it is. With the vidro in hand there is nothing to it.
@@ -620,15 +640,15 @@ export const SPAWNS = {
   },
   /** S-35: in the plaza, looking at the shut south gate: the canal and its drop towers beyond the bars (エリア2). */
   south: {
-    feet: [PLAZA.center[0] + 5, PLAZA_Y, PLAZA.center[2] - 13] as Vec3,
-    yaw: Math.atan2(5, 12),
-    pitch: 0.05,
+    feet: [PLAZA.center[0], PLAZA_Y, PLAZA.center[2] - 12.5] as Vec3,
+    yaw: 0,
+    pitch: 0.06,
   },
   /** S-35: in the plaza, looking at the shut west gate: the greenhouse's dome beyond the bars (エリア3). */
   west: {
-    feet: [PLAZA.center[0] + 13, PLAZA_Y, PLAZA.center[2] + 5] as Vec3,
-    yaw: Math.atan2(-12, 5),
-    pitch: 0.05,
+    feet: [PLAZA.center[0] + 12.5, PLAZA_Y, PLAZA.center[2]] as Vec3,
+    yaw: -Math.PI / 2,
+    pitch: 0.06,
   },
   /** S-35: in the plaza, looking at the open east gate (エリア1), its short road and the chimney's hill beyond. */
   east: {
