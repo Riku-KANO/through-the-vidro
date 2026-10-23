@@ -10,7 +10,8 @@
 - `glass/warm.ts`（新規）: `withGlassUnculled(root, draw)` と `drawsGlass(object)`。**読み込みの温めの描画で、視界の外の透過の
   ガラスのパイプラインも作る。**
   - 何のため: three は物を初めて描くフレームの中で、その物のシェーダと描画のパイプラインを作る。透過のガラスは重い（S-38 の計測、
-    M 系の GPU で、振り返って初めて見えた工房の 5 つが WebGPU で 36〜56 ms、WebGL2 で 47〜64 ms のフレームを作った。ほかは 18〜20 ms）。
+    M 系の GPU で、振り返って初めて見えた工房の 5 つが WebGPU で 36〜52 ms、WebGL2 で 53〜64 ms のフレームを作った。ほかは 18〜20 ms。
+    毎回新しいブラウザで 3 回ずつ、`process/slices/S-38.md` の「計測」）。
     読み込みの温めの描画は、その姿勢で見える物しか作らない（three は描く前に視錐台で間引く。`compileAsync` も同じ）
   - 振る舞い: `draw` の間だけ、`root` の下で背景を読む材質（`readsBackdrop`）を持つ物の `frustumCulled` を false にし、`draw` が
     返るか例外を投げたら戻す。もともと false の物には触らない。隠れている物は隠れたまま（three はその物と子を描かない）

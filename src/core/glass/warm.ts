@@ -6,9 +6,9 @@ import { readsBackdrop } from './backdrop';
  *
  * three builds an object's shader and render pipeline the first time it draws that object, inside that frame. Transmissive
  * glass is the costly kind: the workshop's five glass wares behind the landing pose, first seen when looking back from the
- * far shore, made frames of 36–56 ms on WebGPU and 47–64 ms on WebGL2 (an Apple M-series GPU; the other frames 18–20 ms;
- * S-34's trace, S-38). A warm-up draw while loading compiles only what that pose sees: three culls by the view frustum
- * before it draws, and so does `compileAsync`.
+ * far shore, made frames of 36–52 ms on WebGPU and 53–64 ms on WebGL2 (an Apple M-series GPU, a fresh browser each time,
+ * three runs; the other frames 18–20 ms; process/slices/S-38.md). A warm-up draw while loading compiles only what that pose
+ * sees: three culls by the view frustum before it draws, and so does `compileAsync`.
  *
  * `withGlassUnculled` runs one draw with the frustum culling of every object whose material reads the backdrop
  * switched off, so the glass all around gets its pipelines in that draw, whatever the pose. Make it the game's own draw

@@ -64,11 +64,20 @@ describe('withGlassUnculled (S-38: the glass all around compiles in one warm-up 
     expect([r.front, r.behind, r.ware].every((o) => o.frustumCulled)).toBe(true);
   });
 
-  it('shows nothing that is hidden (three skips it, and the game hides things for a reason)', () => {
+  it('shows nothing that is hidden: glass under a hidden parent is unculled but stays hidden (three skips it)', () => {
     const r = room();
-    withGlassUnculled(r.scene, () => {
-      expect(r.hidden.visible).toBe(false);
-    });
-    expect(r.hidden.visible).toBe(false);
+    const drawer = new THREE.Group();
+    drawer.visible = false;
+    const inDrawer = new THREE.Mesh(geometry, glass());
+    drawer.add(inDrawer);
+    r.scene.add(drawer);
+    const during = withGlassUnculled(r.scene, () => ({
+      culled: [inDrawer.frustumCulled, r.hidden.frustumCulled],
+      visible: [drawer.visible, inDrawer.visible, r.hidden.visible],
+    }));
+    expect(during.culled).toEqual([false, false]);
+    expect(during.visible).toEqual([false, true, false]);
+    expect([drawer.visible, inDrawer.visible, r.hidden.visible]).toEqual([false, true, false]);
+    expect([inDrawer.frustumCulled, r.hidden.frustumCulled]).toEqual([true, true]);
   });
 });
