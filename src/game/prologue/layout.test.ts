@@ -9,6 +9,7 @@ import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/c
 import { LEDGE_DEFAULTS } from '../player/ledge';
 import {
   ANNEALER,
+  AREA1_CHIMNEY,
   BENCH,
   BENCH_ORB,
   BRIDGE,
@@ -16,10 +17,13 @@ import {
   BRIDGE_SETTLE,
   bridgeFooting,
   CHAIR,
+  COMPASS,
   DROP,
   DROP_REACH,
   deckHeight,
   domeWallRadius,
+  EAST_ROAD,
+  EAST_ROAD_END_X,
   EDGE_Z,
   FACING_DEG,
   FAR,
@@ -32,22 +36,33 @@ import {
   GATE_OPEN_DEG,
   GRATE,
   GRATE_CENTER,
+  groundHeight,
   LIGHTHOUSE,
+  LIGHTHOUSE_BASE,
+  LIGHTHOUSE_HEIGHT,
   LIP_HINTS,
-  LOOKOUT,
   lookDirection,
   MARVER,
+  MEMBRANE,
   MOTES_END_Z,
   MOUTH_PIPE_REACH,
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_ORB,
   PEDESTAL_RADIUS,
+  PLAZA,
+  PLAZA_GATE,
+  PLAZA_GATES,
+  PLAZA_RIM,
+  PLAZA_Y,
+  plazaGateAt,
   REACH,
   ROAD,
+  SLOPE,
   SPAWNS,
   type SpawnName,
   shelfFrontRadius,
+  slopeHeight,
   TEA_CUP,
   TRIAL_SURFACE_WALL,
   TUB_DRIP,
@@ -361,19 +376,17 @@ describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋
     expect(segmentsCutByBox(bridgeFooting(), BRIDGE_SETTLE.box)).toEqual([]);
   });
 
-  it('past the gate a short road (a few metres) ends at the lookout’s railing, the town beyond it (行き止まりの理由: 柵と街の眺め)', () => {
+  it('past the gate the road is the slope’s first few metres, level up to its brow (S-35: the railing is gone)', () => {
     expect(ROAD.maxZ).toBe(FAR.minZ);
     expect(ROAD.minX).toBe(FAR.minX);
     expect(ROAD.maxX).toBe(FAR.maxX);
     const pastGate = GATE.z - ROAD.minZ;
     expect(pastGate).toBeGreaterThan(2.5);
     expect(pastGate).toBeLessThan(6);
-    // the railing stands on the road, across its end
-    expect(LOOKOUT.z).toBeGreaterThan(ROAD.minZ);
-    expect(LOOKOUT.z - ROAD.minZ).toBeLessThan(0.4);
-    expect(LOOKOUT.height).toBeGreaterThan(0.9);
-    expect(LOOKOUT.height).toBeLessThan(EYE_HEIGHT - 0.3);
-    // ルール6: the town and its lighthouse lie on beyond it, over the mist
+    // the slope starts down where the road ends
+    expect(SLOPE.fromZ).toBe(ROAD.minZ);
+    expect(slopeHeight((ROAD.minZ + ROAD.maxZ) / 2)).toBe(0);
+    // ルール6: the town and its lighthouse lie on beyond it
     expect(LIGHTHOUSE[2]).toBeLessThan(ROAD.minZ - 30);
     expect(floorAt(0, (ROAD.minZ + ROAD.maxZ) / 2)).toEqual({ zone: 'road', material: 'stone' });
   });
@@ -387,24 +400,195 @@ describe('S-34: the close of the prologue (発案者 2026-10-22: 雫の光で橋
     const tipZ = GATE.z - GATE.halfWidth * Math.sin(a);
     expect(tipX).toBeGreaterThanOrEqual(ROAD.maxX - 0.01);
     expect(tipZ).toBeLessThan(GATE.z - 1);
-    expect(tipZ).toBeGreaterThan(LOOKOUT.z);
+    expect(tipZ).toBeGreaterThan(ROAD.minZ);
   });
 
   it('the fixed views of the close look at what they are named for', () => {
     const eye = (s: (typeof SPAWNS)[SpawnName]): Vec3 => [s.feet[0], EYE_HEIGHT, s.feet[2]];
     const look = (s: (typeof SPAWNS)[SpawnName]) => lookDirection(s.yaw, s.pitch);
-    // before the gate, the gate ahead; on the road, the railing and the lighthouse beyond it
+    // before the gate, the gate ahead; on the road, the slope and the lighthouse beyond it
     expect(SPAWNS.gate.feet[2]).toBeGreaterThan(GATE.z);
     expect(angleDeg(eye(SPAWNS.gate), look(SPAWNS.gate), [0, 1.3, GATE.z])).toBeLessThan(15);
     expect(SPAWNS.road.feet[2]).toBeLessThan(GATE.z);
-    expect(SPAWNS.road.feet[2]).toBeGreaterThan(LOOKOUT.z);
-    expect(angleDeg(eye(SPAWNS.road), look(SPAWNS.road), [0, LOOKOUT.height, LOOKOUT.z])).toBeLessThan(30);
-    expect(angleDeg(eye(SPAWNS.road), look(SPAWNS.road), [LIGHTHOUSE[0], 20, LIGHTHOUSE[2]])).toBeLessThan(
-      30,
-    );
+    expect(SPAWNS.road.feet[2]).toBeGreaterThan(ROAD.minZ);
+    expect(
+      angleDeg(eye(SPAWNS.road), look(SPAWNS.road), [LIGHTHOUSE[0], LIGHTHOUSE[1] + 20, LIGHTHOUSE[2]]),
+    ).toBeLessThan(30);
   });
 });
 
 function xz(p: Vec3): [number, number] {
   return [p[0], p[2]];
 }
+
+/* ---------- S-35 坂道と中央広場 (進行構造とエリア設計 > 街の配置と序章の締め) ---------- */
+
+describe('S-35: the slope from the gate down to the central plaza', () => {
+  const eye = (s: (typeof SPAWNS)[SpawnName]): Vec3 => [s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]];
+  const look = (s: (typeof SPAWNS)[SpawnName]) => lookDirection(s.yaw, s.pitch);
+  /** Degrees left (+) or right (−) of `dir` on the ground at which `to` lies, seen from `from`. */
+  const leftOf = (from: Vec3, dir: Vec3, to: Vec3): number => {
+    const a = Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
+    const b = Math.atan2(-dir[0], -dir[2]);
+    return (Math.atan2(Math.sin(a - b), Math.cos(a - b)) * 180) / Math.PI;
+  };
+
+  it('is one way of about 80 m from the gate to the plaza’s rim (街の配置: 門から約 80m の坂道), as wide as the road', () => {
+    const fromGate = GATE.z - SLOPE.toZ;
+    expect(fromGate).toBeGreaterThan(75);
+    expect(fromGate).toBeLessThan(85);
+    expect(SLOPE.minX).toBe(ROAD.minX);
+    expect(SLOPE.maxX).toBe(ROAD.maxX);
+    // it meets the plaza's rim
+    expect(Math.abs(PLAZA.center[2] + PLAZA.radius - SLOPE.toZ)).toBeLessThan(0.05);
+  });
+
+  it('goes down, never up, level where it meets the road and the plaza, and never steeper than the body climbs', () => {
+    expect(slopeHeight(SLOPE.fromZ)).toBe(0);
+    expect(slopeHeight(SLOPE.toZ)).toBeCloseTo(-SLOPE.drop, 9);
+    expect(PLAZA_Y).toBe(-SLOPE.drop);
+    expect(SLOPE.drop).toBeGreaterThan(4);
+    let last = 0;
+    let steepest = 0;
+    const step = 0.05;
+    for (let z = SLOPE.fromZ + 2; z >= SLOPE.toZ - 2; z -= step) {
+      const h = slopeHeight(z);
+      expect(h).toBeLessThanOrEqual(last + 1e-12);
+      steepest = Math.max(steepest, (last - h) / step);
+      last = h;
+    }
+    // gentle at both ends (no kink where it meets the level stone)
+    expect(slopeHeight(SLOPE.fromZ - 0.5)).toBeGreaterThan(-0.02);
+    expect(slopeHeight(SLOPE.toZ + 0.5)).toBeLessThan(-SLOPE.drop + 0.02);
+    expect((Math.atan(steepest) * 180) / Math.PI).toBeLessThan(Math.min(20, MAX_SLOPE_DEG));
+    // the ground the fall guard measures from follows it
+    expect(groundHeight(0, -3)).toBe(0);
+    expect(groundHeight(0, (SLOPE.fromZ + SLOPE.toZ) / 2)).toBeCloseTo(-SLOPE.drop / 2, 9);
+    expect(groundHeight(0, PLAZA.center[2])).toBe(PLAZA_Y);
+  });
+
+  it('is stone underfoot all the way, and so are the plaza and the road past its east gate (足音は石畳)', () => {
+    for (let z = SLOPE.fromZ - 0.1; z > SLOPE.toZ; z -= 3)
+      expect(floorAt(0.4, z)).toEqual({ zone: 'slope', material: 'stone' });
+    expect(floorAt(PLAZA.center[0] + 10, PLAZA.center[2] - 7)).toEqual({ zone: 'plaza', material: 'stone' });
+    expect(floorAt(EAST_ROAD_END_X + 1, PLAZA.center[2])).toEqual({ zone: 'east-road', material: 'stone' });
+  });
+
+  it('from its brow, the plaza and the broken lighthouse are straight ahead (ルール6), エリア1’s chimney on the left (東, ルール5)', () => {
+    const s = SPAWNS.slope;
+    expect(s.feet[2]).toBeLessThan(GATE.z);
+    expect(s.feet[2]).toBeGreaterThan(SLOPE.fromZ);
+    const e = eye(s);
+    const ahead = lookDirection(s.yaw, 0);
+    expect(Math.abs(leftOf(e, ahead, LIGHTHOUSE))).toBeLessThan(5);
+    expect(Math.abs(leftOf(e, ahead, PLAZA.center))).toBeLessThan(5);
+    // the lighthouse, base to top, and the plaza in the picture (vertical half view 35°)
+    const top: Vec3 = [LIGHTHOUSE[0], LIGHTHOUSE[1] + LIGHTHOUSE_HEIGHT, LIGHTHOUSE[2]];
+    expect(angleDeg(e, look(s), top)).toBeLessThan(FOV_DEFAULT / 2 - 5);
+    expect(angleDeg(e, look(s), PLAZA.center)).toBeLessThan(FOV_DEFAULT / 2 - 5);
+    // looking down at the plaza
+    expect(PLAZA.center[1]).toBeLessThan(e[1] - 8);
+    // the chimney: left of the lighthouse, and still inside the 16:9 picture's half width (about 51°)
+    const chimneyTop: Vec3 = [AREA1_CHIMNEY.foot[0], PLAZA_Y + AREA1_CHIMNEY.top, AREA1_CHIMNEY.foot[2]];
+    const left = leftOf(e, ahead, chimneyTop);
+    expect(left).toBeGreaterThan(20);
+    expect(left).toBeLessThan(47);
+    // and over the horizon, against the sky
+    expect(chimneyTop[1]).toBeGreaterThan(e[1] + 5);
+  });
+
+  it('east is on the left of the way down (左手（東）): the compass turns with the map, the workshop to the north', () => {
+    const way = lookDirection(0, 0);
+    expect(way[2]).toBeLessThan(0);
+    // the way down runs south; east is its left (yaw +90°)
+    expect(COMPASS.south).toEqual([0, -1]);
+    const left = lookDirection(Math.PI / 2, 0);
+    expect(COMPASS.east[0]).toBeCloseTo(left[0], 9);
+    expect(COMPASS.east[1]).toBeCloseTo(left[2], 9);
+    expect(COMPASS.west[0]).toBeCloseTo(-COMPASS.east[0], 9);
+    expect(COMPASS.west[1]).toBeCloseTo(-COMPASS.east[1], 9);
+  });
+});
+
+describe('S-35: the central plaza, its broken lighthouse and its three gates', () => {
+  it('is round, about 25 m across its radius (街の配置: 中央広場は半径約 25m), the lighthouse in its middle, about 40 m tall', () => {
+    expect(PLAZA.radius).toBeGreaterThan(20);
+    expect(PLAZA.radius).toBeLessThan(30);
+    expect(LIGHTHOUSE).toEqual(PLAZA.center);
+    expect(LIGHTHOUSE_HEIGHT).toBeGreaterThan(35);
+    expect(LIGHTHOUSE_HEIGHT).toBeLessThan(45);
+    // a wide plaza round the lighthouse's foot: room to walk round it
+    expect(PLAZA.radius - LIGHTHOUSE_BASE.radius).toBeGreaterThan(15);
+  });
+
+  it('has three gates, east (エリア1), south (エリア2), west (エリア3): only the east one is open', () => {
+    expect(PLAZA_GATES.map((g) => g.name)).toEqual(['east', 'south', 'west']);
+    expect(PLAZA_GATES.filter((g) => g.open).map((g) => g.name)).toEqual(['east']);
+    expect(PLAZA_GATES.find((g) => g.name === 'east')?.dir).toEqual(COMPASS.east);
+    expect(PLAZA_GATES.find((g) => g.name === 'south')?.dir).toEqual(COMPASS.south);
+    expect(PLAZA_GATES.find((g) => g.name === 'west')?.dir).toEqual(COMPASS.west);
+    // each on the rim, none where the slope comes in (from the north)
+    for (const g of PLAZA_GATES) {
+      const [x, z] = plazaGateAt(g.dir);
+      expect(Math.hypot(x - PLAZA.center[0], z - PLAZA.center[2])).toBeCloseTo(PLAZA.radius, 9);
+      expect(g.dir).not.toEqual(COMPASS.north);
+    }
+    // a gate as wide as the slope and taller than the body; the rim's openings take the gates and the slope
+    expect(PLAZA_GATE.halfWidth).toBeGreaterThanOrEqual(SLOPE.maxX);
+    expect(PLAZA_GATE.height).toBeGreaterThan(2.5);
+    expect(PLAZA_RIM.openingHalf).toBeGreaterThan(PLAZA_GATE.halfWidth);
+    expect(PLAZA_RIM.openingHalf).toBeGreaterThan(SLOPE.maxX + BODY_RADIUS);
+  });
+
+  it('past the open east gate a few metres of road end at a railing (仮 until S-36), エリア1’s chimney beyond (ルール6, 9)', () => {
+    expect(EAST_ROAD.length).toBeGreaterThan(3);
+    expect(EAST_ROAD.length).toBeLessThan(10);
+    expect(EAST_ROAD_END_X).toBeLessThan(PLAZA.center[0] - PLAZA.radius - 3);
+    // from the plaza the chimney rises over the open east gate
+    const [gx, gz] = plazaGateAt(COMPASS.east);
+    const toGate = Math.atan2(gz - PLAZA.center[2], gx - PLAZA.center[0]);
+    const toChimney = Math.atan2(
+      AREA1_CHIMNEY.foot[2] - PLAZA.center[2],
+      AREA1_CHIMNEY.foot[0] - PLAZA.center[0],
+    );
+    const apart = Math.abs(Math.atan2(Math.sin(toGate - toChimney), Math.cos(toGate - toChimney)));
+    expect((apart * 180) / Math.PI).toBeLessThan(15);
+    expect(Math.hypot(AREA1_CHIMNEY.foot[0] - gx, AREA1_CHIMNEY.foot[2] - gz)).toBeGreaterThan(50);
+  });
+
+  it('the fixed views look at what they are named for: up at the lighthouse, at the east gate', () => {
+    const eye = (s: (typeof SPAWNS)[SpawnName]): Vec3 => [s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]];
+    const look = (s: (typeof SPAWNS)[SpawnName]) => lookDirection(s.yaw, s.pitch);
+    for (const name of ['plaza', 'east'] as const) {
+      const s = SPAWNS[name];
+      expect(s.feet[1]).toBe(PLAZA_Y);
+      expect(Math.hypot(s.feet[0] - PLAZA.center[0], s.feet[2] - PLAZA.center[2])).toBeLessThan(
+        PLAZA.radius - 1,
+      );
+      expect(Math.hypot(s.feet[0] - PLAZA.center[0], s.feet[2] - PLAZA.center[2])).toBeGreaterThan(
+        LIGHTHOUSE_BASE.radius + 1,
+      );
+    }
+    // 見上げる: the view tips up, and takes in the lighthouse from its foot to its broken top
+    const p = SPAWNS.plaza;
+    expect(p.pitch).toBeGreaterThan(0.3);
+    const top: Vec3 = [LIGHTHOUSE[0], LIGHTHOUSE[1] + LIGHTHOUSE_HEIGHT - 3, LIGHTHOUSE[2]];
+    expect(angleDeg(eye(p), look(p), top)).toBeLessThan(FOV_DEFAULT / 2);
+    expect(angleDeg(eye(p), look(p), [LIGHTHOUSE[0], PLAZA_Y + 2, LIGHTHOUSE[2]])).toBeLessThan(
+      FOV_DEFAULT / 2,
+    );
+    const [gx, gz] = plazaGateAt(COMPASS.east);
+    const e = SPAWNS.east;
+    expect(angleDeg(eye(e), look(e), [gx, PLAZA_Y + 2, gz])).toBeLessThan(10);
+  });
+});
+
+describe('S-35: the film at the slope’s entrance (玉を持たずに坂道へは出られない)', () => {
+  it('stands in the gate’s arch — the slope’s entrance, its first metres the road — and calls from where the body is held', () => {
+    expect(MEMBRANE.z).toBe(GATE.z);
+    // the body is eased to a stop LEDGE margin before an edge: well inside the reach of the call
+    expect(MEMBRANE.callReach).toBeGreaterThan(LEDGE_DEFAULTS.margin + 0.2);
+    // and the call does not reach back to the drop's place: only someone at the gate
+    expect(MEMBRANE.z + MEMBRANE.callReach).toBeLessThan(DROP[2]);
+  });
+});

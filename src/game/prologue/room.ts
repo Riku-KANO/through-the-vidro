@@ -25,19 +25,27 @@ import {
   BRIDGE,
   BRIDGE_SETTLE,
   bridgeFooting,
+  COMPASS,
   DROP,
   DROP_REACH,
+  EAST_ROAD_END_X,
   EDGE_Z,
   FACING_DEG,
   FAR,
   GATE,
   GATE_OPEN_DEG,
-  LOOKOUT,
+  groundHeight,
+  LIGHTHOUSE,
+  LIGHTHOUSE_HEIGHT,
   lookDirection,
+  MEMBRANE,
   PEDESTAL_ID,
   PEDESTAL_ORB,
+  PLAZA,
+  plazaGateAt,
   REACH,
   ROAD,
+  SLOPE,
   SPAWNS,
   type SpawnName,
   TRIAL_SURFACE_WALL,
@@ -52,7 +60,9 @@ import {
   GateLeaves,
   insideAnySphere,
   SurfaceColliders,
+  withMembrane,
 } from './physics';
+import { buildPlaza, fogRangeAt } from './plaza';
 import { buildRoomArt } from './room-art';
 import {
   type FinaleEvent,
@@ -62,6 +72,7 @@ import {
   peekModifier,
   SHAKE_AMPLITUDE,
 } from './session';
+import { buildSlope, slopeGroundNode } from './slope';
 import { pickTarget, type TargetCandidate } from './targets';
 
 /**
@@ -147,15 +158,26 @@ export interface RoomProbe {
   } | null;
   /** S-34: the close — the drop's light settling the bridge, the gate opening (as drawn and collided now). */
   finale: FinaleProbe;
+  /**
+   * S-35: the film at the slope's entrance — whether it holds the body now (the vidro not in hand, on the shore's side),
+   * how much it shows (0..1) and how much the vidro left behind is calling (0..1, its faint glow).
+   */
+  membrane: { holding: boolean; film: number; call: number };
   layout: {
     edgeZ: number;
     farZ: number;
     pedestalOrb: Vec3;
     drop: Vec3;
-    /** S-34: the gate, the road's end past it and the lookout's railing there. */
+    /** S-34: the gate and the road's end past it (S-35: the slope's brow). */
     gateZ: number;
     roadEndZ: number;
-    lookoutZ: number;
+    /** S-35: the film (in the gate's arch), the slope's foot, the plaza, its open east gate and the road's end past it. */
+    membraneZ: number;
+    slopeEndZ: number;
+    plaza: { center: Vec3; radius: number };
+    lighthouseTop: Vec3;
+    eastGate: Vec3;
+    eastRoadEndX: number;
   };
   /** The workshop's interior from its glb (S-24), once the room is built. */
   workshop: WorkshopProbe | null;
@@ -211,6 +233,22 @@ export interface PrologueRoom extends DiveWorld {
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
 const DROP_ARRIVAL_GLOW_SECONDS = 0.9;
+/**
+ * 仮 (S-35): the vidro left behind calls — glows faintly, breathing (そのとき台座の玉がかすかに光って知らせる): the call's strength
+ * at its full, how much it breathes and how fast. It shows on the vidro's sphere's film (CALL_FILM of it on top of the film's
+ * calm glow of 0.45, materialize.ts), and so in the vidro (its glow follows its sphere's), in its light (CALL_LIGHT more) and
+ * on its cup's rim (CALL_CUP). Below the bloom's threshold: a glimmer, not a light.
+ */
+const CALL_GLOW = 0.42;
+const CALL_BREATH = 0.16;
+const CALL_RATE = (2 * Math.PI) / 1.6;
+const CALL_FILM = 0.8;
+const CALL_LIGHT = 2.0;
+/**
+ * 仮 (S-35): and the rim of the pedestal's milky cup lights up with it (the same warm rim as when you can act on it): the
+ * cup is opaque, so it shows from the gate even where the bridge's glass stands between (透過は不透明な物しか映さない).
+ */
+const CALL_CUP = 0.8;
 /** 仮 (S-34): the keystone lamp is lit by the time the gate is this far (0..1) into its opening. */
 const KEYSTONE_LIGHTS = 0.25;
 const MAX_EVENTS = 40;
@@ -330,6 +368,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       frontZ: null,
       events: [],
     },
+    membrane: { holding: false, film: 0, call: 0 },
     layout: {
       edgeZ: EDGE_Z,
       farZ: FAR.maxZ,
@@ -337,7 +376,15 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       drop: DROP,
       gateZ: GATE.z,
       roadEndZ: ROAD.minZ,
-      lookoutZ: LOOKOUT.z,
+      membraneZ: MEMBRANE.z,
+      slopeEndZ: SLOPE.toZ,
+      plaza: { center: PLAZA.center, radius: PLAZA.radius },
+      lighthouseTop: [LIGHTHOUSE[0], LIGHTHOUSE[1] + LIGHTHOUSE_HEIGHT, LIGHTHOUSE[2]],
+      eastGate: (() => {
+        const [x, z] = plazaGateAt(COMPASS.east);
+        return [x, PLAZA.center[1], z] as Vec3;
+      })(),
+      eastRoadEndX: EAST_ROAD_END_X,
     },
     workshop: null,
     trial: null,
@@ -428,8 +475,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     ...(trialWall ? { trialWall: TRIAL_SURFACE_WALL } : {}),
     // the gate is the close's (finale.ts): its leaves open
     gate: false,
+    // S-35: the town and its lighthouse are the plaza's (plaza.ts); the mist lies under the slope's ground
+    town: false,
+    mistFloor: slopeGroundNode(),
   });
   const finaleArt = buildFinale(quality, field, art.scene);
+  // S-35: the slope down from the gate (and the film in its arch), the central plaza and the town round it
+  const slopeArt = buildSlope(quality, field, art.scene);
+  const plazaArt = buildPlaza(quality, field, art.scene);
   const workshopTriangles = triangleCount(workshop.assembled.root);
   for (const { object, layer } of workshop.assembled.layered) field.assign(object, layer);
   art.scene.add(workshop.assembled.root);
@@ -480,13 +533,17 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     surface: trial?.segments ?? [],
     drop: DROP,
     settle: BRIDGE_SETTLE,
+    membrane: MEMBRANE,
   });
   const spawn = SPAWNS[opts.spawn];
+  /** Where the feet stood when last read (the film asks which side of it the body is on). */
+  let feetZ = spawn.feet[2];
   const player = new PlayerController(world, {
     feet: { x: spawn.feet[0], y: spawn.feet[1], z: spawn.feet[2] },
     yaw: spawn.yaw,
     pitch: spawn.pitch,
-    allowGround: footing.allowGround,
+    // S-35: past the film at the slope's entrance there is no ground for whoever left the vidro behind
+    allowGround: withMembrane(footing.allowGround, () => session.holdsAtMembrane(feetZ)),
   });
   player.applyToCamera(camera);
 
@@ -538,10 +595,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   let promptText = '';
   let mainRadius = 0;
   let onBackFooting = false;
-  const guard = new FallGuard();
+  // the guard's floor a metre under the ground, down the slope too (S-35)
+  const guard = new FallGuard((x, z) => groundHeight(x, z) - 1);
   const idle: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
   const live: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
-  const peekInput = { wantPeek: false };
+  // the session's input each frame, reused: the peek asked for, and (S-35) where the feet stand (feetNow)
+  const peekInput: { wantPeek: boolean; feet?: Vec3; pushing?: boolean } = { wantPeek: false };
   const peek = peekModifier(0);
   const forward: [number, number, number] = [0, 0, -1];
   /** Seconds the one-line controls hint has been up since the mouse was last free. */
@@ -573,7 +632,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   };
   const dropTarget: TargetCandidate<TargetKind> = { target: 'drop', point: DROP, reach: DROP_REACH };
   /** The body as read once per frame (S-03's getters return new objects each time). */
-  const body = { fx: 0, fy: 0, fz: 0, ey: 0, vx: 0, vy: 0, vz: 0 };
+  const body = { fx: spawn.feet[0], fy: spawn.feet[1], fz: spawn.feet[2], ey: 0, vx: 0, vy: 0, vz: 0 };
   const readBody = (): void => {
     const f = player.feet;
     const v = player.velocity;
@@ -584,7 +643,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     body.vx = v.x;
     body.vy = v.y;
     body.vz = v.z;
+    feetZ = f.z;
   };
+  const feetNow: [number, number, number] = [spawn.feet[0], spawn.feet[1], spawn.feet[2]];
+  peekInput.feet = feetNow;
   /** S-34 review: the longest frames of the scripted play, by step (probe.autoplay). */
   let frameAt: number | null = null;
   let frameStep = '';
@@ -692,6 +754,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     const spheres = session.spheres();
     const shake = session.shake;
     const flash = shake * shake * 1.6 + (arrivalGlow / DROP_ARRIVAL_GLOW_SECONDS) * 1.4;
+    // S-35: left behind while the film holds you at the gate, the vidro calls: a faint glow, breathing — in the vidro, its
+    // cup and its light, and on its sphere's film, which shows from the gate whatever stands in front of the vidro itself
+    const call = session.call;
+    const calling = call > 0 ? call * (CALL_GLOW + CALL_BREATH * Math.sin(time * CALL_RATE)) : 0;
     let mainGlow = 0;
     mainRadius = 0;
     fieldList.length = 0;
@@ -703,7 +769,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       const m = frozen ? { progress: opts.growHold ?? 1, target: 1 as const } : sp.materialize;
       f.center = sp.center;
       f.radius = frozen ? materializedRadius(m, MAIN_ORB_RADIUS) : sp.radius;
-      f.glow = boundaryGlow(m) + (sp.kind === 'main' ? flash : 0);
+      f.glow = boundaryGlow(m) + (sp.kind === 'main' ? flash + calling * CALL_FILM : 0);
       if (sp.kind === 'main') {
         mainGlow = f.glow;
         mainRadius = f.radius;
@@ -735,7 +801,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     art.orb.visible = place !== 'hand' || prewarm;
     art.orb.position.set(at[0] + jitter, at[1] + jitter * 0.3, at[2] - jitter * 0.6);
     art.orbGlow.value = (place === 'pedestal' ? mainGlow * 1.2 : 0) + flash * (place === 'pedestal' ? 0 : 1);
-    art.orbLight.intensity = place === 'pedestal' ? mainGlow * 2.2 : 0;
+    art.orbLight.intensity = place === 'pedestal' ? mainGlow * 2.2 + call * CALL_LIGHT : 0;
+    slopeArt.setFilm(session.film);
+    slopeArt.setPress(call);
 
     // the light drop hovers; once touched it rises and flies into the vidro, then is gone
     const d = session.dropState;
@@ -793,6 +861,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     f.gateOpen = close.angle >= openRad * 0.9;
     // the front is measured along the sweep's direction (straight down -Z over the bridge)
     f.frontZ = close.front === null ? null : close.front / BRIDGE_SETTLE.direction[2];
+    probe.membrane.holding = session.holdsAtMembrane(body.fz);
+    probe.membrane.film = session.film;
+    probe.membrane.call = session.call;
     orbScreenCircle(frame.center, HAND_ORB_RADIUS, camera.fov, camera.aspect, probe.orbScreen);
     probe.orbScreen.visible = frame.visible;
     if (probe.autoplay && opts.autopilot) {
@@ -816,8 +887,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       input.suspended = !on || opts.autopilot !== null;
       if (on) {
         hintFor = 0;
-        art.fogRange.near.value = 18;
-        art.fogRange.far.value = 150;
+        // the way's haze in the workshop, the town's out on the slope (S-35: plaza.ts fogRangeAt)
+        const fog = fogRangeAt(feetZ);
+        art.fogRange.near.value = fog.near;
+        art.fogRange.far.value = fog.far;
         // the dive ends exactly at the player's eye; from here the body owns the camera
         player.applyToCamera(camera);
       } else {
@@ -828,6 +901,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       time += dt;
       timeFrame();
       art.animate(t);
+      slopeArt.animate(t);
+      plazaArt.animate(t);
       let intent = idle;
       let wantPeek = false;
       if (playing) {
@@ -859,6 +934,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       }
       queue.length = 0;
       peekInput.wantPeek = wantPeek;
+      // S-35: walking toward the slope (the wished direction along -Z, as the body turns it: PlayerController's yaw)
+      peekInput.pushing = -Math.cos(player.yaw) * intent.move.y - Math.sin(player.yaw) * intent.move.x < -0.2;
+      feetNow[0] = body.fx;
+      feetNow[1] = body.fy;
+      feetNow[2] = body.fz;
       session.step(dt, peekInput);
       arrivalGlow = Math.max(0, arrivalGlow - dt);
       // the hint comes back for a few seconds whenever the mouse is freed again
@@ -901,6 +981,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         }
         player.applyToCamera(camera);
         camera.updateMatrixWorld();
+        // S-35: the haze reaches further out in the town than on the way
+        const fog = fogRangeAt(body.fz);
+        art.fogRange.near.value = fog.near;
+        art.fogRange.far.value = fog.far;
       } else readBody();
       chooseTarget();
       updatePrompt();
@@ -915,7 +999,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       focusNow.pedestal = ease(focusNow.pedestal, playing && target === 'pedestal', k);
       focusNow.drop = ease(focusNow.drop, playing && target === 'drop', k);
       art.focus.orb.value = focusNow.orb;
-      art.focus.pedestal.value = focusNow.pedestal;
+      art.focus.pedestal.value = Math.max(focusNow.pedestal, session.call * CALL_CUP);
       art.focus.drop.value = focusNow.drop;
       handOrbCenter(amount, session.handPresence, time, orbCenter);
       frame.peek = amount;
@@ -948,6 +1032,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       trial?.dispose();
       gateLeaves.dispose();
       world.free();
+      slopeArt.dispose();
+      plazaArt.dispose();
       workshop.dispose();
       pipeline.dispose();
       field.dispose();

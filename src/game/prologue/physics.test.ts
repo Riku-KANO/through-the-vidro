@@ -18,8 +18,11 @@ import {
   BRIDGE,
   BRIDGE_SETTLE,
   bridgeFooting,
+  COMPASS,
   DROP,
   deckHeight,
+  EAST_ROAD,
+  EAST_ROAD_END_X,
   EDGE_Z,
   FAR,
   FOOTING_SEGMENT,
@@ -30,13 +33,21 @@ import {
   GATE_OPEN_DEG,
   GRATE,
   gateLeafDirection,
-  LOOKOUT,
+  groundHeight,
+  LIGHTHOUSE_BASE,
+  MEMBRANE,
   MOUTH_PIPE_REACH,
   PEDESTAL_ID,
   PEDESTAL_ORB,
+  PLAZA,
+  PLAZA_GATES,
+  PLAZA_RIM,
+  PLAZA_Y,
   ROAD,
+  SLOPE,
   SPAWNS,
   type SpawnName,
+  slopeHeight,
   TRIAL_SURFACE_WALL,
   WORKSHOP,
   WORKSHOP_ASSET,
@@ -51,8 +62,10 @@ import {
   GateLeaves,
   insideAnySphere,
   SurfaceColliders,
+  withMembrane,
 } from './physics';
-import { FINALE_SECONDS, PrologueSession } from './session';
+import { LIGHTHOUSE_RAIL } from './plaza';
+import { FINALE_SECONDS, membraneHolds, type OrbPlace, PrologueSession, vidroCalls } from './session';
 
 /**
  * The prologue room in a real Rapier world (Node): the same colliders the scene builds (the room's own, and the
@@ -609,18 +622,15 @@ describe('S-34: the close — the settled bridge and the open gate (光が世界
     expect(p.feet.z).toBeLessThan(GATE.z + 0.6);
   });
 
-  it('open, the gate lets the body through onto the short road, which ends at the lookout’s railing', () => {
+  it('open, the gate lets the body through onto the road and on over the brow (S-35: no railing at its end any more)', () => {
     const r = room();
     r.gate.sync(OPEN);
     const p = body(r, { feet: [0.2, 0, FAR.maxZ - 0.8], yaw: 0 });
     const s = walk(r, p, forward, 8);
-    expect(s.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
-    expect(p.feet.z).toBeLessThan(GATE.z - 1);
-    // the railing, not the edge, stops it: 柵 (行き止まりの理由), with the road under the feet up to it
-    expect(p.feet.z).toBeGreaterThan(LOOKOUT.z);
-    expect(p.feet.z).toBeLessThan(LOOKOUT.z + BODY_RADIUS + 0.2);
-    expect(p.feet.z).toBeGreaterThan(ROAD.minZ);
-    expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - slopeHeight(q.z)) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeLessThan(ROAD.minZ - 2);
+    expect(p.feet.y).toBeLessThan(-0.01);
+    expect(s.at(-1)?.speed ?? 0).toBeGreaterThan(1.2);
   });
 
   it('open, its leaves stand along the road’s edges: walking the road by either edge, nothing is in the way', () => {
@@ -714,5 +724,179 @@ describe('S-34: the close — the settled bridge and the open gate (光が世界
     expect(session.spheres()).toEqual([]);
     expect(samples.every((q) => q.grounded && q.y > -0.05)).toBe(true);
     expect(p.feet.z).toBeLessThan(GATE.z - 1);
+  });
+});
+
+/* ---------- S-35 坂道と中央広場: what stops the body, and what does not (当たり判定は見た目に正直に, 落下なし) ---------- */
+
+describe('S-35: down the slope to the central plaza (落下なし, やわらかい柵)', () => {
+  const OPEN = (GATE_OPEN_DEG * Math.PI) / 180;
+  const strafeRight: PlayerIntent = { move: { x: 1, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
+  const strafeLeft: PlayerIntent = { move: { x: -1, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
+  const sprint: PlayerIntent = { ...forward, sprint: true };
+  const fromCenter = (q: { x: number; z: number }) =>
+    Math.hypot(q.x - PLAZA.center[0], q.z - PLAZA.center[2]);
+
+  it('from the open gate the body walks the whole slope down onto the plaza, its feet on the stone all the way', () => {
+    const r = room();
+    r.gate.sync(OPEN);
+    const p = body(r, { feet: [0.1, 0, GATE.z + 0.8], yaw: 0 });
+    const s = walk(r, p, sprint, (GATE.z - SLOPE.toZ + 4) / 2.2 + 1);
+    expect(s.every((q) => q.grounded)).toBe(true);
+    for (const q of s) expect(Math.abs(q.y - slopeHeight(q.z)), `at z ${q.z.toFixed(2)}`).toBeLessThan(0.05);
+    expect(p.feet.z).toBeLessThan(SLOPE.toZ - 2);
+    expect(p.feet.y).toBeCloseTo(PLAZA_Y, 1);
+    // it never stopped on the way down (no seam, no step to catch on)
+    expect(Math.min(...s.slice(60).map((q) => q.speed))).toBeGreaterThan(1.9);
+  });
+
+  it('and back up again, from the plaza to the gate', () => {
+    const r = room();
+    r.gate.sync(OPEN);
+    const p = body(r, { feet: [-0.1, PLAZA_Y, SLOPE.toZ - 1.5], yaw: Math.PI });
+    const s = walk(r, p, sprint, (GATE.z - SLOPE.toZ) / 2.2 + 5);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - slopeHeight(q.z)) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeGreaterThan(GATE.z + 0.5);
+  });
+
+  it('the railings along its edges stop the body softly on either side, anywhere down the slope (no fall)', () => {
+    for (const z of [ROAD.minZ - 4, (SLOPE.fromZ + SLOPE.toZ) / 2, SLOPE.toZ + 4]) {
+      for (const [intent, sign] of [
+        [strafeRight, 1],
+        [strafeLeft, -1],
+      ] as const) {
+        const r = room();
+        const p = body(r, { feet: [0, slopeHeight(z), z], yaw: 0 });
+        const s = walk(r, p, intent, 3);
+        expect(s.every((q) => q.grounded && Math.abs(q.y - slopeHeight(q.z)) < 0.05)).toBe(true);
+        const x = p.feet.x * sign;
+        expect(x, `side ${sign} at z ${z}`).toBeGreaterThan(SLOPE.maxX - BODY_RADIUS - 0.35);
+        expect(x).toBeLessThan(SLOPE.maxX - BODY_RADIUS + 0.02);
+        expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+      }
+    }
+  });
+
+  it('the plaza’s rim keeps the body on the plaza, between its gates', () => {
+    for (const deg of [30, 135, 225, 315]) {
+      const a = (deg * Math.PI) / 180;
+      const r = room();
+      // from near the lighthouse, outward (yaw: 0 looks down -Z, positive turns left)
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      const p = body(r, {
+        feet: [PLAZA.center[0] + dx * 8, PLAZA_Y, PLAZA.center[2] + dz * 8],
+        yaw: Math.atan2(-dx, -dz),
+      });
+      const s = walk(r, p, forward, 14);
+      expect(s.every((q) => q.grounded && Math.abs(q.y - PLAZA_Y) < 0.03)).toBe(true);
+      expect(fromCenter(p.feet), `toward ${deg}°`).toBeLessThan(PLAZA.radius - PLAZA_RIM.thickness / 2);
+      expect(fromCenter(p.feet)).toBeGreaterThan(PLAZA.radius - 1.2);
+    }
+  });
+
+  it('the lighthouse’s foot (the ball of glass, the railing round it) is walked round, never into', () => {
+    const r = room();
+    const p = body(r, { feet: [PLAZA.center[0] + 4.0, PLAZA_Y, PLAZA.center[2] + 14], yaw: 0 });
+    const s = walk(r, p, forward, 20);
+    expect(s.every((q) => q.grounded)).toBe(true);
+    for (const q of s) expect(fromCenter(q)).toBeGreaterThan(LIGHTHOUSE_BASE.radius - 0.15);
+    // the railing stops it first: outside its ring
+    for (const q of s) expect(fromCenter(q)).toBeGreaterThan(LIGHTHOUSE_RAIL.radius + BODY_RADIUS - 0.05);
+    // it slid round the ball, on past it
+    expect(p.feet.z).toBeLessThan(PLAZA.center[2] - 2);
+  });
+
+  it('the south and west gates are shut: the body stops at their bars', () => {
+    for (const g of PLAZA_GATES.filter((q) => !q.open)) {
+      const r = room();
+      const [dx, dz] = g.dir;
+      const p = body(r, {
+        feet: [PLAZA.center[0] + dx * 18, PLAZA_Y, PLAZA.center[2] + dz * 18],
+        yaw: Math.atan2(-dx, -dz),
+      });
+      walk(r, p, forward, 8);
+      expect(fromCenter(p.feet), g.name).toBeLessThan(PLAZA.radius);
+      expect(fromCenter(p.feet)).toBeGreaterThan(PLAZA.radius - 1);
+    }
+  });
+
+  it('the east gate is open: through it a few metres of road, the railing at its end stops the body (仮の行き止まり)', () => {
+    const r = room();
+    const [dx, dz] = COMPASS.east;
+    const p = body(r, {
+      feet: [PLAZA.center[0] + dx * 18, PLAZA_Y, PLAZA.center[2] + dz * 18],
+      yaw: Math.atan2(-dx, -dz),
+    });
+    const s = walk(r, p, forward, 12);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - PLAZA_Y) < 0.03)).toBe(true);
+    expect(fromCenter(p.feet)).toBeGreaterThan(PLAZA.radius + 2);
+    expect(p.feet.x).toBeGreaterThan(EAST_ROAD_END_X);
+    expect(p.feet.x).toBeLessThan(EAST_ROAD_END_X + 0.9);
+    expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+    // and its sides hold the body too
+    for (const intent of [strafeLeft, strafeRight]) {
+      const q = body(r, {
+        feet: [PLAZA.center[0] - PLAZA.radius - 3, PLAZA_Y, PLAZA.center[2]],
+        yaw: Math.atan2(-dx, -dz),
+      });
+      walk(r, q, intent, 3);
+      expect(Math.abs(q.feet.z - PLAZA.center[2])).toBeLessThan(EAST_ROAD.halfWidth - BODY_RADIUS + 0.02);
+      expect(q.grounded).toBe(true);
+    }
+  });
+
+  it('the fall guard’s floor follows the ground down the slope: walking it never trips the guard', () => {
+    const guard = new FallGuard((x, z) => groundHeight(x, z) - 1);
+    const mid = (SLOPE.fromZ + SLOPE.toZ) / 2;
+    guard.observe([0, slopeHeight(mid), mid], true, false);
+    expect(guard.rescue([0, slopeHeight(mid - 1), mid - 1])).toBeNull();
+    expect(guard.rescue([0, PLAZA_Y, PLAZA.center[2]])).toBeNull();
+    expect(guard.rescue([0, slopeHeight(mid) - 1.5, mid])).toEqual([0, slopeHeight(mid), mid]);
+  });
+});
+
+describe('S-35: the film at the slope’s entrance (玉を持たずに坂道へは出られない)', () => {
+  const OPEN = (GATE_OPEN_DEG * Math.PI) / 180;
+
+  function atGate(orb: OrbPlace) {
+    const r = room();
+    r.gate.sync(OPEN);
+    let feetZ = FAR.maxZ - 0.8;
+    const allowGround = withMembrane(r.footing.allowGround, () => membraneHolds(orb, feetZ, MEMBRANE.z));
+    const p = new PlayerController(r.world, {
+      feet: { x: 0.2, y: 0, z: feetZ },
+      yaw: 0,
+      allowGround,
+      settings: { headBob: 0 },
+    });
+    const out: { z: number; y: number; grounded: boolean; speed: number }[] = [];
+    for (let t = 0; t < 8; t += DT) {
+      r.world.step();
+      p.update(DT, forward);
+      feetZ = p.feet.z;
+      const v = p.velocity;
+      out.push({ z: p.feet.z, y: p.feet.y, grounded: p.grounded, speed: Math.hypot(v.x, v.z) });
+    }
+    return { p, out };
+  }
+
+  it('without the vidro in hand the body eases to a stop just before it, on the shore’s side, grounded', () => {
+    const { p, out } = atGate('pedestal');
+    expect(out.every((q) => q.grounded && Math.abs(q.y) < 0.03)).toBe(true);
+    expect(p.feet.z).toBeGreaterThan(MEMBRANE.z);
+    expect(p.feet.z).toBeLessThan(MEMBRANE.z + 0.6);
+    // softly: it slows over its last half metre, no wall to hit
+    expect(out.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+    const easing = out.filter((q) => q.z < MEMBRANE.z + 0.7 && q.speed > 0.05 && q.speed < 1.3);
+    expect(easing.length).toBeGreaterThan(2);
+    // and the vidro calls from there
+    expect(vidroCalls('pedestal', p.feet.z, MEMBRANE, true, true)).toBe(true);
+  });
+
+  it('with the vidro in hand there is nothing to it: through the gate and on down the slope', () => {
+    const { p, out } = atGate('hand');
+    expect(out.every((q) => q.grounded)).toBe(true);
+    expect(p.feet.z).toBeLessThan(ROAD.minZ - 2);
   });
 });

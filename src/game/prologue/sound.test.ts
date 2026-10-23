@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AMBIENCE } from '../../audio/ambience';
 import { glassPitch, VIDRO_SCALE } from '../../audio/tuning';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
@@ -15,7 +16,11 @@ import {
   floorAt,
   GATE,
   PEDESTAL_ORB,
+  PLAZA,
+  PLAZA_Y,
+  SLOPE,
   SPAWNS,
+  slopeHeight,
   TUB_DRIP,
   WIND_CHIME,
   WORKSHOP,
@@ -35,6 +40,7 @@ import {
   type SoundOptions,
   type SoundRoom,
   sourcePoint,
+  TOWN_CHIMES,
 } from './sound';
 
 const ALL_EVENTS: PrologueEvent[] = [
@@ -1100,5 +1106,57 @@ describe('the close of the prologue sounds (S-34: 橋が定着する音、門が
     expect(r.sound.probe.finale.ready).toBe(false);
     expect(r.sound.probe.finale.refused).toEqual(['gateOpen']);
     r.sound.dispose();
+  });
+});
+
+describe('S-35: the far chimes hang in the town past the plaza (遠くの風鈴を広場の側（街）へ)', () => {
+  /**
+   * The panner's inverse law (src/core/audio/engine.ts: refDistance 1, rolloff 1; Web Audio's maxDistance only bounds the
+   * linear law, so the inverse one keeps falling with distance).
+   */
+  const heard = (level: number, from: Vec3, to: Vec3): number =>
+    level / Math.max(1, Math.hypot(from[0] - to[0], from[1] - to[1], from[2] - to[2]));
+  const EYE = 1.6;
+  const at = (x: number, z: number, ground: number): Vec3 => [x, ground + EYE, z];
+
+  it('hang in the town beyond the plaza, high up, not over the slope any more, on S-22’s bearing from the workshop', () => {
+    const chimes = PROLOGUE_AMBIENCE.find((p) => p.id === 'chimes:town');
+    expect(chimes?.position).toEqual(TOWN_CHIMES);
+    const [x, y, z] = TOWN_CHIMES;
+    // beyond the plaza's rim, past it from the slope, nearer the plaza than the workshop
+    expect(Math.hypot(x - PLAZA.center[0], z - PLAZA.center[2])).toBeGreaterThan(PLAZA.radius + 10);
+    expect(z).toBeLessThan(SLOPE.toZ);
+    expect(Math.hypot(x - PLAZA.center[0], z - PLAZA.center[2])).toBeLessThan(Math.hypot(x, z));
+    expect(y).toBeGreaterThan(PLAZA_Y + 8);
+    // seen from the bench, where S-22's hung (the head's filtering is the same; S-22's e2e listens there)
+    const [bx, , bz] = SPAWNS.bench.feet;
+    const bearing = (p: Vec3) => (Math.atan2(p[0] - bx, -(p[2] - bz)) * 180) / Math.PI;
+    expect(Math.abs(bearing(TOWN_CHIMES) - bearing([1.6, 3.2, GATE.z - 6.4]))).toBeLessThan(1);
+  });
+
+  it('are as loud from the workshop as S-22 tuned them, and never near anywhere you walk', () => {
+    const level = AMBIENCE.chimes.level;
+    const bench = SPAWNS.bench.feet;
+    const eye = at(bench[0], bench[2], 0);
+    // S-22: level 2, hung 6.4 m past the gate
+    const s22: Vec3 = [1.6, 3.2, GATE.z - 6.4];
+    const tuned = heard(2, s22, eye);
+    expect(heard(level, TOWN_CHIMES, eye) / tuned).toBeGreaterThan(0.95);
+    expect(heard(level, TOWN_CHIMES, eye) / tuned).toBeLessThan(1.05);
+    // no louder anywhere you walk — the way, the slope, the plaza — than S-22's were from its far shore (6.5 m off)
+    const farShore = 2 / 6.5;
+    let loudest = 0;
+    for (let z = 0; z > SLOPE.toZ; z -= 1)
+      loudest = Math.max(loudest, heard(level, TOWN_CHIMES, at(0, z, slopeHeight(z))));
+    for (let x = -PLAZA.radius; x <= PLAZA.radius; x += 1)
+      for (let z = -PLAZA.radius; z <= PLAZA.radius; z += 1) {
+        if (Math.hypot(x, z) > PLAZA.radius - 0.3) continue;
+        const p = at(PLAZA.center[0] + x, PLAZA.center[2] + z, PLAZA_Y);
+        loudest = Math.max(loudest, heard(level, TOWN_CHIMES, p));
+      }
+    expect(loudest).toBeLessThan(farShore * 1.05);
+    // and they come closer as you come down into the plaza (louder there than at the workshop)
+    const plaza = at(PLAZA.center[0], PLAZA.center[2], PLAZA_Y);
+    expect(heard(level, TOWN_CHIMES, plaza)).toBeGreaterThan(tuned * 1.5);
   });
 });

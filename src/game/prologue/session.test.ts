@@ -7,16 +7,21 @@ import { PEEK_FOV_DELTA_DEG, PEEK_SECONDS, peekFovOffset, peekMoveSpeedMultiplie
 import { combineModifiers } from '../player/motion';
 import type { PrologueEvent } from './events';
 import {
+  CALL_FALL_SECONDS,
+  CALL_RISE_SECONDS,
   DROP_FLIGHT_SECONDS,
+  FILM_SECONDS,
   FINALE_SECONDS,
   type FinaleEvent,
   GATE_OPEN_SECONDS,
   GATE_OPENS_AT_SECONDS,
+  membraneHolds,
   PrologueSession,
   peekModifier,
   SETTLE_SECONDS,
   type SessionOptions,
   SHAKE_SECONDS,
+  vidroCalls,
 } from './session';
 
 const PEDESTAL = 'p';
@@ -381,5 +386,107 @@ describe('S-34: picking up on the settled bridge (拾う前の確かめ: S-02 �
     expect(s.dropState).toBe('taken');
     expect(s.settledFooting()).toEqual([]);
     expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, ON_BRIDGE)).toBe('pickup-denied');
+  });
+});
+
+/* ---------- S-35: the vidro left behind (発案者 2026-10-23: 玉を持たずに坂道へは出られない) ---------- */
+
+/** A film across z = -5 (the slope's entrance), the far shore's side at z > -5. */
+const FILM = { z: -5, callReach: 0.9 };
+const AT_FILM: Vec3 = [0, 0, FILM.z + 0.3];
+const SHORE: Vec3 = [0, 0, FILM.z + 4];
+const PAST: Vec3 = [0, 0, FILM.z - 2];
+
+describe('S-35: the film at the slope’s entrance holds whoever has left the vidro behind (判定は純粋関数)', () => {
+  it('holds a body coming from the shore without the vidro in hand — on the pedestal or still on the bench', () => {
+    expect(membraneHolds('pedestal', AT_FILM[2], FILM.z)).toBe(true);
+    expect(membraneHolds('bench', SHORE[2], FILM.z)).toBe(true);
+  });
+
+  it('with the vidro in hand there is nothing to it', () => {
+    expect(membraneHolds('hand', AT_FILM[2], FILM.z)).toBe(false);
+    expect(membraneHolds('hand', SHORE[2], FILM.z)).toBe(false);
+  });
+
+  it('never holds someone already past it (they walk on, down or back)', () => {
+    expect(membraneHolds('pedestal', PAST[2], FILM.z)).toBe(false);
+    expect(membraneHolds('pedestal', FILM.z - 0.01, FILM.z)).toBe(false);
+  });
+
+  it('the vidro calls only while the film — there once the gate opens — holds someone right at it, pushing on', () => {
+    expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, true)).toBe(true);
+    // standing by the film, not trying to go through: quiet
+    expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, false)).toBe(false);
+    // the gate still shut: no film yet, so nothing to call about (the shut gate stops you on its own)
+    expect(vidroCalls('pedestal', AT_FILM[2], FILM, false, true)).toBe(false);
+    // further back on the shore, past the film, or with the vidro in hand: quiet
+    expect(vidroCalls('pedestal', FILM.z + FILM.callReach + 0.1, FILM, true, true)).toBe(false);
+    expect(vidroCalls('pedestal', PAST[2], FILM, true, true)).toBe(false);
+    expect(vidroCalls('hand', AT_FILM[2], FILM, true, true)).toBe(false);
+  });
+});
+
+describe('S-35: the session’s film and the vidro’s call (そのとき台座の玉がかすかに光って知らせる)', () => {
+  /** The close played through to the gate open, the vidro on the pedestal, standing on the far shore. */
+  function gateOpen(): PrologueSession {
+    const { s } = dropJustTaken({ membrane: FILM });
+    for (let t = 0; t < FINALE_SECONDS + 0.1; t += DT) s.step(DT, { wantPeek: false, feet: SHORE });
+    return s;
+  }
+
+  it('the film comes up with the gate while the vidro is on its pedestal, and goes once it is back in hand', () => {
+    const { s } = dropJustTaken({ membrane: FILM });
+    expect(s.film).toBe(0);
+    for (let t = 0; t < FINALE_SECONDS + 0.1; t += DT) s.step(DT, { wantPeek: false, feet: SHORE });
+    expect(s.film).toBe(1);
+    expect(s.holdsAtMembrane(AT_FILM[2])).toBe(true);
+    // back over the (test) bridge and the vidro picked up: the film fades in FILM_SECONDS and holds no one
+    expect(s.interact({ kind: 'pedestal', id: PEDESTAL }, NEAR_LEDGE)).toBe('pickup');
+    expect(s.holdsAtMembrane(AT_FILM[2])).toBe(false);
+    run(s, FILM_SECONDS / 2);
+    expect(s.film).toBeGreaterThan(0);
+    expect(s.film).toBeLessThan(1);
+    run(s, FILM_SECONDS / 2 + 0.02);
+    expect(s.film).toBe(0);
+  });
+
+  it('the vidro calls while you push on at the film, and falls quiet again once you stop or step back', () => {
+    const s = gateOpen();
+    expect(s.call).toBe(0);
+    // standing at the film: nothing yet
+    for (let t = 0; t < 1; t += DT) s.step(DT, { wantPeek: false, feet: AT_FILM });
+    expect(s.call).toBe(0);
+    for (let t = 0; t < CALL_RISE_SECONDS + 0.02; t += DT)
+      s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(s.call).toBe(1);
+    // let go where you stand: it fades
+    for (let t = 0; t < CALL_FALL_SECONDS + 0.02; t += DT) s.step(DT, { wantPeek: false, feet: AT_FILM });
+    expect(s.call).toBe(0);
+    for (let t = 0; t < CALL_RISE_SECONDS + 0.02; t += DT)
+      s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(s.call).toBe(1);
+    // a step back: it fades slower than it came
+    for (let t = 0; t < CALL_FALL_SECONDS / 2; t += DT)
+      s.step(DT, { wantPeek: false, feet: SHORE, pushing: true });
+    expect(s.call).toBeGreaterThan(0.1);
+    expect(s.call).toBeLessThan(0.9);
+    for (let t = 0; t < CALL_FALL_SECONDS / 2 + 0.02; t += DT) s.step(DT, { wantPeek: false, feet: SHORE });
+    expect(s.call).toBe(0);
+  });
+
+  it('says nothing on the room’s event log (S-34: no new kinds there)', () => {
+    const s = gateOpen();
+    const events = record(s);
+    for (let t = 0; t < 2; t += DT) s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(events).toEqual([]);
+  });
+
+  it('without a membrane in the options (other rooms) there is no film, no call, no hold', () => {
+    const { s } = dropJustTaken();
+    for (let t = 0; t < FINALE_SECONDS + 0.1; t += DT)
+      s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(s.film).toBe(0);
+    expect(s.call).toBe(0);
+    expect(s.holdsAtMembrane(AT_FILM[2])).toBe(false);
   });
 });

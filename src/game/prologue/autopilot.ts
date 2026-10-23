@@ -1,12 +1,27 @@
 import type { Vec3 } from '../../layers/footing';
 import type { PlayerIntent } from '../player/player';
-import { BENCH_ORB, DROP, EDGE_Z, FAR, GATE, LIGHTHOUSE, PEDESTAL_ORB } from './layout';
+import {
+  BENCH_ORB,
+  COMPASS,
+  DROP,
+  EDGE_Z,
+  FAR,
+  GATE,
+  LIGHTHOUSE,
+  PEDESTAL_ORB,
+  PLAZA,
+  PLAZA_GATE,
+  PLAZA_Y,
+  plazaGateAt,
+  SLOPE,
+} from './layout';
 import type { DropState, OrbPlace } from './session';
 
 /**
  * ?autoplay=1: plays the prologue the way a player would, through the same intents (move, look, peek,
  * 置く・拾う・調べる): take the vidro → the one way → the dead end → peek → place → cross → touch the drop
- * → (S-34) watch the light settle the bridge → back over it → pick the vidro up on it → through the open gate.
+ * → (S-34) watch the light settle the bridge → back over it → pick the vidro up on it → through the open gate
+ * → (S-35) the view from the slope's brow → down the slope → across the plaza to its open east gate.
  * Presentation timing only (seconds below are not design values).
  */
 export interface PilotState {
@@ -28,7 +43,7 @@ export interface PilotOrder {
 
 type Step =
   | { kind: 'look'; name: string; at: Vec3; seconds: number }
-  | { kind: 'walk'; name: string; to: [number, number]; within: number }
+  | { kind: 'walk'; name: string; to: [number, number]; within: number; sprint?: boolean }
   | { kind: 'push'; name: string }
   | { kind: 'peek'; name: string; at: Vec3; seconds: number }
   | { kind: 'use'; name: string; at: Vec3; until: (s: PilotState) => boolean; linger: number };
@@ -57,7 +72,20 @@ const SCRIPT: Step[] = [
   { kind: 'use', name: 'pick-up', at: PEDESTAL_ORB, until: (s) => s.orb === 'hand', linger: 0.8 },
   { kind: 'walk', name: 'walk-over', to: [0.2, FAR.maxZ - 0.8], within: 0.3 },
   { kind: 'walk', name: 'walk-gate', to: [0, GATE.z - 1.8], within: 0.35 },
-  { kind: 'look', name: 'look-town', at: [LIGHTHOUSE[0], 14, LIGHTHOUSE[2]], seconds: 1.5 },
+  // S-35: from the slope's brow the plaza and the broken lighthouse below; down the slope (早歩き: an easy one way), across
+  // the plaza round the lighthouse to the open east gate, and a look at it
+  { kind: 'look', name: 'look-town', at: [LIGHTHOUSE[0], LIGHTHOUSE[1] + 22, LIGHTHOUSE[2]], seconds: 1.5 },
+  { kind: 'walk', name: 'walk-slope', to: [0, SLOPE.toZ - 1.5], within: 0.5, sprint: true },
+  { kind: 'walk', name: 'walk-plaza', to: plazaGateAt(COMPASS.east, PLAZA.radius - 3), within: 0.4 },
+  {
+    kind: 'look',
+    name: 'look-east-gate',
+    at: (() => {
+      const [x, z] = plazaGateAt(COMPASS.east);
+      return [x, PLAZA_Y + PLAZA_GATE.height * 0.55, z] as Vec3;
+    })(),
+    seconds: 1.2,
+  },
 ];
 
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
@@ -110,13 +138,15 @@ export class Autopilot {
         break;
       case 'walk': {
         const [x, z] = step.to;
-        const off = turnTo([x, EYE - 0.3, z]);
+        // a level look along the way, also down the slope (S-35)
+        const off = turnTo([x, s.feet[1] + EYE - 0.3, z]);
         const d = Math.hypot(x - s.feet[0], z - s.feet[2]);
         if (d < step.within) {
           this.next();
           break;
         }
         order.intent.move = { x: 0, y: off < 0.35 ? 1 : 0 };
+        order.intent.sprint = step.sprint ?? false;
         break;
       }
       case 'push':

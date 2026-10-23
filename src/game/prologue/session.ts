@@ -45,6 +45,45 @@ export const GATE_OPEN_SECONDS = 2.6;
 export const FINALE_SECONDS = GATE_OPENS_AT_SECONDS + GATE_OPEN_SECONDS;
 
 /**
+ * 仮 (S-35): the film at the slope's entrance comes up (or goes) over this long as the vidro leaves the hand (or comes back),
+ * and the vidro left behind takes this long to start calling and this long to fall quiet again (UI/UX設計: 0.2秒で現れ… —
+ * slower here: it is the world, not a prompt).
+ */
+export const FILM_SECONDS = 0.5;
+export const CALL_RISE_SECONDS = 0.4;
+export const CALL_FALL_SECONDS = 1.2;
+
+/**
+ * S-35 玉の置き忘れ (発案者 2026-10-23: 玉を持たずに坂道へは出られない): does the film at the slope's entrance (at `membraneZ`) hold a
+ * body whose feet are at `feetZ`? It holds whoever has not got the vidro in hand and comes from the far shore's side (z
+ * greater than the film's): the body eases to a stop before it like at any edge. Someone already past it (a dev view) walks
+ * on; with the vidro in hand there is nothing to it.
+ */
+export function membraneHolds(orb: OrbPlace, feetZ: number, membraneZ: number): boolean {
+  return orb !== 'hand' && feetZ > membraneZ;
+}
+
+/**
+ * S-35: the vidro left behind calls — glows faintly where it stands (そのとき台座の玉がかすかに光って知らせる) — while the film,
+ * there once the gate has started to open, holds a body within `callReach` of it that is pushing on through it (`pushing`:
+ * walking toward the slope). Standing by the film, or turning back, it falls quiet.
+ */
+export function vidroCalls(
+  orb: OrbPlace,
+  feetZ: number,
+  membrane: { z: number; callReach: number },
+  gateOpening: boolean,
+  pushing: boolean,
+): boolean {
+  return (
+    pushing &&
+    gateOpening &&
+    membraneHolds(orb, feetZ, membrane.z) &&
+    feetZ - membrane.z <= membrane.callReach
+  );
+}
+
+/**
  * The close of the prologue (S-34), on its own bus: the light starts across the bridge / is across, the gate starts to
  * open / is open. Kept off the room's event log (events.ts PrologueEvent), whose names are S-16's table of sounds.
  */
@@ -94,6 +133,8 @@ export interface SessionOptions {
    * surface-only segments it has passed are no longer the orb's to hold: the pickup no longer asks about them.
    */
   settle?: SettleSweep;
+  /** S-35: the film at the slope's entrance (layout.ts MEMBRANE): where it stands across the way, and the vidro's call. */
+  membrane?: { z: number; callReach: number };
 }
 
 /**
@@ -135,10 +176,39 @@ export class PrologueSession {
   /** Dev hold (holdFinale): the close does not move on. */
   private finaleHeld = false;
   private settledCache: { front: number; footing: string[]; surface: string[] } | null = null;
+  /** S-35: the film at the slope's entrance (up while the vidro is not in hand) and the left-behind vidro's call, linear. */
+  private filmTween: Tween;
+  private callValue = 0;
+  private feetZ = Number.POSITIVE_INFINITY;
+  private pushing = false;
 
   constructor(readonly options: SessionOptions) {
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
+    this.filmTween = this.onBench ? { progress: 1, target: 1 } : { progress: 0, target: 0 };
+  }
+
+  /**
+   * S-35: does the film at the slope's entrance hold a body whose feet are at `feetZ` now (membraneHolds)? Never without a
+   * membrane in the options.
+   */
+  holdsAtMembrane(feetZ: number): boolean {
+    const m = this.options.membrane;
+    return !!m && membraneHolds(this.orbPlace, feetZ, m.z);
+  }
+
+  /**
+   * S-35: 0..1, eased: how much the film shows — once the gate has started to open (its swing, eased like the leaves), while
+   * the vidro is not in hand (FILM_SECONDS in and out).
+   */
+  get film(): number {
+    if (!this.options.membrane) return 0;
+    return glassEase(this.filmTween.progress) * glassEase(Math.min(1, this.gateProgress / 0.25));
+  }
+
+  /** S-35: 0..1, eased: the left-behind vidro calling (vidroCalls), rising over CALL_RISE_SECONDS and falling over CALL_FALL_SECONDS. */
+  get call(): number {
+    return glassEase(this.callValue);
   }
 
   get orbs(): readonly Orb[] {
@@ -280,7 +350,11 @@ export class PrologueSession {
     );
   }
 
-  step(dt: number, input: { wantPeek: boolean }): void {
+  /**
+   * `feet`: where the player stands, `pushing`: whether they walk toward the slope (S-35: the film and the vidro's call);
+   * without them the last known place counts (far from any film until one is given), and nobody is pushing.
+   */
+  step(dt: number, input: { wantPeek: boolean; feet?: Vec3; pushing?: boolean }): void {
     const was = this.peekState.peeking;
     this.peekState = stepPeek(this.peekState, { wantPeek: input.wantPeek, allowed: this.canPeek }, dt);
     if (this.peekState.peeking !== was)
@@ -289,6 +363,9 @@ export class PrologueSession {
     this.hand = stepTween(this.hand, dt, HAND_SECONDS);
     this.shakeLeft = Math.max(0, this.shakeLeft - dt);
     if (this.finaleAt !== null) this.stepFinale(dt);
+    if (input.feet) this.feetZ = input.feet[2];
+    this.pushing = input.pushing ?? false;
+    this.stepMembrane(dt);
     if (this.dropValue === 'flying') {
       this.dropElapsed += dt;
       if (this.dropElapsed >= DROP_FLIGHT_SECONDS - 1e-9) {
@@ -299,6 +376,18 @@ export class PrologueSession {
         this.finaleEvents.emit({ type: 'settle' });
       }
     }
+  }
+
+  /** S-35: the film follows the hand (up while the vidro is elsewhere); the vidro calls while the film holds someone at it. */
+  private stepMembrane(dt: number): void {
+    const m = this.options.membrane;
+    if (!m) return;
+    const away = this.orbPlace !== 'hand';
+    this.filmTween = stepTween({ ...this.filmTween, target: away ? 1 : 0 }, dt, FILM_SECONDS);
+    const calling = vidroCalls(this.orbPlace, this.feetZ, m, this.gateProgress > 0, this.pushing);
+    this.callValue = calling
+      ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)
+      : Math.max(0, this.callValue - dt / CALL_FALL_SECONDS);
   }
 
   private stepFinale(dt: number): void {

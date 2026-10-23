@@ -4,7 +4,7 @@ import { QUALITY_PRESETS } from '../../core/quality';
 import { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
 import { buildFinale, gateAngle, settleGlow } from './finale';
-import { GATE, GATE_OPEN_DEG, LOOKOUT, ROAD } from './layout';
+import { GATE, GATE_OPEN_DEG, ROAD } from './layout';
 
 const OPEN = (GATE_OPEN_DEG * Math.PI) / 180;
 
@@ -37,7 +37,7 @@ describe('S-34: the light across the bridge (定着の見た目)', () => {
   });
 });
 
-describe('S-34: the gate and the lookout as drawn (finale.ts buildFinale)', () => {
+describe('S-34: the gate as drawn (finale.ts buildFinale; S-35: the lookout at the road’s end is gone)', () => {
   const build = () => {
     const field = new LayerField({ settle: true });
     const scene = new THREE.Scene();
@@ -76,7 +76,7 @@ describe('S-34: the gate and the lookout as drawn (finale.ts buildFinale)', () =
     for (const b of [left, right]) {
       expect(b.max.z).toBeLessThan(GATE.z + 0.1);
       expect(b.min.z).toBeLessThan(GATE.z - GATE.halfWidth + 0.15);
-      expect(b.min.z).toBeGreaterThan(LOOKOUT.z);
+      expect(b.min.z).toBeGreaterThan(ROAD.minZ);
     }
     art.dispose();
   });

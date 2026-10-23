@@ -53,6 +53,8 @@ import {
   LAMPS,
   lookDirection,
   PEDESTAL_ORB,
+  PLAZA,
+  PLAZA_Y,
   SPAWNS,
   type SpawnName,
   TUB_DRIP,
@@ -256,6 +258,15 @@ export interface AmbientSpot {
 const [, LAMP] = LAMPS;
 
 /**
+ * 遠くの風鈴 (S-22; S-35: 広場の側（街）へ移す): high on a house of the town beyond the central plaza, 音だけ — never drawn, and
+ * never within about 50 m of anywhere you walk. From the workshop it lies on S-22's bearing (about 7° right of the way,
+ * 5° up), so the head hears it from where S-22 tuned it (S-22's e2e: a strike stands out above the wind at the bench), and
+ * its level (src/audio/ambience.ts AMBIENCE.chimes) is set for its distance from there (about 195 m, by 1/d: the panner's
+ * inverse law has no farthest distance); nowhere you walk is it louder than S-22's were from the far shore.
+ */
+export const TOWN_CHIMES: Vec3 = [PLAZA.center[0] + 22, PLAZA_Y + 30, PLAZA.center[2] - 68.4];
+
+/**
  * 工房に立体的に置く (仮, to be confirmed by ear):
  *  - the wind through the glass gaps: the skylight at the top of the dome and the door, and outside, rising from the
  *    valley through the broken glass at the edge of the way (S-06: 割れた破片), so the way and the far shore are not
@@ -264,8 +275,10 @@ const [, LAMP] = LAMPS;
  *    (物語と世界: まだそこで暮らしている気配). Nearer is louder by distance alone.
  *  - 扉の上の風鈴 (S-25): the bell S-24 hung inside the door (WIND_CHIME), rung now and then by a draught that comes in
  *    at the door and swells the wind there (wind:door)
- *  - 遠くの風鈴: hung in the town beyond the closed gate, so they are far away from the workshop (about 26 m) and come
- *    closer along the way — the sound of somewhere lived in, ahead (物語と世界: まだそこで暮らしている気配)
+ *  - 遠くの風鈴: hung in the town, far from the workshop — the sound of somewhere lived in, ahead (物語と世界: まだそこで
+ *    暮らしている気配). S-22 hung them 6.4 m past the gate; S-35 carries the way on down the slope, so they hang in the
+ *    town beyond the central plaza (TOWN_CHIMES): as loud from the workshop as before, coming closer only as you come down
+ *    into the plaza, and never near anywhere you walk
  *  - drops: condensation off the skylight's rim onto the glass floor, the wet ladle hung on the tub's rim into its
  *    water (S-25: TUB_DRIP, deeper; S-22 had it over the brass grate, where nothing is drawn), and the milky globe of a
  *    lamp onto the stone of the way (higher)
@@ -295,7 +308,7 @@ export const PROLOGUE_AMBIENCE: readonly AmbientSpot[] = [
     position: WIND_CHIME,
     ownStream: true,
   },
-  { id: 'chimes:town', kind: 'chimes', position: [1.6, 3.2, GATE.z - 6.4] },
+  { id: 'chimes:town', kind: 'chimes', position: TOWN_CHIMES },
   { id: 'drops:skylight', kind: 'drops', position: [0.55, 0.02, 0.55], notes: [3, 4, 5] },
   { id: 'drops:tub', kind: 'drops', position: TUB_DRIP, notes: [0, 1, 2, 3] },
   {
