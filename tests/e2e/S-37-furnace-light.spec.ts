@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
-import { FURNACE, FURNACE_FACING } from '../../src/game/prologue/layout';
+import { FURNACE, FURNACE_FACING, FURNACE_MOUTH } from '../../src/game/prologue/layout';
 
 /**
  * S-37: the furnace's light baked apart (設計書 アートディレクション > 光と時間帯: 静止した光は焼き込み; 温度のある透明;
@@ -428,7 +428,10 @@ const WARMTH: Record<string, Record<string, { s31: Kept; s26: Kept }>> = {
   },
 };
 const KEPT = 0.85;
-const OVER = 1.5;
+const OVER = 1.25;
+/** Pictures averaged per view, and the time between them (the fire breathes: room-art.ts, ±8%). */
+const SHOTS = 8;
+const SHOT_GAP_MS = 300;
 /** Where S-37 brings back what S-26 lost: more than halfway from S-26 to S-31. */
 const RESTORES: readonly string[] = ['furnace', 'door'];
 /** Draw calls of the four fixed views in S-26 (S37_PHASE=s26, the same on both paths): one more lightmap adds none. */
@@ -458,12 +461,13 @@ for (const backend of backends) {
     const measured: Record<string, Warmth> = {};
     for (const [spawn, name] of VIEWS) {
       await openView(page, spawn, webgl);
+      // SHOTS pictures over about one slow wave of the fire's breath (2.3 rad/s: 2.7 s), averaged
       const shots: string[] = [];
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < SHOTS; i++) {
         const png = await page.screenshot();
         if (i === 0) writeFileSync(join(shotDir, phase, `${name}.png`), png);
         shots.push(png.toString('base64'));
-        await page.waitForTimeout(230);
+        await page.waitForTimeout(SHOT_GAP_MS);
       }
       expect(await floorMagenta(page, true), 'the floor').toBeGreaterThan(0);
       const magenta = (await page.screenshot()).toString('base64');
@@ -523,9 +527,10 @@ for (const backend of backends) {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
     await openView(page, 'furnace', webgl);
-    // every frame for 2.5 s: the fire's realtime light (÷ its intensity at rest, read off its colour's spot) and the strength
-    // of the fire's lightmap on each baked material that has it
-    const run = await page.evaluate(async () => {
+    // every frame for 2.5 s: the fire's realtime light (the spot light at the furnace's mouth) and the strength of the fire's
+    // lightmap on each baked material that has it. They breathe together: the light's intensity ÷ the strength is the same
+    // (its intensity at rest) every frame
+    const run = await page.evaluate(async (mouth) => {
       interface Gain {
         value: number;
         uuid?: string;
@@ -538,17 +543,25 @@ for (const backend of backends) {
       interface O {
         isMesh?: boolean;
         isSpotLight?: boolean;
-        angle?: number;
         intensity?: number;
+        matrixWorld: { elements: number[] };
         material?: { lightMapLayers?: Layer[] } | { lightMapLayers?: Layer[] }[];
         traverse(f: (o: O) => void): void;
       }
       const scene = (window as unknown as { __s37Scene: O }).__s37Scene;
       let fire: O | null = null;
+      let nearest = 0.3;
       const gains = new Set<Gain | number>();
       let layered = 0;
       scene.traverse((o) => {
-        if (o.isSpotLight && Math.abs((o.angle ?? 0) - 1.4) < 1e-6) fire = o;
+        if (o.isSpotLight) {
+          const e = o.matrixWorld.elements;
+          const d = Math.hypot((e[12] ?? 0) - mouth[0], (e[13] ?? 0) - mouth[1], (e[14] ?? 0) - mouth[2]);
+          if (d < nearest) {
+            nearest = d;
+            fire = o;
+          }
+        }
         if (!o.isMesh) return;
         for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) {
           for (const l of m.lightMapLayers ?? []) {
@@ -558,7 +571,7 @@ for (const backend of backends) {
           }
         }
       });
-      if (!fire) throw new Error('no fire light');
+      if (!fire) throw new Error('no spot light within 0.3 m of the furnace’s mouth');
       const f = fire as O;
       const [gain] = [...gains];
       const frames: { light: number; gain: number }[] = [];
@@ -566,7 +579,7 @@ for (const backend of backends) {
         const t0 = performance.now();
         const step = () => {
           frames.push({
-            light: (f.intensity ?? 0) / 7.5,
+            light: f.intensity ?? 0,
             gain: typeof gain === 'number' ? gain : (gain?.value ?? Number.NaN),
           });
           if (performance.now() - t0 < 2_500) requestAnimationFrame(step);
@@ -575,21 +588,28 @@ for (const backend of backends) {
         requestAnimationFrame(step);
       });
       return { frames, distinctGains: gains.size, layered, numberGain: typeof gain === 'number' };
-    });
+    }, FURNACE_MOUTH);
     const values = run.frames.map((x) => x.gain);
+    const atRest = run.frames.map((x) => x.light / x.gain);
+    const rest = atRest.reduce((s, x) => s + x, 0) / Math.max(1, atRest.length);
     keep('breath', {
       frames: run.frames.length,
       layered: run.layered,
       distinctGains: run.distinctGains,
       min: Math.min(...values),
       max: Math.max(...values),
+      lightAtRest: rest,
     });
     expect(run.layered, "baked materials with the fire's lightmap").toBeGreaterThan(5);
     expect(run.distinctGains, 'one strength for all of them').toBe(1);
     expect(run.numberGain, 'a strength that can change (a uniform), not a number').toBe(false);
     expect(run.frames.length).toBeGreaterThan(30);
-    for (const x of run.frames)
-      expect(Math.abs(x.gain - x.light), 'the fire light’s breath').toBeLessThan(1e-6);
+    expect(rest, 'the fire light’s intensity at rest').toBeGreaterThan(0);
+    for (const r of atRest)
+      expect(
+        Math.abs(r / rest - 1),
+        'the fire light’s intensity ÷ the strength: the same breath',
+      ).toBeLessThan(1e-6);
     expect(Math.min(...values)).toBeGreaterThanOrEqual(0.92 - 1e-6);
     expect(Math.max(...values)).toBeLessThanOrEqual(1.08 + 1e-6);
     expect(Math.max(...values) - Math.min(...values), 'it breathes').toBeGreaterThan(0.04);

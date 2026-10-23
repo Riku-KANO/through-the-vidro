@@ -168,6 +168,9 @@ export class BakedLightingModel extends THREE.PhysicalLightingModel {
  * A MeshStandardNodeMaterial lit by its lightmap (BakedLightingModel). Its own type, so three compiles it apart.
  * `lightMapLayers` (S-37): lights baked apart, added to the lightmap's light in the same draw, each × its gain (set them
  * before the material is first drawn: changing the list later needs `needsUpdate`; a gain node's value can change any time).
+ * The layers are part of its program's cache key (customProgramCacheKey): three r186 shares one built shader among materials
+ * whose key is the same, and a layer's image, strength and gain are fixed in that shader (not looked up per material like
+ * the lightMap), so materials with other layers must not share it.
  */
 export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
   static override get type(): string {
@@ -178,8 +181,24 @@ export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
 
   lightMapLayers: BakedLightLayer[] = [];
 
-  /** The baked irradiance node of the current build: setupLightMap makes it, setupLightingModel (later) reads it. */
-  #baked: THREE.Node<'vec3'> | null = null;
+  /**
+   * The baked irradiance node of each build (by node builder): setupLightMap (the material's IrradianceNode) and
+   * setupLightingModel (the light the model tells apart) take the same node, in whichever order three calls them.
+   */
+  #baked = new WeakMap<object, THREE.Node<'vec3'>>();
+
+  #bakedFor(builder: object): THREE.Node<'vec3'> {
+    let node = this.#baked.get(builder);
+    if (!node) {
+      node = this.bakedIrradiance();
+      this.#baked.set(builder, node);
+    }
+    return node;
+  }
+
+  #hasLayers(): boolean {
+    return !!this.lightMap && this.lightMapLayers.length > 0;
+  }
 
   /**
    * The baked irradiance: the lightmap's (texel × lightMapIntensity) and each layer's (its texel × its intensity × its gain),
@@ -197,16 +216,23 @@ export class BakedStandardNodeMaterial extends THREE.MeshStandardNodeMaterial {
   }
 
   override setupLightMap(builder: THREE.NodeBuilder): THREE.Node {
-    if (!this.lightMap || this.lightMapLayers.length === 0) {
-      this.#baked = null;
-      return super.setupLightMap(builder);
-    }
-    this.#baked = this.bakedIrradiance();
-    return new THREE.IrradianceNode(this.#baked);
+    if (!this.#hasLayers()) return super.setupLightMap(builder);
+    return new THREE.IrradianceNode(this.#bakedFor(builder));
   }
 
-  override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new BakedLightingModel(this.#baked ?? undefined);
+  // three r186 passes the builder (NodeMaterial.setupLighting); its typings do not say so. Without one, a node of the same
+  // value (the irradiance less it is still the scene's other irradiance, only the texture is read twice)
+  override setupLightingModel(builder?: THREE.NodeBuilder): THREE.PhysicalLightingModel {
+    if (!this.#hasLayers()) return new BakedLightingModel();
+    return new BakedLightingModel(builder ? this.#bakedFor(builder) : this.bakedIrradiance());
+  }
+
+  override customProgramCacheKey(): string {
+    const layers = this.lightMapLayers.map((l) => {
+      const gain = typeof l.gain === 'number' ? `n${l.gain}` : `g${(l.gain as { id?: number }).id ?? '?'}`;
+      return `${l.layer}:${l.map.id}:${l.intensity}:${gain}`;
+    });
+    return `${super.customProgramCacheKey()}|layers[${layers.join(',')}]`;
   }
 
   /** A copy keeps the lights baked apart (LayerField clones a material it cuts for a second kind of layer). */

@@ -453,7 +453,7 @@ def bake_stage(objects: list, named: dict, out_dir: str, settings: dict) -> dict
                                'scale': first.get('scale'), 'max_over_scale': first.get('max_over_scale'),
                                'clipped_frac': first.get('clipped_frac'), 'device': first.get('device'),
                                'percentile': percentile if bp.percentile is None else bp.percentile,
-                               'seconds': round(seconds / len(passes), 1),
+                               'seconds': first.get('seconds'),
                                'objects': sorted(o.name for o in objs), 'excluded_materials': excluded})
     seconds = time.monotonic() - started
     # what was baked, into the glb (scene extras): only what decides the light, so the same bake writes the same glb

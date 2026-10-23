@@ -265,7 +265,10 @@ describe('BakedLightingModel (the realtime lights are not counted twice)', () =>
     const m = toBakedMaterial(new THREE.MeshStandardNodeMaterial(), lightMap, 1, [
       { layer: 'fire', map: fireMap, intensity: lightmapIntensity(5), gain },
     ]);
-    const irradiance = quiet(() => m.setupLightMap({ material: m } as never)) as unknown as {
+    const builder = { material: m };
+    // the lighting model first (three r186 calls it after the light map: the node is the same in either order)
+    const model = m.setupLightingModel(builder as never) as BakedLightingModel;
+    const irradiance = quiet(() => m.setupLightMap(builder as never)) as unknown as {
       isLightingNode?: boolean;
       node: unknown;
     };
@@ -274,9 +277,12 @@ describe('BakedLightingModel (the realtime lights are not counted twice)', () =>
     expect(samples(irradiance.node, fireMap)).toBe(true);
     expect(dependsOn(irradiance.node, gain)).toBe(true);
     // the lighting model takes the same node as the baked light (the scene's other irradiance is told apart by it)
-    const model = m.setupLightingModel() as BakedLightingModel;
     expect(model).toBeInstanceOf(BakedLightingModel);
     expect(model.baked).toBe(irradiance.node);
+    // another build makes its own
+    const other = m.setupLightingModel({ material: m } as never) as BakedLightingModel;
+    expect(other.baked).not.toBe(model.baked);
+    expect(samples(other.baked, fireMap)).toBe(true);
     // and its diffuse light is made of the fire's lightmap and its gain
     const s = sums();
     (model as BakedLightingModel & { dfg: unknown }).dfg = vec2(0.9, 0.05);
@@ -302,6 +308,27 @@ describe('BakedLightingModel (the realtime lights are not counted twice)', () =>
     const irradiance = m.setupLightMap({ material: m } as never) as unknown as { node: unknown };
     expect(irradiance.node).toBe(materialLightMap);
     expect((m.setupLightingModel() as BakedLightingModel).baked).toBe(materialLightMap);
+  });
+
+  it('S-37: materials with other layers do not share a built shader (the layers are in the program’s cache key)', () => {
+    const lightMap = new THREE.Texture();
+    const fire = new THREE.Texture();
+    const lamp = new THREE.Texture();
+    const gain = uniform(1);
+    const source = new THREE.MeshStandardNodeMaterial();
+    const key = (layers: Parameters<typeof toBakedMaterial>[3]) =>
+      toBakedMaterial(source, lightMap, 1, layers).customProgramCacheKey();
+    const keys = [
+      key([]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain }]),
+      key([{ layer: 'fire', map: lamp, intensity: 3, gain }]),
+      key([{ layer: 'fire', map: fire, intensity: 4, gain }]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain: uniform(1) }]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain: 0.5 }]),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    // the same layers: the same key (the shader is shared, as among the workshop's baked pieces)
+    expect(key([{ layer: 'fire', map: fire, intensity: 3, gain }])).toBe(keys[1]);
   });
 });
 

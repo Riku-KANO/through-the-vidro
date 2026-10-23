@@ -616,7 +616,8 @@ def materials() -> dict:
     # comes through the furnace's body, thick frosted glass, and through the fire's own cave (the spot stands in the fire: the
     # flames do not shadow their own light), as the realtime spot of S-31 (no shadow) warmed the floor round the furnace, not
     # only what the mouth's opening sees (温度のある透明; S-26 baked it behind the cave and the dome and the warmth shrank to
-    # the grate). pipeline.py bake_layers reads these
+    # the grate). pipeline.py bake_layers reads these. The milky mark here is the peep windows' ring only (furnace()): a milky
+    # lamp added to the workshop needs a material of its own (glass_milky_<role>), or its light would breathe with the fire
     for key in ('fire', 'ember', 'milky'):
         out[key][BAKE_LAYER] = FIRE_LAYER
     for key in ('kiln', 'fire'):

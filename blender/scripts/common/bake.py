@@ -18,7 +18,7 @@ Cycles（Metal があれば GPU）で DIFFUSE の DIRECT+INDIRECT（色は含め
 - メッシュを共有する物（インスタンス描画の物など）は、物ごとに光が違うので焼けない。
   既定では止める（split_shared=True で単独のコピーに直して焼く）。インスタンスとガラスは焼き込みの対象から外す。
 - 重ならない UV は smart project と pack で作る（repack=False で手で作った Lightmap を使う）。
-- 光を分けて焼く（0.3.0、案1 S-37）: `passes=[BakePass(), BakePass('fire', 場面を変える文脈)]` で、同じ Lightmap UV（同じ島・同じ余白）に
+- 光を分けて焼く（0.2.4、案1 S-37）: `passes=[BakePass(), BakePass('fire', 場面を変える文脈)]` で、同じ Lightmap UV（同じ島・同じ余白）に
   光ごとの画像を焼く。'' はいつものライトマップ（`lightmap`・`lightmap_scale`）、ほかの名前は分けて焼いた光（物のカスタムプロパティ
   `lightmap_layers` = {名前: {lightmap, lightmap_scale}}、画像は `<name>_<層>.png`）。ゲームが走りながら強さを変える光（揺らぐ火）を
   別の画像にして、足し合わせて描く。どの光をどの画像に入れるか（光を隠す、発光を消す、空を暗くする）は呼ぶ側が文脈で決める。
@@ -29,6 +29,7 @@ import math
 import os
 import struct
 import sys
+import time
 import zlib
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ import numpy as np
 UV_NAME = 'Lightmap'
 PROP = 'lightmap'
 PROP_SCALE = 'lightmap_scale'
-#: 分けて焼いた光（0.3.0）: {層の名前: {PROP: 画像, PROP_SCALE: 倍率}}
+#: 分けて焼いた光（0.2.4）: {層の名前: {PROP: 画像, PROP_SCALE: 倍率}}
 PROP_LAYERS = 'lightmap_layers'
 _NODE = 'lightmap.bake'
 #: 計算機の環境変数（CPU / GPU / AUTO）。GPU（Metal など）が使えれば AUTO は GPU
@@ -57,7 +58,7 @@ CLIP_WARN_RATIO = 1.5
 
 @dataclass(frozen=True)
 class BakePass:
-    """焼き込みの 1 枚（0.3.0）。`scene()`（文脈。None なら場面のまま）に入っている間の光を、ほかの枚と同じ Lightmap UV に焼く。
+    """焼き込みの 1 枚（0.2.4）。`scene()`（文脈。None なら場面のまま）に入っている間の光を、ほかの枚と同じ Lightmap UV に焼く。
 
     layer: '' はいつものライトマップ（物の `lightmap`・`lightmap_scale`）。ほかの名前は分けて焼いた光（物の `lightmap_layers[layer]`、
     画像は `<name>_<layer>.png`）。percentile: この枚の正規化の百分位（None なら bake_lightmaps の percentile）
@@ -295,11 +296,14 @@ def _fill_gutters(rgb: np.ndarray, mask: np.ndarray) -> None:
     rgb[hole] = avg[hole]
 
 
-def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool = False) -> dict:
+def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool = False, islands=None) -> dict:
     """焼いた float 画像を、高い百分位で割って 8bit の sRGB PNG にする（fill=True なら焼いていない画素を島の色で埋めて）。
 
-    戻り値: scale（割った倍率 = lightmap_scale）、max（焼いた最大）、clipped_frac（焼かれた画素のうち 1.0 で切れた割合）。
-    メモリを抑えるため float32 のまま、符号化は行の塊ごとにする。
+    islands（0.2.4）: 島の画素の覆い（高さ, 幅 の bool）。埋めるのはその外だけ（島の中で光が届かなかった画素は黒のまま）。
+    None なら焼いた値が 0 でない画素を島とみなす（空のある場面ではほぼ同じ。光を分けて焼いた枚では、届かない所が多いので
+    最初の枚の覆いを渡す）。
+    戻り値: scale（割った倍率 = lightmap_scale）、max（焼いた最大）、clipped_frac（焼かれた画素のうち 1.0 で切れた割合）、
+    lit（焼いた値が 0 でない画素の覆い）。メモリを抑えるため float32 のまま、符号化は行の塊ごとにする。
     """
     w, h = img.size
     px = np.empty(w * h * 4, dtype=np.float32)
@@ -315,8 +319,9 @@ def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool 
     else:
         scale, peak_max, clipped = 1.0, 0.0, 0.0
     scale = max(scale, 1e-4)
-    if fill and n_lit:
-        _fill_gutters(lin, lit_mask)
+    known = lit_mask if islands is None else (islands | lit_mask)
+    if fill and known.any():
+        _fill_gutters(lin, known)
     rgb = np.empty((h, w, 3), dtype=np.uint8)
     inv = np.float32(1.0 / scale)
     for y0 in range(0, h, 256):
@@ -332,7 +337,7 @@ def _save_normalized(img, path: str, percentile: float = PERCENTILE, fill: bool 
             f'WARNING: {os.path.basename(path)}: 明るい所が切れています（max/scale = {ratio:.2f}、切れた画素 {clipped * 100:.3f}%）。'
             f'percentile（既定 {PERCENTILE}）を上げるか、サンプル数を増やしてください'
         )
-    return {'scale': float(f'{scale:.6g}'), 'max': peak_max, 'clipped_frac': clipped}
+    return {'scale': float(f'{scale:.6g}'), 'max': peak_max, 'clipped_frac': clipped, 'lit': lit_mask}
 
 
 def _shared_names(objs: list) -> list[str]:
@@ -374,7 +379,7 @@ def bake_lightmaps(
     fill=True なら、それでも焼いていない画素（島の間）を近くの島の色で全部埋める（ミップの粗い段で島の外の黒が島へ混ざらない）。
     焼く間は、UV のノードを持たない画像のノードに元の描画用の UV をつなぐ（焼く間は Lightmap が描画用の UV になり、アトラスの
     色が Lightmap の UV で読まれて、光る面の色と跳ね返りの色が狂う）。終わったら外す。
-    passes（0.3.0）: 光を分けて焼く（BakePass）。既定は 1 枚（いつものライトマップ、場面のまま）。UV は 1 回だけ作り、枚ごとに
+    passes（0.2.4）: 光を分けて焼く（BakePass）。既定は 1 枚（いつものライトマップ、場面のまま）。UV は 1 回だけ作り、枚ごとに
     その文脈の中で焼いて、枚ごとの百分位で正規化する。層の名前は重ならないこと。
     戻り値: [{'object': 物の名前, 'layer': 層（'' はいつもの）, 'image': PNG の絶対パス, 'scale': lightmap_scale,
               'max_over_scale': 焼いた最大 ÷ scale, 'clipped_frac': 切れた画素の割合,
@@ -432,7 +437,9 @@ def bake_lightmaps(
                 m.node_tree.nodes.active = node
                 nodes.append((m, node))
             done = []
+            islands = None  # the first pass's baked texels stand for the islands of the later passes (their fill)
             for bp in passes:
+                t0 = time.monotonic()
                 _select(group, group[0])
                 with bp.scene() if bp.scene is not None else nullcontext():
                     try:
@@ -445,7 +452,11 @@ def bake_lightmaps(
                         device = 'CPU'
                         _bake(margin)
                 path = os.path.join(out_dir, f'{gname}_{bp.layer}.png' if bp.layer else f'{gname}.png')
-                stat = _save_normalized(img, path, percentile if bp.percentile is None else bp.percentile, fill=fill)
+                stat = _save_normalized(img, path, percentile if bp.percentile is None else bp.percentile, fill=fill,
+                                        islands=islands)
+                if islands is None:
+                    islands = stat['lit']
+                stat['seconds'] = time.monotonic() - t0
                 done.append((bp.layer, path, stat))
                 print(
                     f"bake: {gname}{'/' + bp.layer if bp.layer else ''} {size}px {samples}spp {device} 8bit "
@@ -474,7 +485,7 @@ def bake_lightmaps(
                 for o in group:
                     results.append({'object': o.name, 'layer': layer, 'image': path, 'scale': stat['scale'],
                                     'max_over_scale': stat['max'] / stat['scale'], 'clipped_frac': stat['clipped_frac'],
-                                    'device': device})
+                                    'device': device, 'seconds': round(stat['seconds'], 1)})
     finally:
         scene.render.engine = keep['engine']
         if keep['samples'] is not None:

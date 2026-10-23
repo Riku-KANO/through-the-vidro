@@ -11,13 +11,18 @@
 - `assets/lightmap.ts`:
   - glb の書き方: 焼いた物の extras に `lightmap_layers`（`{ <層>: { lightmap: <glb の中のテクスチャの名前>, lightmap_scale } }`）。
     ゲームが走りながら強さを変える光（揺らぐ炉の火）を、いつものライトマップと同じ 2つ目の UV に別の画像として焼いたもの
-    （`blender/scripts/common/bake.py` 0.3.0 の `BakePass`）。`lightmapLayersOf(extras)`（層の名前の順）
+    （`blender/scripts/common/bake.py` 0.2.4（案）の `BakePass`）。`lightmapLayersOf(extras)`（層の名前の順）
   - `BakedStandardNodeMaterial.lightMapLayers`（`BakedLightLayer`: 層、画像、強さ π × scale、`gain`。gain は数か節点。uniform を
     渡せば毎フレーム変えられ、材質を作り直さない）。焼いた光の放射照度 = ライトマップ ＋ Σ 層の画像 × 強さ × gain を、
     `setupLightMap` が `IrradianceNode` にして、同じ節点を `BakedLightingModel` が「焼いた光」として読む（場面のほかの放射照度
-    〈半球光〉と見分けるため。three の内側に頼る: `setupMaterialLightings`〈`setupLightMap`〉が `setupLightingModel` より前に
-    呼ばれること。崩れると焼いた光が `materialLightMap` だけになり、層の光が半球光と同じ扱い〈拡散に足されず、映り込みの暗さの
-    計算に入る〉になる。`lightmap.test.ts` が同じ節点であることを確かめる）。描画呼び出しは増えない（同じ材質で 1 回多く読むだけ）
+    〈半球光〉と見分けるため）。節点は組み立てごと（node builder ごと、WeakMap）に 1 つで、`setupLightMap` と `setupLightingModel`
+    のどちらが先に呼ばれても同じ節点になる（`lightmap.test.ts` が逆の順で確かめる）。three の内側に頼る: r186 は
+    `setupLightingModel(builder)` に builder を渡す（型には書いていない）。渡さない three では、同じ値の別の節点で組む
+    （差し引きは数として打ち消し合う。画像を 2 回読むだけ）。描画呼び出しは増えない（同じ材質で 1 回多く読むだけ）
+  - `BakedStandardNodeMaterial.customProgramCacheKey` に層（名前・画像の id・強さ・gain の値か節点の id）を足す。three r186 は
+    鍵が同じ材質の間で組んだシェーダを共有し（`RenderObject.getMaterialCacheKey` は材質の配列の欄を中身で見ない）、層の画像・
+    強さ・gain はシェーダの中に固定される（lightMap のように材質ごとに引かない）ので、層の違う材質が同じシェーダで描かれないように
+    （レビュー1巡目 P2-1。工房の焼いた材質はすべて同じ層なので共有される）
   - `BakedLightingModel(baked = materialLightMap)`: 焼いた光の節点を受け取る
   - `BakedStandardNodeMaterial.copy`（と `clone`）は層を写す（`LayerField` は 2 つ目の種類の層に切る材質を `clone()` で作る。
     three の copy は知らない欄を写さない）
@@ -26,8 +31,8 @@
     ときは層を外し、`missing` に `<物> (<層>)` で知らせる
   - `loadLightmaps`: 層の画像も名前で読む（2つ目の UV、sRGB）
 - `assets/loader.ts`: `load(url, { lightmaps: { gain } })`（`true` も今までどおり）
-- 泡沫回廊へ写すとき: 層の画像は glb の中のテクスチャ（案1）。焼く側は `blender/scripts/common` 0.3.0 と一緒に
-- 単体テスト `assets/lightmap.test.ts`（23 件。S-37 で 8 件足した）
+- 泡沫回廊へ写すとき: 層の画像は glb の中のテクスチャ（案1）。焼く側は `blender/scripts/common` 0.2.4（案）と一緒に
+- 単体テスト `assets/lightmap.test.ts`（24 件。S-37 で 9 件足した）
 
 ## 0.11.0 — 2026-10-23（S-26 焼いた光の受け口）
 

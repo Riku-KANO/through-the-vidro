@@ -395,6 +395,29 @@ class BakeStage(unittest.TestCase):
         self.assertNotIn('LIGHT_PATH', {n.type for n in shade.node_tree.nodes})
         self.assertNotIn('MIX_SHADER', {n.type for n in shade.node_tree.nodes})
 
+    def test_a_later_pass_fills_only_the_gutters_of_the_first(self):
+        """S-37: 空のない枚（分けて焼いた灯り）では島の中でも光が届かない画素がある。それは黒のまま、島の外だけを埋める
+        （1 枚目の焼いた画素を島とみなす。レビュー1巡目: 隠れた床が平らな橙の円になっていた）"""
+        import numpy as np
+        from common import bake
+        img = bpy.data.images.new('pass', 8, 8, alpha=False, float_buffer=True)
+        img.colorspace_settings.name = 'Non-Color'
+        px = np.zeros((8, 8, 4), np.float32)
+        px[..., 3] = 1.0
+        px[1:3, 1:3, :3] = 1.0  # what the lamp reaches
+        img.pixels.foreach_set(px.ravel())
+        islands = np.zeros((8, 8), bool)
+        islands[1:3, 1:3] = True
+        islands[5:7, 5:7] = True  # an island the lamp does not reach
+        with tempfile.TemporaryDirectory() as out:
+            path = os.path.join(out, 'pass.png')
+            stat = bake._save_normalized(img, path, 100.0, fill=True, islands=islands)
+            back = bpy.data.images.load(path)
+            got = np.array(back.pixels[:]).reshape(8, 8, 4)
+        self.assertEqual(int(stat['lit'].sum()), 4)
+        self.assertEqual(float(got[6, 6, 0]), 0.0)  # dark in its island
+        self.assertGreater(float(got[0, 0, 0]), 0.5)  # the gutter by the lit island takes its colour
+
     def test_passes_need_distinct_layers(self):
         from common import bake
         with tempfile.TemporaryDirectory() as out, self.assertRaises(ValueError):
