@@ -105,6 +105,20 @@ class Workshop(unittest.TestCase):
         at, _ = mw.fire_light()
         self.assertLess((fire.location - Vector(B(tuple(at)))).length, 1e-4)
 
+    def test_the_furnace_light_is_baked_apart(self):
+        """S-37: 炉の光は別のライトマップに（ゲームが火の揺らぎで強さを変える）。炉の火のスポットと、炉と徐冷炉の光る物（火・熾火・
+        覗き窓の乳白）が fire の層。日と天窓と空はいつものライトマップ。炉の体（厚い曇りガラス）と火の洞は炉の光を通す"""
+        import pipeline
+        mw = self.mw
+        lights = [o for o in bpy.context.scene.objects if o.type == 'LIGHT']
+        used = {s.material for o in self.objects if o.type == 'MESH' for s in o.material_slots}
+        layers = pipeline.bake_layers(lights, used)
+        self.assertEqual(set(layers), {mw.FIRE_LAYER})
+        fire = layers[mw.FIRE_LAYER]
+        self.assertEqual(fire['lights'], ['bake_fire'])
+        self.assertEqual(fire['emitters'], ['A0_ember', 'A0_fire', 'glass_milky'])
+        self.assertEqual(fire['clear'], ['A0_fire', 'A0_kiln'])
+
     def test_furniture_has_a_collider_and_colliders_draw_nothing(self):
         names = {o.name for o in self.objects}
         for base in ('A0_bnch_work01', 'A0_frn_furnace01', 'A0_pipe_rack01', 'A0_mrv_marver01', 'A0_tub_water01',

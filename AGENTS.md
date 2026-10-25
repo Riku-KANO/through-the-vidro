@@ -31,7 +31,7 @@ M0は姉妹作「泡沫回廊」（`~/develop/bubble-corridor`）と共通。`sr
 | 実機ベンチ（ヘッドあり、垂直同期なし、1080p） | `node scripts/bench-headed.mjs` → `artifacts/bench-headed.md` |
 | three の不具合の再現（版を比べる） | `node tools/three-repro/run.mjs`（`THREE=0.186.1,dev`、ネットが要る） |
 | 整形 | `pnpm format` |
-| アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ。job に `bake` があれば Cycles で光を焼いてライトマップを glb に入れる（`blender/pipeline.json`。工房は 2048px・512 サンプルで約1分、ライトマップは UASTC）。`BAKE=0`（`-- --no-bake`）で焼かずに書き出す |
+| アセットの書き出し | `pnpm assets`（Blender の .blend → 命名・ポリゴン数の検査、2つ目の UV、エリアごとの glb、meshopt と KTX2 → `public/assets/<job>/`。`BLENDER=<path>`、`-- --job <name>`、`KEEP=1`）。KTX2 は KTX-Software の `ktx`（4.4 以上）が PATH にあるときだけ。job に `bake` があれば Cycles で光を焼いてライトマップを glb に入れる（`blender/pipeline.json`。工房は 2048px・512 サンプルで2枚を約80秒〈全体で約90秒〉、ライトマップは UASTC）。`BAKE=0`（`-- --no-bake`）で焼かずに書き出す |
 | 見本の .blend を作り直す / パイプラインの検査 | `pnpm assets:sample` / `pnpm assets:test`（check.sh には入れない。Blender がなくても check.sh は緑） |
 | 工房の .blend を作り直す | `/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python-exit-code 1 --python blender/scripts/make_workshop.py -- --out blender/scenes/workshop.blend`（`--preview <dir>`、`--only <関数>`）→ `pnpm assets -- --job workshop`。アトラスの区画を (u, v) の式で描くときは、`atlas_uv` が 0〜1 を区画の 0.12〜0.88（`TILE_MARGIN`）に写す前提で描く（S-30）。開いた殻を EXACT のブーリアンでくり抜くときは底を閉じてから行い、元の面に乗らない面と底を消す。面の上の模様（煤など）は頂点の値でなく、面の座標の UV でアトラスの区画に描く（S-31） |
 
@@ -85,7 +85,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値、炉の音・扉の風鈴と吹き込み。生成音楽は M1以降 | S-09, S-21, S-22, S-25 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）、焼いた光の受け口（`lightmap.ts`）。案2と共有 | 変更は CHANGELOG に記録 |
-| `src/game/assets/` | 命名規則と extras から層・当たり判定・台座を組み立てる、印のついたガラス | S-23 |
+| `src/game/assets/` | 命名規則と extras から層・当たり判定・台座を組み立てる、印のついたガラス、焼いた光の強さ（`baked-light.ts`） | S-23, S-37 |
 | `blender/` | `scenes/`（.blend）、`scripts/common/`（案2と共有。VERSION と CHANGELOG）、`scripts/vidro/`（案1だけの規則）、`scripts/tests/` | S-23 ほか |
 | `public/assets/` | `pnpm assets` が書いた glb。**コミットする**（check.sh とセンサーはこれを読む。.blend を直したら glb も書き出してコミット） | S-23 ほか |
 | `scripts/assets/` | パイプラインの入口（Node） | S-23 |
@@ -197,7 +197,9 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （背景画像の `version` が変わらないのに大きさの違うコピーを数える）。
 - **焼いた物の光は Blender と room-art.ts の両方で決まる（S-26）。** 工房の実時間の光（`room-art.ts` の `WORKSHOP_LIGHTS`）を変えたら、
   `make_workshop.py` の焼く光と空も同じに変えて焼き直す（`workshop-bake.test.ts` が glb の記録と照らし合わせる）。焼いた物は実時間の光の拡散を
-  受けない（鏡面だけ受ける）ので、実時間の光を強めても焼いた部屋は明るくならない。
+  受けない（鏡面だけ受ける）ので、実時間の光を強めても焼いた部屋は明るくならない。炉の火と熾火の光は別のライトマップ（`A0_lightmap_fire`）に
+  焼き、room-art.ts が火の灯りと同じ揺らぎを `bakedLightGain('fire')`（`src/game/assets/baked-light.ts`）に入れる（S-37）。ゲームが強さを変える
+  静止した光は、光と光る材質の `bake_layer` と、その光を通す材質の `bake_clear_for`（`blender/scripts/pipeline.py`）で別のライトマップに焼く。
 - **焼き込みの場面ではガラスは透明（S-26）。** ゲームのガラスは影を落とさず光を通すので、焼き込みもガラスと焼かない光らない材質（材質の
   `bake: false`。ガラスの中の泡）をすべての光線に透明にする。影を落とすべき静的な物に `bake: false` を付けない。材質の画像のノードには UV Map の
   ノードで1つ目の UV をつなぐ（焼く間は描画用の UV が Lightmap になる）。

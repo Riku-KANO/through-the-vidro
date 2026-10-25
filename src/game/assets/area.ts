@@ -3,6 +3,7 @@ import { createGltfLoader, type LoadedAsset } from '../../core/assets';
 import { type HazeSpec, readsBackdrop } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import { type AssembledAsset, assembleAsset } from './assemble';
+import { bakedLightGain } from './baked-light';
 import { type AssetGlassRecord, createAssetMaterialHook } from './glass';
 import { parseAssetName } from './naming';
 import { type AssetProblem, problemMessage } from './plan';
@@ -13,7 +14,8 @@ import { proceduralMaterial } from './procedural';
  * meshopt + KTX2; marked glass becomes the library's glass), assembled from its names (layers, colliders, sockets), and
  * its opaque meshes cast and receive shadows (clear glass casts no solid shadow). S-26: materials the game draws in code
  * (procedural.ts: the workshop's floor) are made here, and the baked pieces draw with their lightmap
- * (src/core/assets/lightmap.ts: the realtime lights add only their highlights to them).
+ * (src/core/assets/lightmap.ts: the realtime lights add only their highlights to them). S-37: the lights baked apart (the
+ * furnace's fire) are added with the strength of baked-light.ts, which the room changes as the light breathes.
  *
  * The room then assigns `assembled.layered` to its LayerField, adds `assembled.root` to its scene and the colliders to
  * Rapier (addAssetColliders). The loader is let go once the file is in (its KTX2 workers are not needed afterwards).
@@ -39,7 +41,8 @@ export async function loadAreaAsset(
     const materials = createAssetMaterialHook(quality, options);
     const asset = await loader.load(url, {
       material: (m, mesh) => proceduralMaterial(m) ?? materials.hook(m, mesh),
-      lightmaps: true,
+      // S-37: the lights baked apart take their strength from the room (baked-light.ts: the fire breathes)
+      lightmaps: { gain: bakedLightGain },
     });
     const assembled = assembleAsset(asset.scene);
     asset.scene.traverse((o) => {

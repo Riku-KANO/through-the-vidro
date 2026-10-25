@@ -281,6 +281,154 @@ class BakeStage(unittest.TestCase):
         self.assertFalse(self.col.hide_render)
         self.assertFalse(lod.hide_render)
 
+    # ── S-37: lights baked apart ──────────────────────────────────────────────────────────────────
+    def _floor_lum(self, png: str):
+        """床の上の (x, y) の焼いた値（PNG の画素、輝度）を返す関数"""
+        from mathutils import Vector
+        from mathutils.geometry import barycentric_transform, intersect_point_tri_2d
+        img = bpy.data.images.load(png)
+        w, h = img.size
+        px = list(img.pixels)
+        me = self.floor.data
+        me.calc_loop_triangles()
+        lm = me.uv_layers['Lightmap'].data
+
+        def lum_at(x, y):
+            p = Vector((x, y, 0.0))
+            for t in me.loop_triangles:
+                v = [me.vertices[i].co for i in t.vertices]
+                if intersect_point_tri_2d(p.to_2d(), v[0].to_2d(), v[1].to_2d(), v[2].to_2d()):
+                    uv = [Vector((*lm[li].uv, 0.0)) for li in t.loops]
+                    u = barycentric_transform(p, v[0], v[1], v[2], uv[0], uv[1], uv[2])
+                    i = (min(h - 1, int(u.y * h)) * w + min(w - 1, int(u.x * w))) * 4
+                    return 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]
+            raise AssertionError(f'no floor at {x}, {y}')
+
+        return lum_at
+
+    def _lamp(self, at, energy=150.0, layer='lamp'):
+        lamp = bpy.data.objects.new('bake_lamp', bpy.data.lights.new('bake_lamp', 'POINT'))
+        lamp.data.energy = energy
+        lamp.data.shadow_soft_size = 0.02
+        lamp.location = at
+        if layer:
+            lamp['bake_layer'] = layer
+        bpy.context.scene.collection.objects.link(lamp)
+        return lamp
+
+    def test_bakes_a_light_apart_onto_the_same_uv_and_puts_the_scene_back(self):
+        """S-37: `bake_layer` の光（と光る材質）は別のライトマップに焼く。いつものライトマップにはその光がなく、層のライトマップには
+        その光だけ（日も空もない）。同じ 2つ目の UV、物の extras に lightmap_layers。焼いた後は場面が元に戻る"""
+        import pipeline
+        from common import bake
+        for o in (self.box, self.ware, self.col):
+            bpy.data.objects.remove(o)
+        lamp = self._lamp((1.2, 1.2, 0.5))
+        world = bpy.data.worlds.new('sky')
+        world.node_tree.nodes['Background'].inputs['Color'].default_value = (0.2, 0.2, 0.2, 1.0)
+        bpy.context.scene.world = world
+        glow = _principled('A0_glow', **{'Emission Strength': 3.0, 'Emission Color': (1.0, 0.5, 0.2, 1.0)})
+        glow['bake'] = False
+        glow['bake_layer'] = 'lamp'
+        _mesh('A0_ember_01', lambda bm: bmesh.ops.create_cube(bm, size=0.1), [glow], location=(-1.5, -1.5, 0.3))
+        bpy.context.view_layer.update()
+        objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+        with tempfile.TemporaryDirectory() as out:
+            record = pipeline.bake_stage(objects, self.named(), out, {'size': 64, 'samples': 16, 'margin': 2})
+            images = {i['layer']: i for i in record['images']}
+            self.assertEqual(sorted(images), ['', 'lamp'])
+            self.assertEqual(images['']['name'], 'A0_lightmap')
+            self.assertEqual(images['lamp']['name'], 'A0_lightmap_lamp')
+            self.assertEqual(images['lamp']['objects'], images['']['objects'])
+            main = self._floor_lum(images['']['png'])
+            apart = self._floor_lum(images['lamp']['png'])
+            under, away = (1.2, 1.2), (-1.2, 1.2)
+            # the main lightmap: the sun and the sky alike under the lamp and away from it (the lamp is not in it)
+            self.assertAlmostEqual(main(*under) / main(*away), 1.0, delta=0.1)
+            # the lamp's: bright under it, nothing away from it (no sun, no sky)
+            self.assertGreater(apart(*under), 0.3)
+            self.assertLess(apart(*away), 0.3 * apart(*under))
+        # the record and the extras: the layer's lights and glowing materials; each baked object names both lightmaps
+        self.assertEqual(dict(record['layers']['lamp']), {'lights': ['bake_lamp'], 'emitters': ['A0_glow'], 'clear': []})
+        layers = pipeline.plain(self.floor[bake.PROP_LAYERS])
+        self.assertEqual(layers['lamp'][bake.PROP], 'A0_lightmap_lamp')
+        self.assertGreater(layers['lamp'][bake.PROP_SCALE], 0)
+        self.assertEqual(self.floor[bake.PROP], 'A0_lightmap')
+        # and the scene is back: the lamp, the sky and the glow as they were
+        self.assertFalse(lamp.hide_render)
+        self.assertFalse(bpy.data.objects['bake_sun'].hide_render)
+        self.assertEqual(bpy.context.scene.world, world)
+        self.assertEqual(glow.node_tree.nodes['Principled BSDF'].inputs['Emission Strength'].default_value, 3.0)
+
+    def test_a_material_clear_for_a_layer_lets_that_light_through_only(self):
+        """S-37: `bake_clear_for` の材質は、その層の光にだけ透明（炉の体と火の洞が炉の光を通す）。日の影は今までどおり落とす"""
+        import pipeline
+        for o in (self.box, self.ware, self.col):
+            bpy.data.objects.remove(o)
+        self._lamp((0.0, 0.0, 1.0), energy=60.0)
+        shade = _principled('A0_shade')
+        slab = _mesh('A0_box_02', lambda bm: bmesh.ops.create_cube(bm, size=0.8), [shade], location=(0.0, 0.0, 0.5))
+        slab.scale = (1.0, 1.0, 0.05)
+        bpy.context.view_layer.update()
+        objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+
+        def bake_under():
+            with tempfile.TemporaryDirectory() as out:
+                record = pipeline.bake_stage(objects, self.named(), out, {'size': 64, 'samples': 16, 'margin': 2})
+                images = {i['layer']: i for i in record['images']}
+                main = self._floor_lum(images['']['png'])
+                apart = self._floor_lum(images['lamp']['png'])
+                return main(0.0, 0.0) / main(-1.2, 1.2), apart(0.0, 0.0), record
+
+        sun_shadow, shaded, _ = bake_under()
+        shade['bake_clear_for'] = ['lamp']
+        sun_shadow_clear, through, record = bake_under()
+        # the lamp's light comes through the slab (its texels are scaled by their own image: compare the image's own range)
+        self.assertGreater(through, 0.3)
+        self.assertGreater(through, 3 * shaded)
+        self.assertEqual(record['layers']['lamp']['clear'], ['A0_shade'])
+        # the sun's shadow under the slab stays, as it was (the values are the PNG's sRGB: the floor's bounce off the slab's
+        # underside lifts the umbra to about half)
+        self.assertLess(sun_shadow, 0.7)
+        self.assertAlmostEqual(sun_shadow_clear, sun_shadow, delta=0.06)
+        # nothing of the bake is left in the material
+        self.assertNotIn('LIGHT_PATH', {n.type for n in shade.node_tree.nodes})
+        self.assertNotIn('MIX_SHADER', {n.type for n in shade.node_tree.nodes})
+
+    def test_a_later_pass_fills_only_the_gutters_of_the_first(self):
+        """S-37: 空のない枚（分けて焼いた灯り）では島の中でも光が届かない画素がある。それは黒のまま、島の外だけを埋める
+        （1 枚目の焼いた画素を島とみなす。レビュー1巡目: 隠れた床が平らな橙の円になっていた）"""
+        import numpy as np
+        from common import bake
+        img = bpy.data.images.new('pass', 8, 8, alpha=False, float_buffer=True)
+        img.colorspace_settings.name = 'Non-Color'
+        px = np.zeros((8, 8, 4), np.float32)
+        px[..., 3] = 1.0
+        px[1:3, 1:3, :3] = 1.0  # what the lamp reaches
+        img.pixels.foreach_set(px.ravel())
+        islands = np.zeros((8, 8), bool)
+        islands[1:3, 1:3] = True
+        islands[5:7, 5:7] = True  # an island the lamp does not reach
+        with tempfile.TemporaryDirectory() as out:
+            path = os.path.join(out, 'pass.png')
+            stat = bake._save_normalized(img, path, 100.0, fill=True, islands=islands)
+            back = bpy.data.images.load(path)
+            got = np.array(back.pixels[:]).reshape(8, 8, 4)
+        self.assertEqual(int(stat['lit'].sum()), 4)
+        self.assertEqual(float(got[6, 6, 0]), 0.0)  # dark in its island
+        self.assertGreater(float(got[0, 0, 0]), 0.5)  # the gutter by the lit island takes its colour
+
+    def test_passes_need_distinct_layers(self):
+        from common import bake
+        with tempfile.TemporaryDirectory() as out, self.assertRaises(ValueError):
+            bake.bake_lightmaps([self.floor], out, 16, 1, passes=[bake.BakePass('a'), bake.BakePass('a')])
+
+    def test_the_first_pass_is_the_main_lightmap(self):
+        """2 枚目からの島の間の塗りは 1 枚目の焼いた画素を島とみなす: 空のない層の枚を先に焼かせない"""
+        from common import bake
+        with tempfile.TemporaryDirectory() as out, self.assertRaises(ValueError):
+            bake.bake_lightmaps([self.floor], out, 16, 1, passes=[bake.BakePass('fire'), bake.BakePass()])
+
     def test_density_makes_a_piece_finer_than_the_rest(self):
         from common import bake, uv
         a = _mesh('A0_pan_a01', lambda bm: bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=1.0), [self.brass])

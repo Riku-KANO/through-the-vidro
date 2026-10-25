@@ -8,6 +8,7 @@ import {
   BakedStandardNodeMaterial,
   bakesMaterial,
   lightmapIntensity,
+  lightmapLayersOf,
   lightmapOf,
   loadLightmaps,
   toBakedMaterial,
@@ -31,6 +32,34 @@ describe('lightmapOf', () => {
     expect(lightmapOf({ lightmap: 'A0_lightmap', lightmap_scale: 0 })).toBeNull();
     expect(lightmapOf({ lightmap: '', lightmap_scale: 1 })).toBeNull();
     expect(lightmapOf({ lightmap: 3, lightmap_scale: 1 })).toBeNull();
+  });
+});
+
+describe('lightmapLayersOf (S-37: lights baked apart)', () => {
+  it('reads each layer’s lightmap and scale, in the order of their names', () => {
+    expect(
+      lightmapLayersOf({
+        lightmap: 'A0_lightmap',
+        lightmap_scale: 1.1,
+        lightmap_layers: {
+          fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 5.1 },
+          lamp: { lightmap: 'A0_lightmap_lamp', lightmap_scale: 0.4 },
+        },
+      }),
+    ).toEqual([
+      { layer: 'fire', name: 'A0_lightmap_fire', scale: 5.1 },
+      { layer: 'lamp', name: 'A0_lightmap_lamp', scale: 0.4 },
+    ]);
+  });
+  it('is empty without layers, and leaves out a layer without a name or a positive scale', () => {
+    expect(lightmapLayersOf({ lightmap: 'A0_lightmap', lightmap_scale: 1 })).toEqual([]);
+    expect(lightmapLayersOf({ lightmap_layers: 'fire' })).toEqual([]);
+    expect(lightmapLayersOf({ lightmap_layers: [{ lightmap: 'x', lightmap_scale: 1 }] })).toEqual([]);
+    expect(
+      lightmapLayersOf({
+        lightmap_layers: { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 0 }, ash: null },
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -96,6 +125,18 @@ describe('toBakedMaterial', () => {
     expect(out.type).not.toBe(new THREE.MeshStandardNodeMaterial().type);
     expect(out.setupLightingModel()).toBeInstanceOf(BakedLightingModel);
     expect(new THREE.MeshStandardNodeMaterial().setupLightingModel()).not.toBeInstanceOf(BakedLightingModel);
+  });
+  it('S-37: keeps the lights baked apart, also in a clone (LayerField clones a material for a second kind of layer)', () => {
+    const fire = new THREE.Texture();
+    const gain = uniform(1);
+    const layers = [{ layer: 'fire', map: fire, intensity: 3, gain }];
+    const out = toBakedMaterial(new THREE.MeshStandardNodeMaterial(), new THREE.Texture(), 1, layers);
+    expect(out.lightMapLayers).toEqual(layers);
+    expect(out.lightMapLayers).not.toBe(layers);
+    const twin = out.clone();
+    expect(twin).toBeInstanceOf(BakedStandardNodeMaterial);
+    expect(twin.lightMapLayers).toEqual(layers);
+    expect(twin.lightMapLayers[0]?.gain).toBe(gain);
   });
 });
 
@@ -195,6 +236,100 @@ describe('BakedLightingModel (the realtime lights are not counted twice)', () =>
     expect(specular).toHaveLength(1);
     expect(dependsOn(specular[0], radiance)).toBe(true);
   });
+
+  /** Whether a node is made of a texture node sampling `map`. */
+  const samples = (node: unknown, map: THREE.Texture, seen = new Set<unknown>()): boolean => {
+    if (!node || typeof node !== 'object' || seen.has(node)) return false;
+    seen.add(node);
+    if (
+      (node as { isTextureNode?: boolean; value?: unknown }).isTextureNode &&
+      (node as { value?: unknown }).value === map
+    )
+      return true;
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        if (v.some((x) => samples(x, map, seen))) return true;
+      } else if (v && typeof v === 'object' && (v as { isNode?: boolean }).isNode) {
+        if (samples(v, map, seen)) return true;
+      }
+    }
+    return false;
+  };
+
+  it('S-37: a light baked apart is added to the lightmap’s, × its gain, and is the baked light the model reads', () => {
+    const lightMap = new THREE.Texture();
+    lightMap.channel = 1;
+    const fireMap = new THREE.Texture();
+    fireMap.channel = 1;
+    const gain = uniform(1);
+    const m = toBakedMaterial(new THREE.MeshStandardNodeMaterial(), lightMap, 1, [
+      { layer: 'fire', map: fireMap, intensity: lightmapIntensity(5), gain },
+    ]);
+    const builder = { material: m };
+    // the lighting model first (three r186 calls it after the light map: the node is the same in either order)
+    const model = m.setupLightingModel(builder as never) as BakedLightingModel;
+    const irradiance = quiet(() => m.setupLightMap(builder as never)) as unknown as {
+      isLightingNode?: boolean;
+      node: unknown;
+    };
+    expect(irradiance.isLightingNode).toBe(true);
+    expect(dependsOn(irradiance.node, materialLightMap)).toBe(true);
+    expect(samples(irradiance.node, fireMap)).toBe(true);
+    expect(dependsOn(irradiance.node, gain)).toBe(true);
+    // the lighting model takes the same node as the baked light (the scene's other irradiance is told apart by it)
+    expect(model).toBeInstanceOf(BakedLightingModel);
+    expect(model.baked).toBe(irradiance.node);
+    // another build makes its own
+    const other = m.setupLightingModel({ material: m } as never) as BakedLightingModel;
+    expect(other.baked).not.toBe(model.baked);
+    expect(samples(other.baked, fireMap)).toBe(true);
+    // and its diffuse light is made of the fire's lightmap and its gain
+    const s = sums();
+    (model as BakedLightingModel & { dfg: unknown }).dfg = vec2(0.9, 0.05);
+    quiet(() =>
+      model.indirect({
+        context: {
+          irradiance: uniform(new THREE.Vector3(1, 1, 1)),
+          iblIrradiance: uniform(new THREE.Vector3(2, 2, 2)),
+          radiance: uniform(new THREE.Vector3(3, 3, 3)),
+          ambientOcclusion: float(1),
+          reflectedLight: s.reflectedLight,
+        },
+      } as never),
+    );
+    const diffuse = s.added.indirectDiffuse ?? [];
+    expect(diffuse).toHaveLength(1);
+    expect(samples(diffuse[0], fireMap)).toBe(true);
+    expect(dependsOn(diffuse[0], gain)).toBe(true);
+  });
+
+  it('without lights baked apart, the lightmap alone (as S-26)', () => {
+    const m = toBakedMaterial(new THREE.MeshStandardNodeMaterial(), new THREE.Texture(), 1);
+    const irradiance = m.setupLightMap({ material: m } as never) as unknown as { node: unknown };
+    expect(irradiance.node).toBe(materialLightMap);
+    expect((m.setupLightingModel() as BakedLightingModel).baked).toBe(materialLightMap);
+  });
+
+  it('S-37: materials with other layers do not share a built shader (the layers are in the program’s cache key)', () => {
+    const lightMap = new THREE.Texture();
+    const fire = new THREE.Texture();
+    const lamp = new THREE.Texture();
+    const gain = uniform(1);
+    const source = new THREE.MeshStandardNodeMaterial();
+    const key = (layers: Parameters<typeof toBakedMaterial>[3]) =>
+      toBakedMaterial(source, lightMap, 1, layers).customProgramCacheKey();
+    const keys = [
+      key([]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain }]),
+      key([{ layer: 'fire', map: lamp, intensity: 3, gain }]),
+      key([{ layer: 'fire', map: fire, intensity: 4, gain }]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain: uniform(1) }]),
+      key([{ layer: 'fire', map: fire, intensity: 3, gain: 0.5 }]),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    // the same layers: the same key (the shader is shared, as among the workshop's baked pieces)
+    expect(key([{ layer: 'fire', map: fire, intensity: 3, gain }])).toBe(keys[1]);
+  });
 });
 
 describe('applyLightmaps', () => {
@@ -269,6 +404,63 @@ describe('applyLightmaps', () => {
     expect(report.unsupported).toEqual(['A0_frn_furnace01/A0_lacquer']);
   });
 
+  it('S-37: adds the lights baked apart, each with its strength (one per layer, shared), and reports a layer not in the file', () => {
+    const s = build();
+    const furnace = s.body.parent as THREE.Object3D;
+    furnace.userData.lightmap_layers = { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 5 } };
+    s.tub.userData.lightmap_layers = { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 5 } };
+    const lightmap = new THREE.Texture();
+    const fire = new THREE.Texture();
+    const breath = uniform(1);
+    const asked: string[] = [];
+    const report = applyLightmaps(
+      s.root,
+      new Map([
+        ['A0_lightmap', lightmap],
+        ['A0_lightmap_fire', fire],
+      ]),
+      {
+        gain: (layer) => {
+          asked.push(layer);
+          return breath;
+        },
+      },
+    );
+    const baked = s.body.material as BakedStandardNodeMaterial;
+    expect(baked.lightMap).toBe(lightmap);
+    expect(baked.lightMapLayers).toHaveLength(1);
+    const [layer] = baked.lightMapLayers;
+    expect(layer?.layer).toBe('fire');
+    expect(layer?.map).toBe(fire);
+    expect(layer?.intensity).toBeCloseTo(5 * Math.PI);
+    expect(layer?.gain).toBe(breath);
+    // the same source, lightmap and layers: one baked material; the strength asked once for the layer
+    expect((s.tub.material as THREE.Material[])[1]).toBe(baked);
+    expect(asked).toEqual(['fire']);
+    expect(report.missing).toEqual([]);
+
+    // the layer's image not in the file: drawn with the lightmap alone, and said
+    const t = build();
+    t.tub.userData.lightmap_layers = { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 5 } };
+    const r = applyLightmaps(t.root, new Map([['A0_lightmap', lightmap]]));
+    expect(((t.tub.material as THREE.Material[])[1] as BakedStandardNodeMaterial).lightMapLayers).toEqual([]);
+    expect(r.missing).toEqual(['A0_tub_water01 (fire)']);
+  });
+
+  it('S-37: a layer’s strength is 1 (as baked) unless the game gives one', () => {
+    const s = build();
+    s.tub.userData.lightmap_layers = { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 2 } };
+    applyLightmaps(
+      s.root,
+      new Map([
+        ['A0_lightmap', new THREE.Texture()],
+        ['A0_lightmap_fire', new THREE.Texture()],
+      ]),
+    );
+    const baked = (s.tub.material as THREE.Material[])[1] as BakedStandardNodeMaterial;
+    expect(baked.lightMapLayers[0]?.gain).toBe(1);
+  });
+
   it('reports the source materials no mesh uses any more, and pieces whose lightmap is not in the file', () => {
     const s = build();
     s.outside.removeFromParent();
@@ -308,5 +500,31 @@ describe('loadLightmaps', () => {
     const t = maps.get('A0_lightmap');
     expect(t?.channel).toBe(1);
     expect(t?.colorSpace).toBe(THREE.SRGBColorSpace);
+  });
+
+  it('S-37: and those of the lights baked apart', async () => {
+    const scene = new THREE.Group();
+    const piece = new THREE.Object3D();
+    piece.userData = {
+      name: 'A0_frn_furnace01',
+      lightmap: 'A0_lightmap',
+      lightmap_scale: 1,
+      lightmap_layers: { fire: { lightmap: 'A0_lightmap_fire', lightmap_scale: 5 } },
+    };
+    scene.add(piece);
+    const gltf = {
+      scene,
+      parser: {
+        json: {
+          textures: [{ name: 'A0_lightmap' }, { name: 'A0_lightmap_fire' }],
+          images: [],
+        },
+        getDependency: async () => new THREE.Texture(),
+      },
+    } as unknown as GLTF;
+    const maps = await loadLightmaps(gltf);
+    expect([...maps.keys()].sort()).toEqual(['A0_lightmap', 'A0_lightmap_fire']);
+    expect(maps.get('A0_lightmap_fire')?.channel).toBe(1);
+    expect(maps.get('A0_lightmap_fire')?.colorSpace).toBe(THREE.SRGBColorSpace);
   });
 });

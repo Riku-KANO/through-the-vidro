@@ -40,6 +40,7 @@ import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import type { Box } from '../../layers/footing';
 import type { LayerKind } from '../../layers/layers';
+import { bakedLightGain, FIRE_LIGHT_LAYER } from '../assets/baked-light';
 import { HAND_ORB_RADIUS } from '../orb/hand-pose';
 import type { MeshData } from '../player/walk-lab-field';
 import {
@@ -224,6 +225,8 @@ export const WORKSHOP_LIGHTS = {
 } as const;
 /** How much the fire's light breathes (± of its intensity). */
 const FIRE_FLICKER = 0.08;
+/** S-37: the strength of the fire's light baked apart (the workshop glb's lightmap_layers.fire), breathing with the fire. */
+const bakedFire = bakedLightGain(FIRE_LIGHT_LAYER);
 /** The valley floor, far below the mist. */
 const VALLEY_Y = -32;
 /** The mist rises to just below the walkable tops. */
@@ -962,12 +965,14 @@ export function buildRoomArt(
     fogRange: { near: fogNear, far: fogFar },
     animate(t) {
       ghostTime.value = t;
-      // a fire breathes: a few slow, unrelated waves (no strobe)
-      fire.intensity =
-        FIRE_INTENSITY *
-        (1 +
-          FIRE_FLICKER *
-            (0.5 * Math.sin(t * 2.3) + 0.3 * Math.sin(t * 5.9 + 1.3) + 0.2 * Math.sin(t * 11.7 + 0.4)));
+      // a fire breathes: a few slow, unrelated waves (no strobe). S-37: the fire's light baked apart (the floor and the
+      // furniture round the furnace) breathes with it
+      const breath =
+        1 +
+        FIRE_FLICKER *
+          (0.5 * Math.sin(t * 2.3) + 0.3 * Math.sin(t * 5.9 + 1.3) + 0.2 * Math.sin(t * 11.7 + 0.4));
+      fire.intensity = FIRE_INTENSITY * breath;
+      bakedFire.value = breath;
       for (let i = 0; i < MOTES; i++) {
         const s = moteSeeds[i];
         if (!s) continue;
