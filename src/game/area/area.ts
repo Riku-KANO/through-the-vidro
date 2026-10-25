@@ -44,7 +44,8 @@ export interface FootingDecl {
 export interface RoomDecl {
   readonly id: string;
   readonly pedestals: readonly PedestalDecl[];
-  readonly drop: DropDecl;
+  /** Its light drop (a room without one only lends its pedestals: the S-36 1-room options of the session's tests). */
+  readonly drop?: DropDecl;
   readonly surface?: readonly SurfaceDecl[];
   readonly footing?: readonly FootingDecl[];
   /**
@@ -114,13 +115,13 @@ export function surfaceOf(areas: readonly AreaDecl[]): FootingSegment[] {
 export function dropsOf(areas: readonly AreaDecl[]): PlacedDrop[] {
   const out: PlacedDrop[] = [];
   for (const a of areas)
-    for (const r of a.rooms) out.push({ id: r.drop.id, area: a.id, room: r.id, at: r.drop.at });
+    for (const r of a.rooms) if (r.drop) out.push({ id: r.drop.id, area: a.id, room: r.id, at: r.drop.at });
   return out;
 }
 
 /** The room whose drop has this id (null for none). */
 export function roomOfDrop(areas: readonly AreaDecl[], dropId: string): RoomDecl | null {
-  for (const a of areas) for (const r of a.rooms) if (r.drop.id === dropId) return r;
+  for (const a of areas) for (const r of a.rooms) if (r.drop?.id === dropId) return r;
   return null;
 }
 
@@ -147,10 +148,11 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
     for (const r of a.rooms) {
       once('room', r.id);
       for (const p of r.pedestals) once('pedestal', p.id);
-      once('drop', r.drop.id);
+      if (r.drop) once('drop', r.drop.id);
       for (const w of r.surface ?? []) once('surface', w.id);
       for (const f of r.footing ?? []) once('footing', f.id);
       if (r.settle) settling++;
+      if (!r.drop) continue;
       const [x, y, z] = r.drop.at;
       const inSome = r.pedestals.some(
         (p) => Math.hypot(x - p.orb[0], y - p.orb[1], z - p.orb[2]) <= reach + 1e-9,

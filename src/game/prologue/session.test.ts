@@ -3,9 +3,11 @@ import { splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
 import type { SettleSweep } from '../../layers/settle';
 import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
+import { AREA1, ROOM1_PEDESTAL } from '../area1/layout';
 import { PEEK_FOV_DELTA_DEG, PEEK_SECONDS, peekFovOffset, peekMoveSpeedMultiplier } from '../orb/peek';
 import { combineModifiers } from '../player/motion';
 import type { PrologueEvent } from './events';
+import { MEMBRANE, PEDESTAL_ID, PEDESTAL_ORB, PROLOGUE_AREA } from './layout';
 import {
   CALL_FALL_SECONDS,
   CALL_RISE_SECONDS,
@@ -494,6 +496,40 @@ describe('S-35: the session’s film and the vidro’s call (そのとき台座�
     expect(s.film).toBe(0);
     expect(s.call).toBe(0);
     expect(s.holdsAtMembrane(AT_FILM[2])).toBe(false);
+  });
+});
+
+describe('S-36: the film never shuts you off from the vidro left on a pedestal down in the town (原則3: 罰がない)', () => {
+  it('judged purely: it holds only while the vidro stands behind the film (on the workshop’s side, z greater than its)', () => {
+    expect(membraneHolds('pedestal', AT_FILM[2], FILM.z, FILM.z + 5)).toBe(true);
+    expect(membraneHolds('pedestal', AT_FILM[2], FILM.z, FILM.z - 100)).toBe(false);
+    expect(membraneHolds('pedestal', PAST[2], FILM.z, FILM.z - 100)).toBe(false);
+    expect(vidroCalls('pedestal', AT_FILM[2], FILM, true, true, false, FILM.z - 100)).toBe(false);
+  });
+
+  it('the session: the vidro on エリア1’s pedestal after the close — the film stays down, holds nobody, calls and whispers not', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1], membrane: MEMBRANE });
+    s.holdFinale(FINALE_SECONDS + 1);
+    const hints: HintEvent[] = [];
+    s.hintEvents.on((e) => hints.push(e));
+    const at: Vec3 = [ROOM1_PEDESTAL.base[0] - 0.6, ROOM1_PEDESTAL.base[1], ROOM1_PEDESTAL.base[2] - 1];
+    expect(s.interact({ kind: 'pedestal', id: ROOM1_PEDESTAL.id }, at)).toBe('place');
+    const atFilm: Vec3 = [0.2, 0, MEMBRANE.z + 0.3];
+    for (let t = 0; t < 3; t += DT) s.step(DT, { wantPeek: false, feet: atFilm, pushing: true });
+    expect(s.holdsAtMembrane(atFilm[2])).toBe(false);
+    expect(s.holdsAtMembrane(MEMBRANE.z + 3)).toBe(false);
+    expect(s.film).toBe(0);
+    expect(s.call).toBe(0);
+    expect(hints).toEqual([]);
+    // on the prologue's pedestal (behind the film) it holds as before
+    expect(s.interact({ kind: 'pedestal', id: ROOM1_PEDESTAL.id }, at)).toBe('pickup');
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    expect(
+      s.interact({ kind: 'pedestal', id: PEDESTAL_ID }, [PEDESTAL_ORB[0] + 0.6, 0, PEDESTAL_ORB[2] + 1]),
+    ).toBe('place');
+    for (let t = 0; t < 1; t += DT) s.step(DT, { wantPeek: false, feet: atFilm, pushing: true });
+    expect(s.holdsAtMembrane(atFilm[2])).toBe(true);
+    expect(s.film).toBe(1);
   });
 });
 

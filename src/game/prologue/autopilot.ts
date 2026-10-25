@@ -6,6 +6,8 @@ import {
   AREA1_SLOPE,
   AREA1_STREET,
   area1SlopeHeight,
+  eastOf,
+  eastX,
   ROOM1_ALLEY,
   ROOM1_DROP,
   ROOM1_PEDESTAL,
@@ -104,7 +106,6 @@ const SCRIPT: Step[] = [
     })(),
     seconds: 1.2,
   },
-  ...area1Script(),
 ];
 
 /** S-36: エリア1, from the central plaza's east gate to 部屋1's drop and back out of the alley. */
@@ -115,7 +116,8 @@ function area1Script(): Step[] {
     {
       kind: 'walk',
       name: 'walk-road',
-      to: [AREA1_PLAZA.center[0] - 4, AREA1_PLAZA.center[2]],
+      // 4 m short of the entrance plaza's centre, along the east
+      to: [eastX(eastOf(AREA1_PLAZA.center[0]) - 4), AREA1_PLAZA.center[2]],
       within: 0.6,
       sprint: true,
     },
@@ -160,17 +162,28 @@ const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 
 export class Autopilot {
   private index = 0;
+  /** The script played: the prologue to the central plaza's east gate, and (extendToArea1) on into エリア1. */
+  private script: readonly Step[] = SCRIPT;
+
+  /**
+   * S-36: play on past the east gate, along the road into the morning to 部屋1's drop and back out of the alley (?autoplay=1
+   * with &autoplayTo=area1; the room calls it before the first step). The script alone ends at the east gate as it did, so
+   * the sensors that time it (S-38) are as they were.
+   */
+  extendToArea1(): void {
+    if (this.index === 0 && this.script === SCRIPT) this.script = [...SCRIPT, ...area1Script()];
+  }
   private elapsed = 0;
   private stillFor = 0;
   private reached = false;
   private pressed = false;
 
   get current(): string {
-    return SCRIPT[this.index]?.name ?? 'done';
+    return this.script[this.index]?.name ?? 'done';
   }
 
   get done(): boolean {
-    return this.index >= SCRIPT.length;
+    return this.index >= this.script.length;
   }
 
   step(dt: number, s: PilotState): PilotOrder {
@@ -179,7 +192,7 @@ export class Autopilot {
       peek: false,
       interact: false,
     };
-    const step = SCRIPT[this.index];
+    const step = this.script[this.index];
     if (!step) return order;
     this.elapsed += dt;
     const eye: Vec3 = [s.feet[0], s.feet[1] + EYE, s.feet[2]];

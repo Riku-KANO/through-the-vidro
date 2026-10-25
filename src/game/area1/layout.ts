@@ -1,14 +1,17 @@
 import type { Vec3 } from '../../layers/footing';
 import type { AreaDecl, PedestalDecl, RoomDecl, SurfaceDecl } from '../area';
+import { COMPASS } from '../area/compass';
 
 /**
  * エリア1「泡の工房街」 (進行構造とエリア設計: 泡が連なる住居群と坂道、朝; S-36), its way in and its first room. Plain data shared
  * by the drawing (art.ts), the colliders (physics.ts), the game's session (AREA1) and the tests, so what is drawn is what
  * is walked on (空間の可読性と導線 4). Shapes are 仮: grey boxes from code (泡と曲面と真鍮の枠), Blender takes them over later.
  *
- * Frame and compass are the town's (prologue/layout.ts COMPASS, S-39): east is +X (the side of the dawn, 朝), north +Z.
- * This file imports nothing from the prologue (prologue/layout.ts builds its spawns and its east road from it), so the few
- * numbers of the central plaza it hangs off are mirrored in TOWN, and the unit test checks they agree.
+ * Frame and compass are the town's (area/compass.ts COMPASS, S-39): east is +X (the side of the dawn, 朝), north +Z. Every
+ * east–west position is written as metres east of the central plaza's centre and placed along COMPASS (eastX, xSpan), so
+ * turning the compass turns エリア1 with the town (AGENTS.md). This file imports nothing from the prologue (prologue/layout.ts
+ * builds its spawns and its east road from it), so the few numbers of the central plaza it hangs off are mirrored in TOWN,
+ * and the unit test checks they agree.
  *
  *   中央広場 ─(東の門)── 東の道 約 60m ──▶ 入口の広場 ──▶ 坂の下の通り ──▶ 坂（南へ上る、S-40 で頂へ）
  *                                                            │
@@ -25,13 +28,32 @@ export const TOWN = { center: [0, -12, -125.6] as Vec3, radius: 25 } as const;
 /** The floor of the town where エリア1 starts: the central plaza's, its road, the entrance plaza, the street and the alley. */
 export const AREA1_Y = TOWN.center[1];
 
+/** East along x (COMPASS: +1, or −1 were the compass turned round). */
+const EAST = COMPASS.east[0];
+/** x of the point `d` metres east of the central plaza's centre. */
+export function eastX(d: number): number {
+  return TOWN.center[0] + EAST * d;
+}
+/** Metres east of the central plaza's centre of an x (eastX's inverse). */
+export function eastOf(x: number): number {
+  return (x - TOWN.center[0]) * EAST;
+}
+/** The x span between two distances east, lower first whichever way east points. */
+function xSpan(d0: number, d1: number): { minX: number; maxX: number } {
+  const a = eastX(d0);
+  const b = eastX(d1);
+  return { minX: Math.min(a, b), maxX: Math.max(a, b) };
+}
+
 /**
  * 東の道 (S-35 the first metres, S-36 all of it): from the central plaza's east gate on its rim to the entrance plaza's rim,
  * about 60 m (街の配置: 各エリアの入口の広場まで約 60m), as wide as the slope down from the workshop (prologue/layout.ts EAST_ROAD).
  */
 export const AREA1_ROAD = {
-  fromX: TOWN.center[0] + TOWN.radius,
-  toX: 85,
+  /** x where it leaves the central plaza's rim, and where it meets the entrance plaza's (`length` metres east). */
+  fromX: eastX(TOWN.radius),
+  toX: eastX(85),
+  length: 85 - TOWN.radius,
   z: TOWN.center[2],
   halfWidth: 1.4,
 } as const;
@@ -41,11 +63,12 @@ export const AREA1_ROAD = {
  * 夜明け前 to エリア1's 朝 — none of it before `fromX` (a few metres past the gate), all of it from `toX` (a few metres before the
  * entrance plaza). By where you stand only: walk back and it is before dawn again (no switch, no black screen).
  */
-export const DAY = { fromX: AREA1_ROAD.fromX + 6, toX: AREA1_ROAD.toX - 6 } as const;
+export const DAY = { fromX: eastX(TOWN.radius + 6), toX: eastX(85 - 6) } as const;
 
 /** 0 (夜明け前) … 1 (朝) where you stand at x, eased (遷移のルール5: ゆっくり始まって粘りながら止まる). */
 export function daylightAt(x: number): number {
-  const t = Math.min(1, Math.max(0, (x - DAY.fromX) / (DAY.toX - DAY.fromX)));
+  const from = eastOf(DAY.fromX);
+  const t = Math.min(1, Math.max(0, (eastOf(x) - from) / (eastOf(DAY.toX) - from)));
   return t * t * (3 - 2 * t);
 }
 
@@ -54,13 +77,16 @@ export function daylightAt(x: number): number {
  * to the west (the road) and to the east (the street on to the slope). The houses of the street stand round it.
  */
 export const AREA1_PLAZA = {
-  center: [AREA1_ROAD.toX + 11, AREA1_Y, TOWN.center[2]] as Vec3,
+  center: [eastX(85 + 11), AREA1_Y, TOWN.center[2]] as Vec3,
   radius: 11,
 } as const;
 /** The rim (仮, the central plaza's PLAZA_RIM): rail height, thickness, the half width of an opening along it. */
 export const AREA1_RIM = { height: 1.0, thickness: 0.2, openingHalf: 1.75 } as const;
-/** Angles (radians from +X toward +Z) of the rim's openings: the street (east) and the road (west). */
-export const AREA1_RIM_OPENINGS: readonly number[] = [0, Math.PI];
+/** Angles (radians from +X toward +Z) of the rim's openings: the street (east) and the road (west), along COMPASS. */
+export const AREA1_RIM_OPENINGS: readonly number[] = [COMPASS.east, COMPASS.west].map((d) => {
+  const a = Math.atan2(d[1], d[0]);
+  return a < 0 ? a + 2 * Math.PI : a;
+});
 
 /** The rim's balustrade as arcs between its openings (from < to, radians from +X toward +Z). */
 export function area1RimArcs(): { from: number; to: number }[] {
@@ -74,11 +100,11 @@ export function area1RimArcs(): { from: number; to: number }[] {
 
 /**
  * 坂の下の通り: from the entrance plaza's east opening on east between the houses, to where the slope turns south up the hill.
- * Level (the foot of the slope). `fromX` runs a little in under the plaza's rim (no seam to catch on).
+ * Level (the foot of the slope). It starts a little in under the plaza's rim (no seam to catch on); `endX` is its east end.
  */
 export const AREA1_STREET = {
-  fromX: AREA1_PLAZA.center[0] + AREA1_PLAZA.radius - 0.6,
-  toX: 123,
+  ...xSpan(85 + 11 + 11 - 0.6, 123),
+  endX: eastX(123),
   z: TOWN.center[2],
   halfWidth: 1.6,
 } as const;
@@ -98,12 +124,12 @@ export const STREET_SOUTH_Z = AREA1_STREET.z - AREA1_STREET.halfWidth;
  */
 
 /** The alley (its floor, x and z): from the street's north edge to the house at its end. */
-export const ROOM1_ALLEY = { minX: 112.7, maxX: 115.3, minZ: STREET_NORTH_Z, maxZ: -117.0 } as const;
+export const ROOM1_ALLEY = { ...xSpan(112.7, 115.3), minZ: STREET_NORTH_Z, maxZ: -117.0 } as const;
 /** 台座: on the alley's left as you go in (as the prologue's at its dead end), 1.2 m in. Its orb at the prologue's height. */
 export const ROOM1_PEDESTAL: PedestalDecl = {
   id: 'area1-alley',
-  base: [114.7, AREA1_Y, -122.8],
-  orb: [114.7, AREA1_Y + 1.05, -122.8],
+  base: [eastX(114.7), AREA1_Y, -122.8],
+  orb: [eastX(114.7), AREA1_Y + 1.05, -122.8],
 };
 /** 崩れた壁 (表にだけあるもの): wall to wall across the alley, taller than the body (no seeing over it, no climbing it). */
 export const ROOM1_WALL: SurfaceDecl = {
@@ -114,7 +140,7 @@ export const ROOM1_WALL: SurfaceDecl = {
   },
 };
 /** 光の雫 (裏の層にしかない): behind the wall, a little right of the alley's middle. */
-export const ROOM1_DROP = { id: 'area1-room1', at: [113.8, AREA1_Y + 1.2, -119.4] as Vec3 } as const;
+export const ROOM1_DROP = { id: 'area1-room1', at: [eastX(113.8), AREA1_Y + 1.2, -119.4] as Vec3 } as const;
 
 /** 部屋1 as the game's session plays it (game/area). */
 export const ROOM1: RoomDecl = {
@@ -132,7 +158,7 @@ export const AREA1: AreaDecl = { id: 'area1', rooms: [ROOM1] };
  * workshop street's chimney stands (AREA1_CHIMNEY). On a cosine (level where it leaves the street); `rise` metres over it.
  */
 export const AREA1_SLOPE = {
-  x: 121,
+  x: eastX(121),
   halfWidth: AREA1_STREET.halfWidth,
   fromZ: STREET_SOUTH_Z,
   toZ: -158,
@@ -162,14 +188,14 @@ export const AREA1_GATE = { z: -134.5, halfWidth: AREA1_SLOPE.halfWidth, height:
  * from the entrance plaza it stands up the hill (area1/layout.test.ts). `foot` on the summit, `top` above the central
  * plaza's floor.
  */
-export const AREA1_CHIMNEY = { foot: [135, AREA1_Y + 12, -158] as Vec3, top: 34 } as const;
+export const AREA1_CHIMNEY = { foot: [eastX(135), AREA1_Y + 12, -158] as Vec3, top: 34 } as const;
 
 /**
  * The houses of the workshop street round the entrance plaza, along the street and the alley and up the slope (仮: grey
  * boxes with rounded edges, their roofs bubbles; 形のルール: 泡の集合 when Blender makes them). A box on x and z, standing
  * from below the floor (down into the mist) to `height` above AREA1_Y. `collide`: it bounds a walkable floor and stops
- * the body (its collider is the same rounded box: 当たり判定は見た目に正直に). `zone`: which instanced mesh draws it (区域ごと
- * に InstancedMesh を分ける, AGENTS.md S-35), so what is out of view is left out.
+ * the body (its collider is the same rounded box: 当たり判定は見た目に正直に). `zone`: which mesh draws it (区域ごとに分けて
+ * 描く, AGENTS.md S-35: one merged mesh per zone), so what is out of view is left out.
  */
 export interface House {
   minX: number;
@@ -181,37 +207,44 @@ export interface House {
   zone: 'plaza' | 'street' | 'slope';
 }
 
-/** Rounding of a house's edges (its collider's too). */
-export const HOUSE_ROUND = 0.25;
+/** Rounding of a house's edges (its collider's too; 形のルール: 角を作らない). */
+export const HOUSE_ROUND = 0.4;
 
+/** A house between two distances east (e0, e1) and two z. */
 const house = (
   zone: House['zone'],
-  minX: number,
-  maxX: number,
+  e0: number,
+  e1: number,
   minZ: number,
   maxZ: number,
   height: number,
   collide = true,
-): House => ({ minX, maxX, minZ, maxZ, height, collide, zone });
+): House => ({ ...xSpan(e0, e1), minZ, maxZ, height, collide, zone });
+
+/** The slope's edges (metres east): its west side and its east side. */
+const SLOPE_W = 121 - 1.6;
+const SLOPE_E = 121 + 1.6;
 
 export const AREA1_HOUSES: readonly House[] = [
   // the street's north side: west of the alley, east of it (the alley's walls), on to the street's end; the house closing
   // the alley at its end
-  house('street', 106.9, ROOM1_ALLEY.minX, STREET_NORTH_Z, -115.5, 4.2),
-  house('street', ROOM1_ALLEY.maxX, 120.6, STREET_NORTH_Z, -115.5, 4.8),
+  house('street', 106.9, 112.7, STREET_NORTH_Z, -115.5, 4.2),
+  house('street', 115.3, 120.6, STREET_NORTH_Z, -115.5, 4.8),
   house('street', 120.6, 127.0, STREET_NORTH_Z, -118.0, 3.8),
-  house('street', ROOM1_ALLEY.minX - 0.6, ROOM1_ALLEY.maxX + 0.6, ROOM1_ALLEY.maxZ, -113.0, 5.4),
+  house('street', 112.1, 115.9, ROOM1_ALLEY.maxZ, -113.0, 5.4),
   // the street's south side up to the slope, the corner past it, and the house closing the street's east end
   house('street', 106.9, 113.2, -133.0, STREET_SOUTH_Z, 3.6),
-  house('street', 113.2, AREA1_SLOPE.x - AREA1_SLOPE.halfWidth, -133.0, STREET_SOUTH_Z, 4.6),
-  house('street', AREA1_SLOPE.x + AREA1_SLOPE.halfWidth, 127.0, -133.0, STREET_SOUTH_Z, 4.4),
-  house('street', AREA1_STREET.toX, 127.0, STREET_SOUTH_Z, STREET_NORTH_Z, 4.0),
+  house('street', 113.2, SLOPE_W, -133.0, STREET_SOUTH_Z, 4.6),
+  house('street', SLOPE_E, 127.0, -133.0, STREET_SOUTH_Z, 4.4),
+  house('street', 123, 127.0, STREET_SOUTH_Z, STREET_NORTH_Z, 4.0),
   // up the slope on both sides, to the gate and a little past it
-  house('slope', 114.5, AREA1_SLOPE.x - AREA1_SLOPE.halfWidth, -140.5, -133.0, 6.4),
-  house('slope', AREA1_SLOPE.x + AREA1_SLOPE.halfWidth, 128.5, -140.5, -133.0, 6.0),
-  // beyond the gate, the street climbing on (seen through the bars; never reached until S-40)
-  house('slope', 113.5, AREA1_SLOPE.x - AREA1_SLOPE.halfWidth - 0.4, -148.0, -141.0, 9.0, false),
-  house('slope', AREA1_SLOPE.x + AREA1_SLOPE.halfWidth + 0.4, 129.0, -149.0, -141.0, 9.4, false),
+  house('slope', 114.5, SLOPE_W, -140.5, -133.0, 6.4),
+  house('slope', SLOPE_E, 128.5, -140.5, -133.0, 6.0),
+  // beyond the gate, the street climbing on toward the summit (seen through the bars; never reached until S-40)
+  house('slope', 113.5, SLOPE_W - 0.4, -148.0, -141.0, 9.0, false),
+  house('slope', SLOPE_E + 0.4, 129.0, -149.0, -141.0, 9.4, false),
+  house('slope', 114.0, SLOPE_W - 0.6, -156.0, -148.6, 12.0, false),
+  house('slope', SLOPE_E + 0.6, 128.0, -157.0, -149.6, 12.6, false),
   // round the entrance plaza, outside its rim (the balustrade stops the body first), leaving the road's and the street's
   // ways open
   house('plaza', 88.0, 95.0, -144.0, -138.0, 4.8, false),
@@ -226,12 +259,12 @@ export const AREA1_HOUSES: readonly House[] = [
 
 /** The street lamps that light, one after the other, toward the next room once 部屋1's drop is taken (次の部屋の方向が見える). */
 export const NEXT_LAMPS: readonly Vec3[] = [
-  // on the house at the alley's mouth, hung out over the street
-  [ROOM1_ALLEY.maxX + 0.3, AREA1_Y + 2.3, STREET_NORTH_Z - 0.25],
+  // on the house at the alley's mouth (east of it), hung out over the street
+  [eastX(115.3 + 0.45), AREA1_Y + 2.3, STREET_NORTH_Z - 0.3],
   // on the corner where the slope turns off the street, over the street
-  [AREA1_SLOPE.x - AREA1_SLOPE.halfWidth - 0.3, AREA1_Y + 2.3, STREET_SOUTH_Z + 0.25],
+  [eastX(SLOPE_W - 0.45), AREA1_Y + 2.3, STREET_SOUTH_Z + 0.3],
   // up the slope, on the house along its east side
-  [AREA1_SLOPE.x + AREA1_SLOPE.halfWidth - 0.25, area1SlopeHeight(-131) + 2.3, -131],
+  [eastX(SLOPE_E - 0.3), area1SlopeHeight(-131) + 2.3, -131],
   // the shut gate's keystone
   [AREA1_SLOPE.x, area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height + 0.17, AREA1_GATE.z],
 ];
@@ -247,16 +280,16 @@ export const MOTES_TO_ROOM: readonly [
   readonly [number, number],
   readonly [number, number],
 ] = [
-  [AREA1_PLAZA.center[0] - 4, AREA1_PLAZA.center[2]],
-  [ROOM1_ALLEY.minX - 1, AREA1_STREET.z - 0.4],
-  [(ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2, ROOM1_PEDESTAL.base[2] + 0.4],
+  [eastX(85 + 11 - 4), AREA1_PLAZA.center[2]],
+  [eastX(112.7 - 1), AREA1_STREET.z - 0.4],
+  [eastX(114), ROOM1_PEDESTAL.base[2] + 0.4],
 ];
 export const MOTES_TO_NEXT: readonly [
   readonly [number, number],
   readonly [number, number],
   readonly [number, number],
 ] = [
-  [(ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2, STREET_NORTH_Z + 0.4],
+  [eastX(114), STREET_NORTH_Z + 0.4],
   [AREA1_SLOPE.x, AREA1_STREET.z],
   [AREA1_SLOPE.x, AREA1_GATE.z + 0.6],
 ];
@@ -272,7 +305,7 @@ export const AREA1_FLOOR_ZONES = [
   {
     name: 'area1-street',
     material: 'stone' as const,
-    box: { minX: AREA1_STREET.fromX, maxX: AREA1_STREET.toX, minZ: STREET_SOUTH_Z, maxZ: STREET_NORTH_Z },
+    box: { minX: AREA1_STREET.minX, maxX: AREA1_STREET.maxX, minZ: STREET_SOUTH_Z, maxZ: STREET_NORTH_Z },
   },
   {
     name: 'area1-alley',
@@ -298,7 +331,7 @@ export const AREA1_FLOOR_ZONES = [
 export function area1Ground(x: number, z: number): number | null {
   const [cx, , cz] = AREA1_PLAZA.center;
   if (Math.hypot(x - cx, z - cz) <= AREA1_PLAZA.radius + 0.3) return AREA1_Y;
-  if (x >= AREA1_STREET.fromX && x <= AREA1_STREET.toX && z >= STREET_SOUTH_Z && z <= STREET_NORTH_Z)
+  if (x >= AREA1_STREET.minX && x <= AREA1_STREET.maxX && z >= STREET_SOUTH_Z && z <= STREET_NORTH_Z)
     return AREA1_Y;
   if (x >= ROOM1_ALLEY.minX && x <= ROOM1_ALLEY.maxX && z >= ROOM1_ALLEY.minZ && z <= ROOM1_ALLEY.maxZ)
     return AREA1_Y;
@@ -313,9 +346,9 @@ export function area1Ground(x: number, z: number): number | null {
  * through the grey houses).
  */
 export const AREA1_KEEP_OUT: readonly { minX: number; maxX: number; minZ: number; maxZ: number }[] = [
-  { minX: 60, maxX: 86, minZ: -131, maxZ: -120 },
-  { minX: 78, maxX: 131, minZ: -150, maxZ: -106 },
-  { minX: 112, maxX: 131, minZ: -162, maxZ: -126 },
+  { ...xSpan(60, 86), minZ: -131, maxZ: -120 },
+  { ...xSpan(78, 131), minZ: -150, maxZ: -106 },
+  { ...xSpan(112, 131), minZ: -162, maxZ: -126 },
 ];
 
 /**
@@ -325,11 +358,12 @@ export const AREA1_KEEP_OUT: readonly { minX: number; maxX: number; minZ: number
 export const AREA1_SPAWNS = {
   'area1-road': {
     feet: [(DAY.fromX + DAY.toX) / 2, AREA1_Y, AREA1_ROAD.z] as Vec3,
-    yaw: -Math.PI / 2,
+    // looking east, along the road (yaw: 0 looks down −Z, positive turns left)
+    yaw: Math.atan2(-COMPASS.east[0], -COMPASS.east[1]),
     pitch: 0.1,
   },
   'area1-plaza': (() => {
-    const feet: Vec3 = [AREA1_PLAZA.center[0] - 4, AREA1_Y, AREA1_PLAZA.center[2] + 4];
+    const feet: Vec3 = [eastX(85 + 11 - 4), AREA1_Y, AREA1_PLAZA.center[2] + 4];
     const top: Vec3 = [AREA1_CHIMNEY.foot[0], TOWN.center[1] + AREA1_CHIMNEY.top - 9, AREA1_CHIMNEY.foot[2]];
     const dx = top[0] - feet[0];
     const dz = top[2] - feet[2];
@@ -340,17 +374,13 @@ export const AREA1_SPAWNS = {
     };
   })(),
   'area1-alley': {
-    feet: [(ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2 - 0.1, AREA1_Y, AREA1_STREET.z + 0.4] as Vec3,
+    feet: [eastX(113.9), AREA1_Y, AREA1_STREET.z + 0.4] as Vec3,
     yaw: Math.PI,
     pitch: -0.1,
   },
   /** 部屋1, before the crumbled wall, the vidro in hand, looking at where the drop hovers behind it (覗けば見える). */
   'area1-wall': (() => {
-    const feet: Vec3 = [
-      (ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2 - 0.4,
-      AREA1_Y,
-      ROOM1_WALL.box.min[2] - 1.0,
-    ];
+    const feet: Vec3 = [eastX(113.6), AREA1_Y, ROOM1_WALL.box.min[2] - 1.0];
     const [dx, dy, dz] = [
       ROOM1_DROP.at[0] - feet[0],
       ROOM1_DROP.at[1] - (feet[1] + 1.6),
@@ -359,7 +389,7 @@ export const AREA1_SPAWNS = {
     return { feet, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
   })(),
   'area1-gate': {
-    feet: [AREA1_SLOPE.x - 0.3, area1SlopeHeight(AREA1_GATE.z + 4.5), AREA1_GATE.z + 4.5] as Vec3,
+    feet: [eastX(121 - 0.3), area1SlopeHeight(AREA1_GATE.z + 4.5), AREA1_GATE.z + 4.5] as Vec3,
     yaw: 0,
     pitch: 0.16,
   },

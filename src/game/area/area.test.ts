@@ -108,7 +108,7 @@ describe('rooms declared as data (S-36 エリアの仕組み)', () => {
       bridgeFooting().map((s) => [s.id, s.min, s.max]),
     );
     const [room] = PROLOGUE_AREA.rooms;
-    expect(room?.drop.at).toEqual(DROP);
+    expect(room?.drop?.at).toEqual(DROP);
     expect(room?.settle).toBe(BRIDGE_SETTLE);
     expect(checkAreas([PROLOGUE_AREA], MAIN_ORB_RADIUS)).toEqual([]);
   });

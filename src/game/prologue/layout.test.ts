@@ -620,7 +620,7 @@ describe('S-35: the central plaza, its broken lighthouse and its three gates', (
     );
     // it ends where the entrance plaza begins: no railing across it any more (S-35's 仮の行き止まり is gone)
     expect(EAST_ROAD_END_X).toBeCloseTo(AREA1_ROAD.toX, 9);
-    expect(AREA1_PLAZA.center[0] - AREA1_PLAZA.radius).toBeCloseTo(EAST_ROAD_END_X, 9);
+    expect(AREA1_PLAZA.center[0] - COMPASS.east[0] * AREA1_PLAZA.radius).toBeCloseTo(EAST_ROAD_END_X, 9);
     // from the plaza the chimney rises over the open east gate
     const [gx, gz] = plazaGateAt(COMPASS.east);
     const toGate = Math.atan2(gz - PLAZA.center[2], gx - PLAZA.center[0]);

@@ -22,6 +22,7 @@ import type { LayerField } from '../../layers/field';
 import type { LayerKind } from '../../layers/layers';
 import type { MeshData } from '../player/walk-lab-field';
 import { stoneMaterial } from '../prologue/room-art';
+import { sweptSlab } from '../prologue/slope';
 import {
   AREA1_GATE,
   AREA1_HOUSES,
@@ -32,6 +33,7 @@ import {
   AREA1_Y,
   area1RimArcs,
   area1SlopeHeight,
+  eastX,
   HOUSE_ROUND,
   type House,
   MOTES_TO_NEXT,
@@ -89,13 +91,26 @@ export interface Area1Art {
 /** 仮: the lamps' milky glow (a light source: blooms a little), dimmer than at night (it is morning). */
 const LAMP_GLOW = { color: 0xffc896, intensity: 0.9 } as const;
 /** 仮: the lamps toward the next room once lit (brighter, the way on), and the gate's keystone among them. */
-const NEXT_GLOW = { color: 0xffc58a, intensity: 2.2 } as const;
+const NEXT_GLOW = { color: 0xffc58a, intensity: 3.2 } as const;
 /** 仮: grey of the houses (灰色の箱) and of the crumbled wall (a little warmer, broken stone). Linear. */
 const GREY = new THREE.Color(0.5, 0.52, 0.55);
 const RUBBLE = new THREE.Color(0.56, 0.55, 0.53);
-/** Motes: on the way to the room, and the faint glimmer of the back layer beyond the gate (ルール9: 光の揺らぎ). */
+/** Motes: on the way to the room, and the glimmer of the back layer beyond the gate (ルール9: 光の揺らぎ). */
 const MOTES = 36;
-const GLIMMERS = 14;
+const GLIMMERS = 26;
+/**
+ * 仮 (S-36): the halo of 部屋1's drop — a ball of warm light (linear) round its core, so that its light reads through the
+ * vidro against the morning's grey (the core and the shell are the prologue's). Its middle crosses the bloom's threshold a
+ * little (光の雫は滲む: 画面の仕上げ).
+ */
+const DROP_HALO = { radius: 0.34, color: [1.0, 0.78, 0.5] as const, strength: 0.95 };
+/**
+ * 仮 (S-36): a dark doorway in the house that closes the alley, right behind where the drop hovers: the drop's light is seen
+ * against shade (コントラスト), through the vidro as well (the house is on both layers). Its width and height.
+ */
+const DOORWAY = { width: 1.5, height: 2.3, shade: new THREE.Color(0.045, 0.05, 0.06) };
+/** How far up the slope past the shut gate its stone is drawn (z): it is seen climbing on through the bars (ルール6・9). */
+const BEYOND_GATE_Z = -156;
 
 function rng(seed: number): () => number {
   let s = seed >>> 0;
@@ -197,8 +212,8 @@ export function* buildArea1(
     );
     parts.push(
       bare(
-        new THREE.BoxGeometry(AREA1_STREET.toX - AREA1_STREET.fromX, 6, STREET_NORTH_Z - STREET_SOUTH_Z),
-      ).translate((AREA1_STREET.fromX + AREA1_STREET.toX) / 2, AREA1_Y - 3.002, AREA1_STREET.z),
+        new THREE.BoxGeometry(AREA1_STREET.maxX - AREA1_STREET.minX, 6, STREET_NORTH_Z - STREET_SOUTH_Z),
+      ).translate((AREA1_STREET.minX + AREA1_STREET.maxX) / 2, AREA1_Y - 3.002, AREA1_STREET.z),
     );
     parts.push(
       bare(
@@ -214,6 +229,23 @@ export function* buildArea1(
       ),
     );
     parts.push(meshDataGeometry(area1SlopeDeckShape(6, -0.004)));
+    // past the shut gate the slope climbs on toward the summit, drawn only (no one walks there until S-40)
+    const { x, halfWidth } = AREA1_SLOPE;
+    const z0 = AREA1_GATE.z - 1.0;
+    const z1 = BEYOND_GATE_Z;
+    parts.push(
+      meshDataGeometry(
+        sweptSlab(
+          z0,
+          z1,
+          Math.round((z0 - z1) * 2),
+          x - halfWidth,
+          x + halfWidth,
+          (z) => area1SlopeHeight(z) - 0.006,
+          (z) => area1SlopeHeight(z) - 6,
+        ),
+      ),
+    );
     put(new THREE.Mesh(merged(parts), stone), 'area1-floor');
   }
   yield;
@@ -319,6 +351,30 @@ export function* buildArea1(
   houseMesh('street');
   yield;
   houseMesh('slope');
+  yield;
+
+  // ---- 部屋1: a dark doorway in the house at the alley's end (behind the drop), framed in brass ---------------------------
+  {
+    const shade = keep(
+      new THREE.MeshStandardNodeMaterial({ color: DOORWAY.shade, roughness: 1, metalness: 0 }),
+    );
+    const x = ROOM1_DROP.at[0];
+    const face = ROOM1_ALLEY.maxZ;
+    const g = bare(new RoundedBoxGeometry(DOORWAY.width, DOORWAY.height, 0.06, 2, 0.02));
+    g.translate(x, AREA1_Y + DOORWAY.height / 2, face - 0.02);
+    put(new THREE.Mesh(keep(g), shade), 'area1-doorway');
+    const arch = new THREE.TorusGeometry(DOORWAY.width / 2 + 0.05, 0.035, 8, 32, Math.PI);
+    arch.translate(x, AREA1_Y + DOORWAY.height - DOORWAY.width / 2, face - 0.05);
+    brassParts.push(arch);
+    for (const side of [-1, 1])
+      brassParts.push(
+        new THREE.CylinderGeometry(0.035, 0.035, DOORWAY.height - DOORWAY.width / 2, 8).translate(
+          x + side * (DOORWAY.width / 2 + 0.05),
+          AREA1_Y + (DOORWAY.height - DOORWAY.width / 2) / 2,
+          face - 0.05,
+        ),
+      );
+  }
   yield;
 
   // ---- 部屋1: the crumbled wall (表にだけあるもの), a little rubble at its foot; within its collider's box ------------------
@@ -444,7 +500,7 @@ export function* buildArea1(
 
     // the lamps toward the next room: wall brackets on the houses, the last the gate's keystone
     NEXT_LAMPS.forEach((p, i) => {
-      const g = new THREE.SphereGeometry(i === NEXT_LAMPS.length - 1 ? 0.085 : 0.13, 24, 12).translate(
+      const g = new THREE.SphereGeometry(i === NEXT_LAMPS.length - 1 ? 0.1 : 0.17, 24, 12).translate(
         p[0],
         p[1],
         p[2],
@@ -465,13 +521,33 @@ export function* buildArea1(
   put(new THREE.Mesh(merged(nextGlobes), nextMilk), 'area1-next-lamps');
   yield;
 
-  // ---- 部屋1's light drop (裏の層): the prologue's shape and glass, its own bright core --------------------------------------
+  // ---- 部屋1's light drop (裏の層): the prologue's shape and glass, its own bright core, and a halo of its light — in the
+  // morning's grey the drop alone reads as a dull bead (S-36 review 1 P1-2); its light is what shows through the vidro
   const drop = new THREE.Group();
   {
     const coreMat = keep(new THREE.MeshBasicNodeMaterial());
     coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(focus.drop.mul(0.5).add(1)), 1);
     drop.add(new THREE.Mesh(dropParts.coreGeometry, coreMat));
     drop.add(new THREE.Mesh(dropParts.shellGeometry, dropParts.shellMaterial));
+    // the halo: a ball of warm light added over what is behind, strongest through its middle, gone at its rim and near the eye
+    const haloMat = keep(
+      new THREE.MeshBasicNodeMaterial({
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    haloMat.fog = false;
+    const facing = abs(dot(normalView, positionViewDirection));
+    haloMat.colorNode = vec4(
+      vec3(...DROP_HALO.color).mul(pow(facing, 2.2).mul(DROP_HALO.strength).mul(focus.drop.mul(0.3).add(1))),
+      1,
+    );
+    haloMat.opacityNode = smoothstep(0.4, 1.2, positionView.length());
+    const halo = new THREE.Mesh(keep(new THREE.SphereGeometry(DROP_HALO.radius, 24, 16)), haloMat);
+    halo.name = 'area1-drop-halo';
+    halo.renderOrder = 6;
+    drop.add(halo);
     drop.position.set(...ROOM1_DROP.at);
     put(drop, 'area1-drop', 'back');
   }
@@ -487,12 +563,25 @@ export function* buildArea1(
   moteMat.colorNode = vec4(1.1, 0.8, 0.46, 1);
   moteMat.opacityNode = smoothstep(0.8, 3.0, positionView.length());
   moteMat.fog = false;
-  const motes = new THREE.InstancedMesh(
-    keep(new THREE.IcosahedronGeometry(0.022, 0)),
-    moteMat,
-    MOTES + GLIMMERS,
-  );
-  motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(110, AREA1_Y + 2, -128), 22);
+  // One mesh whose vertices are written every frame, not an InstancedMesh: three r186 writes an InstancedMesh's matrices
+  // into a uniform buffer named after the node (NodeBuffer_<id>), so its shader is new in every render context and
+  // compileAsync (render context of call depth 0) cannot make the scene pass's (call depth 1) — S-36 measured 125 ms on
+  // WebGL2 the first time the scene pass drew them. A plain mesh's shader is the same in both and is compiled ahead.
+  const moteShape = new THREE.IcosahedronGeometry(0.022, 0); // non-indexed: 60 vertices
+  const moteCorner = moteShape.getAttribute('position').array as Float32Array;
+  const moteNormal = moteShape.getAttribute('normal').array as Float32Array;
+  const MOTE_FLOATS = moteCorner.length;
+  const moteXyz = new Float32Array(MOTE_FLOATS * (MOTES + GLIMMERS));
+  const moteNormals = new Float32Array(moteXyz.length);
+  for (let i = 0; i < MOTES + GLIMMERS; i++) moteNormals.set(moteNormal, i * MOTE_FLOATS);
+  moteShape.dispose();
+  const moteGeometry = keep(new THREE.BufferGeometry());
+  const motePosition = new THREE.BufferAttribute(moteXyz, 3).setUsage(THREE.DynamicDrawUsage);
+  moteGeometry.setAttribute('position', motePosition);
+  moteGeometry.setAttribute('normal', new THREE.BufferAttribute(moteNormals, 3));
+  // where they drift, from the road's end to beyond the gate (written once: the vertices move, the sphere stays)
+  moteGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(eastX(110), AREA1_Y + 2, -128), 22);
+  const motes = new THREE.Mesh(moteGeometry, moteMat);
   put(motes, 'area1-motes');
   const seeds = Array.from({ length: MOTES + GLIMMERS }, (_, i) => {
     const r = rng(3600 + i);
@@ -504,19 +593,34 @@ export function* buildArea1(
       wobble: r() * 6,
     };
   });
-  const quad = (path: readonly (readonly [number, number])[], u: number): [number, number] => {
+  /** A point (x, z) of a quadratic curve, `u` 0..1 along it, written into `out` (every frame, for every mote). */
+  const quad = (
+    path: readonly (readonly [number, number])[],
+    u: number,
+    out: [number, number],
+  ): [number, number] => {
     const [a, b, c] = path as [
       readonly [number, number],
       readonly [number, number],
       readonly [number, number],
     ];
     const v = 1 - u;
-    return [v * v * a[0] + 2 * v * u * b[0] + u * u * c[0], v * v * a[1] + 2 * v * u * b[1] + u * u * c[1]];
+    out[0] = v * v * a[0] + 2 * v * u * b[0] + u * u * c[0];
+    out[1] = v * v * a[1] + 2 * v * u * b[1] + u * u * c[1];
+    return out;
   };
-  const m4 = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
+  const toRoom: [number, number] = [0, 0];
+  const toNextAt: [number, number] = [0, 0];
   const pos = new THREE.Vector3();
-  const scl = new THREE.Vector3();
+  /** Writes mote `i` at `pos`, `size` times its shape. */
+  const placeMote = (i: number, size: number): void => {
+    const at = i * MOTE_FLOATS;
+    for (let k = 0; k < MOTE_FLOATS; k += 3) {
+      moteXyz[at + k] = pos.x + size * (moteCorner[k] ?? 0);
+      moteXyz[at + k + 1] = pos.y + size * (moteCorner[k + 1] ?? 0);
+      moteXyz[at + k + 2] = pos.z + size * (moteCorner[k + 2] ?? 0);
+    }
+  };
   yield;
 
   // what is drawn, as boxes (for the room's test of the view before it adds エリア1)
@@ -528,13 +632,13 @@ export function* buildArea1(
     const [cx, , cz] = AREA1_PLAZA.center;
     const r = AREA1_PLAZA.radius + 1;
     box(cx - r, AREA1_Y - 6, cz - r, cx + r, AREA1_Y + 3.2, cz + r);
-    box(AREA1_STREET.fromX, AREA1_Y - 6, STREET_SOUTH_Z, AREA1_STREET.toX, AREA1_Y + 3, STREET_NORTH_Z);
+    box(AREA1_STREET.minX, AREA1_Y - 6, STREET_SOUTH_Z, AREA1_STREET.maxX, AREA1_Y + 3, STREET_NORTH_Z);
     box(ROOM1_ALLEY.minX, AREA1_Y - 6, ROOM1_ALLEY.minZ, ROOM1_ALLEY.maxX, AREA1_Y + 3, ROOM1_ALLEY.maxZ);
     const hw = AREA1_SLOPE.halfWidth;
     box(
       AREA1_SLOPE.x - hw,
       AREA1_Y - 6,
-      AREA1_GATE.z - 8,
+      BEYOND_GATE_Z,
       AREA1_SLOPE.x + hw,
       area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height + 3,
       AREA1_SLOPE.fromZ,
@@ -567,13 +671,13 @@ export function* buildArea1(
         const fade = Math.sin(Math.PI * u);
         if (i < MOTES) {
           // along the way to the room, turning to the way on as the next lamps light
-          const [ax, az] = quad(MOTES_TO_ROOM, u);
-          const [bx, bz] = quad(MOTES_TO_NEXT, u);
+          const [ax, az] = quad(MOTES_TO_ROOM, u, toRoom);
+          const [bx, bz] = quad(MOTES_TO_NEXT, u, toNextAt);
           const x = ax + (bx - ax) * toNext + 0.25 * Math.sin(t * 0.6 + s.wobble);
           const z = az + (bz - az) * toNext + s.side * 0.4;
           const y = Math.max(AREA1_Y, area1SlopeHeight(z)) + s.y + 0.2 * Math.sin(t * 0.8 + s.wobble * 2);
           pos.set(x, y, z);
-          scl.setScalar(0.3 + 0.9 * fade);
+          placeMote(i, 0.3 + 0.9 * fade);
         } else {
           // beyond the gate: a slow glimmer drifting up the slope (行き止まりの理由: 裏の層の気配)
           const z = AREA1_GATE.z - 1 - u * 7;
@@ -582,16 +686,14 @@ export function* buildArea1(
             area1SlopeHeight(z) + 0.5 + s.y * 0.8,
             z,
           );
-          scl.setScalar((0.25 + 0.6 * fade) * (0.7 + 0.3 * Math.sin(t * 1.3 + s.wobble)));
+          placeMote(i, (0.6 + 1.2 * fade) * (0.7 + 0.3 * Math.sin(t * 1.3 + s.wobble)));
         }
-        motes.setMatrixAt(i, m4.compose(pos, q, scl));
       }
-      motes.instanceMatrix.needsUpdate = true;
+      motePosition.needsUpdate = true;
     },
     dispose() {
       root.removeFromParent();
       for (const d of disposables) d.dispose();
-      motes.dispose();
     },
   };
 }

@@ -22,6 +22,8 @@ export interface AreaCount {
 export class DropTally {
   private readonly entries: Entry[];
   private readonly byId = new Map<string, Entry>();
+  /** Every drop, in declaration order (made once). */
+  readonly drops: readonly PlacedDrop[];
 
   constructor(
     areas: readonly AreaDecl[],
@@ -29,11 +31,7 @@ export class DropTally {
   ) {
     this.entries = dropsOf(areas).map((drop) => ({ drop, state: 'waiting' as DropState, elapsed: 0 }));
     for (const e of this.entries) this.byId.set(e.drop.id, e);
-  }
-
-  /** Every drop, in declaration order. */
-  get drops(): readonly PlacedDrop[] {
-    return this.entries.map((e) => e.drop);
+    this.drops = this.entries.map((e) => e.drop);
   }
 
   /** The first drop's id (the prologue's, when its area comes first). */
@@ -79,7 +77,7 @@ export class DropTally {
   }
 
   /** Moves the flights on. Returns the ids of the drops that reached the vidro in this step, in declaration order. */
-  step(dt: number): string[] {
+  step(dt: number): readonly string[] {
     let out: string[] | null = null;
     for (const e of this.entries) {
       if (e.state !== 'flying') continue;
@@ -103,12 +101,11 @@ export class DropTally {
   /** Every area's drops and how many are taken, written into `out` (the probe's object, reused). */
   counts(out: Record<string, AreaCount> = {}): Record<string, AreaCount> {
     for (const e of this.entries) {
-      const c = out[e.drop.area] ?? { drops: 0, taken: 0 };
-      out[e.drop.area] = c;
-    }
-    for (const c of Object.values(out)) {
-      c.drops = 0;
-      c.taken = 0;
+      const c = out[e.drop.area];
+      if (c) {
+        c.drops = 0;
+        c.taken = 0;
+      } else out[e.drop.area] = { drops: 0, taken: 0 };
     }
     for (const e of this.entries) {
       const c = out[e.drop.area] as AreaCount;
@@ -119,4 +116,4 @@ export class DropTally {
   }
 }
 
-const NONE: string[] = [];
+const NONE: readonly string[] = [];

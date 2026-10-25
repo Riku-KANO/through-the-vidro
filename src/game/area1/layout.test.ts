@@ -32,6 +32,8 @@ import {
   area1SlopeHeight,
   DAY,
   daylightAt,
+  eastOf,
+  eastX,
   type House,
   NEXT_LAMPS,
   ROOM1_ALLEY,
@@ -89,17 +91,18 @@ describe('S-36: the road from the central plaza’s east gate to エリア1’s 
   });
 
   it('is about 60 m long (街の配置: 各エリアの入口の広場まで約 60m) and ends where the entrance plaza begins', () => {
-    const length = AREA1_ROAD.toX - AREA1_ROAD.fromX;
+    const length = eastOf(AREA1_ROAD.toX) - eastOf(AREA1_ROAD.fromX);
+    expect(AREA1_ROAD.length).toBeCloseTo(length, 9);
     expect(length).toBeGreaterThan(55);
     expect(length).toBeLessThan(65);
     // the prologue's east road is this road (S-35 its first metres)
     expect(EAST_ROAD.length).toBeCloseTo(length, 9);
     expect(EAST_ROAD.halfWidth).toBe(AREA1_ROAD.halfWidth);
-    expect(AREA1_PLAZA.center[0] - AREA1_PLAZA.radius).toBeCloseTo(AREA1_ROAD.toX, 9);
+    expect(eastOf(AREA1_PLAZA.center[0]) - AREA1_PLAZA.radius).toBeCloseTo(eastOf(AREA1_ROAD.toX), 9);
     expect(AREA1_PLAZA.center[2]).toBe(AREA1_ROAD.z);
     // stone underfoot all the way, and in the plaza
-    for (let x = AREA1_ROAD.fromX + 0.5; x < AREA1_ROAD.toX; x += 5)
-      expect(floorAt(x, AREA1_ROAD.z).material).toBe('stone');
+    for (let d = eastOf(AREA1_ROAD.fromX) + 0.5; d < eastOf(AREA1_ROAD.toX); d += 5)
+      expect(floorAt(eastX(d), AREA1_ROAD.z).material).toBe('stone');
     expect(floorAt(AREA1_PLAZA.center[0], AREA1_PLAZA.center[2])).toEqual({
       zone: 'area1-plaza',
       material: 'stone',
@@ -115,13 +118,13 @@ describe('S-36: the road from the central plaza’s east gate to エリア1’s 
     expect(daylightAt((DAY.fromX + DAY.toX) / 2)).toBeCloseTo(0.5, 9);
     // only ever more toward the east, so walking back it goes back the same way (引き返せば戻る)
     let last = -1;
-    for (let x = AREA1_ROAD.fromX; x <= AREA1_ROAD.toX; x += 0.5) {
-      const d = daylightAt(x);
+    for (let e = eastOf(AREA1_ROAD.fromX); e <= eastOf(AREA1_ROAD.toX); e += 0.5) {
+      const d = daylightAt(eastX(e));
       expect(d).toBeGreaterThanOrEqual(last);
       last = d;
     }
     // the transition takes most of the road (no sudden change: 切り替えはなし)
-    expect(DAY.toX - DAY.fromX).toBeGreaterThan(40);
+    expect(eastOf(DAY.toX) - eastOf(DAY.fromX)).toBeGreaterThan(40);
     // the view on the road stands where the sky is half way
     const road = AREA1_SPAWNS['area1-road'];
     expect(daylightAt(road.feet[0])).toBeGreaterThan(0.3);
@@ -183,8 +186,9 @@ describe('S-36: the entrance plaza (入口の広場)', () => {
       expect(Math.hypot(nx - cx, nz - cz), `house at x ${h.minX}`).toBeGreaterThan(AREA1_PLAZA.radius - 0.2);
       const overlaps = (minX: number, maxX: number, minZ: number, maxZ: number) =>
         h.maxX > minX + 1e-9 && h.minX < maxX - 1e-9 && h.maxZ > minZ + 1e-9 && h.minZ < maxZ - 1e-9;
-      expect(overlaps(AREA1_ROAD.fromX, AREA1_ROAD.toX, AREA1_ROAD.z - 1.4, AREA1_ROAD.z + 1.4)).toBe(false);
-      expect(overlaps(AREA1_STREET.fromX, AREA1_STREET.toX, STREET_SOUTH_Z, STREET_NORTH_Z)).toBe(false);
+      const road = [AREA1_ROAD.fromX, AREA1_ROAD.toX].sort((a, b) => a - b) as [number, number];
+      expect(overlaps(road[0], road[1], AREA1_ROAD.z - 1.4, AREA1_ROAD.z + 1.4)).toBe(false);
+      expect(overlaps(AREA1_STREET.minX, AREA1_STREET.maxX, STREET_SOUTH_Z, STREET_NORTH_Z)).toBe(false);
       expect(overlaps(ROOM1_ALLEY.minX, ROOM1_ALLEY.maxX, ROOM1_ALLEY.minZ, ROOM1_ALLEY.maxZ)).toBe(false);
       expect(
         overlaps(
@@ -264,7 +268,8 @@ describe('S-36: 部屋1「崩れた壁の路地」 — the surface-only wall alo
 
 describe('S-36: the slope’s foot and its shut gate (仮の行き止まり until S-40)', () => {
   it('turns south off the street’s end and climbs gently to the gate, level where it leaves the street', () => {
-    expect(AREA1_SLOPE.x + AREA1_SLOPE.halfWidth).toBeLessThan(AREA1_STREET.toX + 0.01);
+    // its east side short of the street's east end (measured along the east)
+    expect(eastOf(AREA1_SLOPE.x) + AREA1_SLOPE.halfWidth).toBeLessThan(eastOf(AREA1_STREET.endX) + 0.01);
     expect(area1SlopeHeight(AREA1_SLOPE.fromZ)).toBe(AREA1_Y);
     expect(area1SlopeHeight(AREA1_GATE.z)).toBeGreaterThan(AREA1_Y + 0.5);
     let steepest = 0;

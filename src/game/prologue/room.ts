@@ -24,6 +24,7 @@ import {
   AREA1_ROAD,
   area1Ground,
   daylightAt,
+  eastOf,
   NEXT_LAMPS,
   NEXT_LIGHTS,
   ROOM1_ALLEY,
@@ -125,7 +126,7 @@ export interface RoomOptions {
 export type TargetKind = 'bench' | 'pedestal' | 'drop';
 
 /**
- * S-36: エリア1 as the room builds it behind the scenes — waiting (not yet in the central plaza), building (a part a frame),
+ * S-36: エリア1 as the room builds it behind the scenes — waiting (not yet over the slope's brow), building (a part a frame),
  * compiling (its shaders compiled in the background, three's compileAsync: no frame waits on them), built (waiting to be
  * added while it is out of view), warming (its pipelines, one entry a frame, before it is seen), ready.
  */
@@ -342,6 +343,8 @@ const KEYSTONE_LIGHTS = 0.25;
 const MAX_EVENTS = 40;
 /** S-39: the whispers kept on the probe (their times). */
 const MAX_WHISPERS = 16;
+/** S-36: frames of エリア1's building kept on the probe (it may wait a while to be out of view). */
+const MAX_AREA1_FRAMES = 300;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -656,6 +659,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   });
 
   const session = new PrologueSession({ orbStart: opts.orbStart, areas, membrane: MEMBRANE });
+  // S-36: ?autoplay=1&autoplayTo=area1 plays on into エリア1 (to 部屋1's drop; the script alone ends at the east gate)
+  if (ctx.params.get('autoplayTo') === 'area1') opts.autopilot?.extendToArea1();
+  // S-36 dev hold (?area1Drop=taken, with a spawn): 部屋1's drop as if taken just before (the lamps toward the next room light)
+  if (ctx.params.has('spawn') && ctx.params.get('area1Drop') === 'taken')
+    session.holdDropTaken(ROOM1_DROP.id);
   const { pedestals } = session;
   // the morning where the body starts (0 in the workshop and the central plaza: the sky as it was)
   art.setDaylight(daylightAt(SPAWNS[opts.spawn].feet[0]));
@@ -765,18 +773,18 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     point: BENCH_ORB,
     reach: REACH,
   };
-  const pedestalTargets = new Map<string, TargetCandidate<Target>>(
-    Object.entries(pedestals).map(([id, point]) => [
-      id,
-      { target: { kind: 'pedestal', id }, point, reach: REACH },
-    ]),
-  );
-  const dropTargets = new Map<string, TargetCandidate<Target>>(
-    session.dropList.map((d) => [
-      d.id,
-      { target: { kind: 'drop', id: d.id }, point: d.at, reach: DROP_REACH },
-    ]),
-  );
+  const pedestalTargetList: TargetCandidate<Target>[] = Object.entries(pedestals).map(([id, point]) => ({
+    target: { kind: 'pedestal', id },
+    point,
+    reach: REACH,
+  }));
+  const dropTargetList: TargetCandidate<Target>[] = session.dropList.map((d) => ({
+    target: { kind: 'drop', id: d.id },
+    point: d.at,
+    reach: DROP_REACH,
+  }));
+  const pedestalTargets = new Map(pedestalTargetList.map((t) => [t.target.id as string, t]));
+  const dropTargets = new Map(dropTargetList.map((t) => [t.target.id as string, t]));
   /** Whether a room's things are there to act on: the prologue's always, エリア1's once it is in the scene. */
   const roomOf = new Map<string, string>(session.dropList.map((d) => [d.id, d.area]));
   for (const a of areas) for (const r of a.rooms) for (const p of r.pedestals) roomOf.set(p.id, a.id);
@@ -891,9 +899,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     else if (place === 'pedestal') {
       const t = pedestalTargets.get(session.pedestal ?? '');
       if (t) candidates.push(t);
-    } else for (const [id, t] of pedestalTargets) if (present(id)) candidates.push(t);
-    for (const [id, t] of dropTargets)
+    } else for (const t of pedestalTargetList) if (present(t.target.id as string)) candidates.push(t);
+    for (const t of dropTargetList) {
+      const id = t.target.id as string;
       if (present(id) && session.dropStateOf(id) === 'waiting' && dropDrawn(t.point)) candidates.push(t);
+    }
     eye[0] = body.fx;
     eye[1] = body.ey;
     eye[2] = body.fz;
@@ -940,13 +950,18 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
 
   /*
    * S-36 エリア1, built behind the scenes (発案者 2026-10-25: エリアは広場にいる間に裏で組み立てる; 遷移のルール2: 待ち時間を演出の中に
-   * 隠す). Once the body is in the central plaza it is built a part a frame (area1/art.ts buildArea1), then added to the scene
+   * 隠す). Once the body is over the slope's brow, coming down into the town, it is built a part a frame (area1/art.ts
+   * buildArea1) and compiled, ready before the central plaza, then added to the scene
    * (with its colliders and 部屋1's surface-only wall) at a frame its box is out of the camera's view — or at once when you are
    * already on the road to it — then its meshes are drawn uncut by the view one a frame, in the scene pass and the peek image
    * alike (a hair of peek: the composite shows nothing of it), so their pipelines are made before it is seen (S-38).
    */
+  /** False once the room is let go of: a background compile still under way stops at its next step. */
+  let alive = true;
   const a1 = {
     gen: null as Generator<void, Area1Art> | null,
+    /** Frames the warm drew the peek image in (its counter is the peeks': these are taken off it). */
+    peekWarms: 0,
     art: null as Area1Art | null,
     colliders: null as Area1Colliders | null,
     wall: null as SurfaceColliders | null,
@@ -991,7 +1006,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     if (a1.lastFrame !== null) {
       probe.area1.frames++;
       probe.area1.worstMs = Math.max(probe.area1.worstMs, now - a1.lastFrame);
-      probe.area1.frameMs.push(Math.round(now - a1.lastFrame));
+      if (probe.area1.frameMs.length < MAX_AREA1_FRAMES)
+        probe.area1.frameMs.push(Math.round(now - a1.lastFrame));
     }
     a1.lastFrame = now;
     if (st === 'building' && a1.gen) {
@@ -1014,7 +1030,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       );
       const inView = a1.art?.bounds.some((b) => frustum.intersectsBox(b)) ?? false;
       // on the road to it, it is added whatever the view (its floor must be there to walk onto)
-      if (!inView || body.fx > AREA1_ROAD.fromX + 4) addArea1(inView);
+      if (!inView || eastOf(body.fx) > eastOf(AREA1_ROAD.fromX) + 4) addArea1(inView);
     }
   };
   /**
@@ -1059,13 +1075,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       }
     };
     void compileInto(pipeline.backTarget, viewMask('peek'))
-      .then(() => compileInto(scenePassLike, viewMask('main')))
+      .then(() => (alive ? compileInto(scenePassLike, viewMask('main')) : undefined))
       .catch((err: unknown) => {
-        console.error('S-36: エリア1 could not be compiled in the background:', err);
+        if (alive) console.error('S-36: エリア1 could not be compiled in the background:', err);
       })
       .finally(() => {
         scenePassLike.dispose();
-        if (probe.area1.state !== 'compiling') return;
+        if (!alive || probe.area1.state !== 'compiling') return;
         probe.area1.compileSeconds = (performance.now() - started) / 1000;
         probe.area1.state = 'built';
       });
@@ -1223,7 +1239,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       probe.drops = list.map((d) => ({ id: d.id, area: d.area, state: session.dropStateOf(d.id) }));
     for (const d of probe.drops) d.state = session.dropStateOf(d.id);
     probe.areas = session.areaCounts();
-    probe.backPassFrames = pipeline.backPassFrames;
+    probe.backPassFrames = pipeline.backPassFrames - a1.peekWarms;
     const f = probe.finale;
     f.settle = close.settle;
     f.gate = close.gate;
@@ -1375,8 +1391,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         art.fogRange.near.value = fog.near;
         art.fogRange.far.value = fog.far;
       } else readBody();
-      // S-36: エリア1 is built once the body is in the central plaza (or past it); the sky moves toward its morning
-      if (probe.area1.state === 'waiting' && body.fz < SLOPE.toZ) startArea1();
+      // S-36: エリア1 is built once the body is over the slope's brow, the town in sight (built and compiled within a second,
+      // ready before the central plaza: added on the first frame it is out of view, which walking down the slope gives —
+      // from the plaza's rim the way on faces it, S-36 measured an add only on the road, in view); the sky moves toward
+      // its morning
+      if (probe.area1.state === 'waiting' && body.fz < SLOPE.fromZ) startArea1();
       stepArea1();
       probe.daylight = daylightAt(body.fx);
       art.setDaylight(probe.daylight);
@@ -1419,12 +1438,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         } finally {
           frame.peek = peekWas;
           warming.undo();
+          if (warming.peek) a1.peekWarms++;
           probe.area1.warmMs.push(Math.round((performance.now() - t0) * 10) / 10);
         }
       } else pipeline.render(frame);
       frames++;
       if (frames >= 3) probe.ready = true;
-      probe.backPassFrames = pipeline.backPassFrames;
+      probe.backPassFrames = pipeline.backPassFrames - a1.peekWarms;
       // renderer.info is reset once per animation frame, so this is the whole frame so far
       probe.drawCalls = renderer.info.render.drawCalls;
       probe.triangles = renderer.info.render.triangles;
@@ -1446,6 +1466,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       footing.dispose();
       furniture.dispose();
       trial?.dispose();
+      alive = false;
       a1.wall?.dispose();
       a1.colliders?.dispose();
       a1.art?.dispose();

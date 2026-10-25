@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { COMPASS } from '../area/compass';
 import { arcWallMesh, cylinderMesh } from '../player/walk-lab-field';
 import { slab, trimesh, wall } from '../prologue/physics';
 import { sweptSlab } from '../prologue/slope';
@@ -96,7 +97,7 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
       ),
     );
   // the street (from under the plaza's rim to its east end) and the alley off its north side
-  descs.push(slab(R, AREA1_STREET.fromX, AREA1_STREET.toX, STREET_SOUTH_Z, STREET_NORTH_Z, AREA1_Y));
+  descs.push(slab(R, AREA1_STREET.minX, AREA1_STREET.maxX, STREET_SOUTH_Z, STREET_NORTH_Z, AREA1_Y));
   descs.push(
     slab(R, ROOM1_ALLEY.minX, ROOM1_ALLEY.maxX, ROOM1_ALLEY.minZ - OVERLAP, ROOM1_ALLEY.maxZ, AREA1_Y),
   );
@@ -122,7 +123,7 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
     wall(
       R,
       [AREA1_SLOPE.x, AREA1_GATE.z],
-      [1, 0],
+      COMPASS.east,
       2 * AREA1_GATE.halfWidth,
       area1SlopeHeight(AREA1_GATE.z) - 0.2,
       2.6,

@@ -70,10 +70,17 @@ export const CALL_FALL_SECONDS = 1.2;
  * S-35 玉の置き忘れ (発案者 2026-10-23: 玉を持たずに坂道へは出られない): does the film at the slope's entrance (at `membraneZ`) hold a
  * body whose feet are at `feetZ`? It holds whoever has not got the vidro in hand and comes from the far shore's side (z
  * greater than the film's): the body eases to a stop before it like at any edge. Someone already past it (a dev view) walks
- * on; with the vidro in hand there is nothing to it.
+ * on; with the vidro in hand there is nothing to it. S-36: only while the vidro is left behind the film (`orbZ`, where it
+ * stands: on the bench or a pedestal on the workshop's side, z greater than the film's) — left on a pedestal down in the town
+ * (エリア1), the way back to it is down the slope, and the film never shuts you off from it (原則3: 罰がない).
  */
-export function membraneHolds(orb: OrbPlace, feetZ: number, membraneZ: number): boolean {
-  return orb !== 'hand' && feetZ > membraneZ;
+export function membraneHolds(
+  orb: OrbPlace,
+  feetZ: number,
+  membraneZ: number,
+  orbZ: number = Number.POSITIVE_INFINITY,
+): boolean {
+  return orb !== 'hand' && orbZ > membraneZ && feetZ > membraneZ;
 }
 
 /**
@@ -90,11 +97,12 @@ export function vidroCalls(
   gateOpening: boolean,
   pushing: boolean,
   calling = false,
+  orbZ: number = Number.POSITIVE_INFINITY,
 ): boolean {
   return (
     (pushing || calling) &&
     gateOpening &&
-    membraneHolds(orb, feetZ, membrane.z) &&
+    membraneHolds(orb, feetZ, membrane.z, orbZ) &&
     feetZ - membrane.z <= membrane.callReach
   );
 }
@@ -216,7 +224,7 @@ function legacyAreas(o: SessionOptions): AreaDecl[] {
       base: [orb[0], 0, orb[2]] as Vec3,
       orb,
     })),
-    drop: { id: 'drop', at: o.drop ?? [0, 0, 0] },
+    ...(o.drop ? { drop: { id: 'drop', at: o.drop } } : {}),
     ...(o.settle ? { settle: o.settle } : {}),
   };
   return [{ id: 'room', rooms: [room] }];
@@ -293,7 +301,7 @@ export class PrologueSession {
     if (settling.length > 1)
       throw new Error(`PrologueSession: ${settling.length} rooms settle (one at most, S-40)`);
     this.settle = settling[0]?.settle ?? null;
-    this.settleDrop = settling[0]?.drop.id ?? null;
+    this.settleDrop = settling[0]?.drop?.id ?? null;
     this.drops = new DropTally(areas, DROP_FLIGHT_SECONDS);
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
@@ -306,7 +314,17 @@ export class PrologueSession {
    */
   holdsAtMembrane(feetZ: number): boolean {
     const m = this.options.membrane;
-    return !!m && membraneHolds(this.orbPlace, feetZ, m.z);
+    return !!m && membraneHolds(this.orbPlace, feetZ, m.z, this.orbZ);
+  }
+
+  /**
+   * S-36: z of where the vidro stands while it is not in hand — on the bench (the workshop: north of everything), or its
+   * pedestal's — so the film knows whether it was left behind it.
+   */
+  private get orbZ(): number {
+    const at = this.pedestal;
+    if (at === null) return Number.POSITIVE_INFINITY;
+    return this.pedestals[at]?.[2] ?? Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -475,6 +493,13 @@ export class PrologueSession {
     this.finaleHeld = true;
   }
 
+  /**
+   * Dev holds (the room's ?area1Drop=taken): a drop as if taken long ago — no events, and (unlike holdFinale) not the close.
+   */
+  holdDropTaken(id: string): void {
+    this.drops.setTaken(id);
+  }
+
   /** A light drop (the first room's when no id is given) is real (inside a sphere) and can be touched. */
   dropMaterialized(id?: string): boolean {
     const d = this.drops.drop(id ?? this.drops.first ?? '');
@@ -515,7 +540,9 @@ export class PrologueSession {
   private stepMembrane(dt: number): void {
     const m = this.options.membrane;
     if (!m) return;
-    const away = this.orbPlace !== 'hand';
+    // up while the vidro is left behind the film (S-36: not while it stands on a pedestal down in the town)
+    const orbZ = this.orbZ;
+    const away = this.orbPlace !== 'hand' && orbZ > m.z;
     this.filmTween.target = away ? 1 : 0;
     this.filmTween = stepTween(this.filmTween, dt, FILM_SECONDS);
     this.calling = vidroCalls(
@@ -525,6 +552,7 @@ export class PrologueSession {
       this.gateProgress > 0,
       this.pushing,
       this.calling,
+      orbZ,
     );
     this.callValue = this.calling
       ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)

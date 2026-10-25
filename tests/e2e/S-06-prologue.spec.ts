@@ -617,7 +617,7 @@ for (const backend of backends) {
   }) => {
     test.setTimeout(420_000);
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1${webgl}`);
     await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
     const done = await waitRoom(
       page,

@@ -274,20 +274,21 @@ export function townBubbles(): readonly TownBubble[] {
  */
 export function streetChimneys(): { x: number; z: number; h: number; r: number }[] {
   const [hx, hy, hz] = AREA1_CHIMNEY.foot;
+  const E = COMPASS.east[0];
   return [
     { x: hx, z: hz, h: AREA1_CHIMNEY.top - (hy - PLAZA_Y) + 3, r: 1.3 },
-    { x: hx + 13, z: hz + 9, h: 13, r: 0.75 },
-    { x: hx + 18, z: hz - 9, h: 12, r: 0.7 },
-    { x: hx - 7, z: hz - 13, h: 14, r: 0.8 },
-    { x: hx + 6, z: hz - 22, h: 11, r: 0.7 },
-    { x: hx + 26, z: hz + 4, h: 12, r: 0.7 },
+    { x: hx + E * 13, z: hz + 9, h: 13, r: 0.75 },
+    { x: hx + E * 18, z: hz - 9, h: 12, r: 0.7 },
+    { x: hx - E * 7, z: hz - 13, h: 14, r: 0.8 },
+    { x: hx + E * 6, z: hz - 22, h: 11, r: 0.7 },
+    { x: hx + E * 26, z: hz + 4, h: 12, r: 0.7 },
   ];
 }
 
 /**
  * 光の粒の流れ (ルール7): the curve the plaza's motes drift along, as (x, z) control points of a quadratic — from the slope's
- * foot, round the lighthouse's north side, to the open east gate and a little beyond it (they fade at both ends), so they
- * lead on through the gate. Laid along COMPASS (S-39).
+ * foot, round the lighthouse's north side, to the open east gate and on along its road (S-36: 12 m out, toward エリア1; they
+ * fade at both ends), so they lead on through the gate. Laid along COMPASS (S-39).
  */
 export const MOTE_PATH: readonly [
   readonly [number, number],
@@ -301,7 +302,7 @@ export const MOTE_PATH: readonly [
   return [
     [cx + W * 2, cz + PLAZA.radius - 2],
     [cx + E * 12, cz + 12],
-    [ex + E * 3, ez],
+    [ex + E * 12, ez],
   ] as const;
 })();
 
@@ -972,7 +973,10 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   moteMat.fog = false;
   const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.022, 0)), moteMat, MOTES);
   // they drift over the plaza: left out of the view's work wherever the plaza is not in it
-  motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6), PLAZA.radius);
+  motes.boundingSphere = new THREE.Sphere(
+    new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6),
+    PLAZA.radius + 9,
+  );
   instanced.push(motes);
   put(motes);
   // each mote runs a gentle curve from the slope's foot round the lighthouse's north side to the gate and a little beyond

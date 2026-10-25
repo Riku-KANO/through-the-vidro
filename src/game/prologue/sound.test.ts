@@ -6,7 +6,15 @@ import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
-import { AREA1_PLAZA, AREA1_SLOPE, AREA1_STREET, ROOM1_DROP, ROOM1_PEDESTAL } from '../area1/layout';
+import {
+  AREA1_PLAZA,
+  AREA1_SLOPE,
+  AREA1_STREET,
+  eastOf,
+  eastX,
+  ROOM1_DROP,
+  ROOM1_PEDESTAL,
+} from '../area1/layout';
 import { EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
@@ -29,6 +37,7 @@ import {
 } from './layout';
 import type { FinaleEvent, HintEvent } from './session';
 import {
+  AREA1_AMBIENCE,
   answer,
   CueLog,
   type CuePlayer,
@@ -867,8 +876,8 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
   it('is placed in the room: wind at the dome’s gaps, the chimes far off beyond the gate, drops in a few places', () => {
     const kinds = PROLOGUE_AMBIENCE.map((p) => p.kind);
     expect(kinds.filter((k) => k === 'wind').length).toBeGreaterThanOrEqual(2);
-    // the far chimes in the town (S-22) and, since S-25, the one above the door; since S-36, エリア1's far ones
-    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(3);
+    // the far chimes in the town (S-22) and, since S-25, the one above the door (エリア1's are its own: AREA1_AMBIENCE)
+    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(2);
     expect(kinds.filter((k) => k === 'drops').length).toBeGreaterThanOrEqual(3);
     const top = WORKSHOP.sphereCenterY + WORKSHOP.radius;
     const skylight = PROLOGUE_AMBIENCE.find((p) => p.id === 'wind:skylight');
@@ -934,7 +943,7 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
     r.frame();
     expect(r.sound.probe.ambience.playing).toBe(true);
     // the cue emitters (3), the feet (1) and the ambience's places
-    expect(r.sound.probe.emitters).toBe(4 + PROLOGUE_AMBIENCE.length);
+    expect(r.sound.probe.emitters).toBe(4 + PROLOGUE_AMBIENCE.length + AREA1_AMBIENCE.length);
     r.sound.dispose();
     await r.settle();
     for (const l of loops(r.engine)) expect(l.stopped).not.toBeNull();
@@ -981,7 +990,8 @@ describe('the workshop’s own sounds where S-24 drew them (S-25: 炉の燃え�
         .sort(),
     );
     const places = r.sound.probe.ambience.places;
-    expect(places.map((p) => p.id)).toEqual(PROLOGUE_AMBIENCE.map((p) => p.id));
+    // the workshop's, then (S-36) エリア1's
+    expect(places.map((p) => p.id)).toEqual([...PROLOGUE_AMBIENCE, ...AREA1_AMBIENCE].map((p) => p.id));
     for (const s of PROLOGUE_AMBIENCE) {
       const p = places.find((q) => q.id === s.id);
       expect(p?.kind, s.id).toBe(s.kind);
@@ -1244,28 +1254,29 @@ describe('S-39: the vidro’s whisper (玉のささやき: 台座の玉がかす
 });
 
 describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in エリア1, each on its own random stream (S-25)', () => {
-  const area1 = PROLOGUE_AMBIENCE.filter((p) => p.id.endsWith(':area1'));
+  const area1 = AREA1_AMBIENCE;
 
   it('a wind and far chimes, in エリア1 (past the entrance plaza), far from the workshop', () => {
     expect(area1.map((p) => p.kind).sort()).toEqual(['chimes', 'wind']);
     for (const p of area1) {
-      expect(p.position[0], p.id).toBeGreaterThan(AREA1_PLAZA.center[0]);
+      expect(eastOf(p.position[0]), p.id).toBeGreaterThan(eastOf(AREA1_PLAZA.center[0]));
       expect(Math.hypot(p.position[0], p.position[2]), p.id).toBeGreaterThan(100);
     }
     // the chimes hang up the hill, over the street, out of reach (音だけ)
     const chimes = area1.find((p) => p.kind === 'chimes');
     expect(chimes?.position[1]).toBeGreaterThan(AREA1_PLAZA.center[1] + 8);
-    expect(chimes?.position[0]).toBeGreaterThan(AREA1_STREET.toX - 10);
+    expect(eastOf(chimes?.position[0] ?? 0)).toBeGreaterThan(eastOf(AREA1_STREET.endX) - 10);
     expect(chimes?.position[2]).toBeLessThan(AREA1_SLOPE.fromZ);
   });
 
-  it('every place S-36 added draws from a stream of its own, so the workshop’s sounds strike when they did', () => {
+  it('every place S-36 added draws from a stream of its own; the workshop’s places are as they were', () => {
     for (const p of area1) {
+      expect(p.id.endsWith(':area1'), p.id).toBe(true);
       // a bed (the wind) draws nothing; the chimes draw from their own stream
       if (p.kind === 'chimes') expect(p.ownStream, p.id).toBe(true);
     }
-    // the places before S-36, in their order, are as they were (S-22's timing rides on the shared stream's order)
-    const before = PROLOGUE_AMBIENCE.filter((p) => !p.id.endsWith(':area1')).map((p) => p.id);
+    // the workshop's places, in their order, are as they were (S-22's timing rides on the shared stream's order)
+    const before = PROLOGUE_AMBIENCE.map((p) => p.id);
     expect(before).toEqual([
       'wind:skylight',
       'wind:door',
@@ -1277,7 +1288,27 @@ describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in 
       'drops:tub',
       'drops:lamp',
     ]);
-    expect(PROLOGUE_AMBIENCE.slice(0, before.length).map((p) => p.id)).toEqual(before);
+  });
+
+  it('plays only once エリア1 is built (技術設計 > エリアごとに分けて読み込む): the workshop sounds as it did, then the morning joins', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    expect(r.sound.probe.ambience.playing).toBe(true);
+    const looping = () => loops(r.engine).length;
+    const workshopBeds = PROLOGUE_AMBIENCE.filter((p) => p.kind === 'wind' || p.kind === 'fire').length;
+    for (let i = 0; i < 60; i++) r.frame();
+    expect(looping()).toBe(workshopBeds);
+    expect(
+      r.sound.probe.ambience.sources.filter((q) => q.id.endsWith(':area1')).every((q) => q.plays === 0),
+    ).toBe(true);
+    // エリア1 built (the body has come down into the town): its wind joins, its chimes come in time
+    (r.room.probe as { area1?: { state: string } }).area1 = { state: 'ready' };
+    r.frame();
+    expect(looping()).toBe(workshopBeds + 1);
+    for (let i = 0; i < 60 * 40; i++) r.frame();
+    expect(r.sound.probe.ambience.sources.find((q) => q.id === 'chimes:area1')?.plays).toBeGreaterThan(0);
+    r.sound.dispose();
   });
 
   it('the footsteps there are 石畳 (stone), by the floor’s name', () => {
@@ -1285,7 +1316,7 @@ describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in 
       zone: 'area1-plaza',
       material: 'stone',
     });
-    expect(floorAt(AREA1_STREET.toX - 2, AREA1_STREET.z)).toEqual({
+    expect(floorAt(eastX(eastOf(AREA1_STREET.endX) - 2), AREA1_STREET.z)).toEqual({
       zone: 'area1-street',
       material: 'stone',
     });

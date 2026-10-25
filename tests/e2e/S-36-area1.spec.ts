@@ -27,7 +27,7 @@ interface V3 {
   z: number;
 }
 interface Area1Probe {
-  state: 'waiting' | 'building' | 'warming' | 'ready';
+  state: 'waiting' | 'building' | 'compiling' | 'built' | 'warming' | 'ready';
   startedAt: number | null;
   addedAt: number | null;
   readyAt: number | null;
@@ -365,7 +365,7 @@ for (const backend of backends) {
     mkdirSync(join(root, 'artifacts/S-36'), { recursive: true });
     const errors = collectErrors(page);
     await page.addInitScript(installTracer);
-    await page.goto(`/?scene=prologue-proto&autoplay=1&debug=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1&debug=1${webgl}`);
     const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.areas.area1.taken === 1', 360_000);
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
     const { made, load, phases } = await page.evaluate(() => {
@@ -604,10 +604,11 @@ for (const backend of backends) {
     await page.keyboard.press('KeyE');
     const back = await waitRoom(page, "r.orb === 'hand' && r.area1.wall.off === 0", 3_000);
     expect(back.events).toContain('pickup:pedestal');
-    // the same peek with the drop taken: what the drop's light added through the vidro is gone
+    // the same peek with the drop taken: what the drop's light added through the vidro is gone (S-36 measured 0.074 of
+    // the vidro's circle warm with it, 0 without, both ways)
     const noDrop = await peekAt('room1-peek-taken');
     expect(withDrop.inOrb.warm, 'the drop’s light through the vidro').toBeGreaterThan(
-      noDrop.inOrb.warm + 0.003,
+      noDrop.inOrb.warm + 0.03,
     );
     await lookAt(page, [x, back.position.y + 1.4, wall.max[2] + 10]);
     const again = (await pushUntilStopped(page, 'KeyW')).at(-1) as RoomProbe;
@@ -643,16 +644,19 @@ for (const backend of backends) {
     test.setTimeout(180_000);
     mkdirSync(shotDir, { recursive: true });
     const errors = collectErrors(page);
-    const shots: Record<string, { mean: number; dark: number }> = {};
+    const shots: Record<string, { mean: number; dark: number; warm: number }> = {};
     const budget: Record<string, { drawCalls: number; triangles: number }> = {};
-    for (const [name, spawn] of [
-      ['road', 'area1-road'],
-      ['plaza-chimney', 'area1-plaza'],
-      ['alley', 'area1-alley'],
-      ['gate', 'area1-gate'],
+    for (const [name, spawn, extra] of [
+      ['road', 'area1-road', ''],
+      ['plaza-chimney', 'area1-plaza', ''],
+      ['alley', 'area1-alley', ''],
+      ['gate', 'area1-gate', ''],
+      // 部屋1's drop taken (a dev hold): the lamps toward the next room lit up the slope to the shut gate
+      ['gate-next', 'area1-gate', '&area1Drop=taken'],
     ] as const) {
-      await page.goto(`/?scene=prologue-proto&spawn=${spawn}${webgl}`);
+      await page.goto(`/?scene=prologue-proto&spawn=${spawn}${extra}${webgl}`);
       const r = await waitRoom(page, "r.ready === true && r.area1.state === 'ready'", 90_000);
+      if (extra) await waitRoom(page, 'r.area1.next >= 1', 10_000);
       if (spawn === 'area1-road') {
         expect(r.daylight).toBeGreaterThan(0.3);
         expect(r.daylight).toBeLessThan(0.7);
@@ -661,7 +665,7 @@ for (const backend of backends) {
       await page.waitForTimeout(800);
       const png = await page.screenshot({ path: join(shotDir, `${name}.png`) });
       const m = await measure(page, png);
-      shots[name] = { mean: m.mean, dark: m.dark };
+      shots[name] = { mean: m.mean, dark: m.dark, warm: m.warm };
       const q = await room(page);
       budget[name] = { drawCalls: q.drawCalls, triangles: q.triangles };
       expect(q.grounded).toBe(true);
@@ -685,6 +689,11 @@ for (const backend of backends) {
       expect(b.triangles, `triangles in ${name}`).toBeLessThanOrEqual(BUDGET.triangles);
       expect(b.drawCalls, `something drawn in ${name}`).toBeGreaterThan(10);
     }
+    // the lamps toward the next room read as lights: more warm bright pixels than the same view before the drop (S-36
+    // measured 0.0026 of the screen with them lit, 0.00003 before, both ways)
+    expect(shots['gate-next']?.warm ?? 0, 'the lit lamps toward the next room').toBeGreaterThan(
+      (shots.gate?.warm ?? 0) + 0.0015,
+    );
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
       expect(l.mean, `mean luminance in ${name}`).toBeGreaterThan(0.12);

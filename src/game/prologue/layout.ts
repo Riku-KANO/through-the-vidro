@@ -2,6 +2,7 @@ import type { FloorMaterial } from '../../audio/footsteps';
 import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
 import type { SettleSweep } from '../../layers/settle';
 import type { AreaDecl } from '../area';
+import { COMPASS } from '../area/compass';
 import { AREA1_CHIMNEY, AREA1_FLOOR_ZONES, AREA1_ROAD, AREA1_SPAWNS } from '../area1/layout';
 
 export { AREA1_CHIMNEY };
@@ -335,14 +336,10 @@ export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.min
  * 坂を下りると夜明けの光とエリア1の煙突が同じ東の側に見える. West (エリア3's greenhouse, 夕方) is on the left, south (エリア2's
  * canal) straight on past the plaza. The map's figure has east on the other hand: the town here is its mirror image (left
  * and right swapped), the price of keeping the workshop's sky and bake (S-35 judged east the left, and the dawn read as
- * the west: process/slices/S-35.md 判断待ち1).
+ * the west: process/slices/S-35.md 判断待ち1). S-36: the compass itself lives in area/compass.ts (エリア1's layout places along
+ * it too).
  */
-export const COMPASS = {
-  north: [0, 1] as const,
-  east: [1, 0] as const,
-  south: [0, -1] as const,
-  west: [-1, 0] as const,
-};
+export { COMPASS };
 
 /** `a`·`u` + `b`·`v` on the ground (x, z): a step off the plaza's centre along two of the compass's directions. */
 function along(
@@ -430,7 +427,7 @@ export function plazaGateAt(dir: readonly [number, number], radius: number = PLA
  * sky moves from before dawn to the morning along it (area1/layout.ts daylightAt). `length` from the rim to the entrance plaza.
  */
 export const EAST_ROAD = {
-  length: AREA1_ROAD.toX - AREA1_ROAD.fromX,
+  length: AREA1_ROAD.length,
   halfWidth: AREA1_ROAD.halfWidth,
   railing: 1.0,
 } as const;
