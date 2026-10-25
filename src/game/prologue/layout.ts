@@ -312,14 +312,143 @@ export function gateLeafDirection(side: 1 | -1, angle: number): [number, number]
 }
 
 /**
- * 門の先の道 (S-34, 仮): past the gate the way goes on as a slope of about 80 m down to the central plaza (進行構造とエリア
- * 設計 > 街の配置と序章の締め, 2026-10-23; S-35 builds it). S-34 lays only its first 4 m — the far shore's stone going on — and
- * a provisional railing at their end, the mist and the town with its lighthouse beyond (ルール6; ルール9: 行き止まりには理由
- * を置く). S-35 takes the railing away and carries the way on (process/slices/S-34.md, S-35 への引き継ぎ).
+ * 門の先の道 (S-34): past the gate the way goes on as a slope of about 80 m down to the central plaza (進行構造とエリア設計 >
+ * 街の配置と序章の締め, 2026-10-23). This is its first 4 m, level — the far shore's stone going on, one slab with it — and
+ * the brow where the slope starts to go down (S-35: SLOPE).
  */
 export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.minZ };
-/** 仮 (S-34, until S-35): the brass railing across the road's end (its rail's height), and the lamps at its two ends. */
-export const LOOKOUT = { z: ROAD.minZ + 0.2, height: 1.0, depth: 0.1, lampX: ROAD.maxX - 0.14 };
+
+/*
+ * S-35 坂道と中央広場 (進行構造とエリア設計 > 街の配置と序章の締め, 2026-10-23; ハリノの地図 設計案): through the gate, about 80 m
+ * of slope down to the central plaza (radius about 25 m) with the broken lighthouse (about 40 m) in its middle; of the
+ * plaza's three gates only the east one (エリア1) is open. 序章の後の広場は夜明け前 (the plaza keeps the time of the area
+ * last left). Shapes are 仮 (code-made, 泡と曲面と真鍮の枠): what is settled here is where things stand, how the way leads,
+ * what is seen from where and what stops the body (process/slices/S-35.md).
+ *
+ * The town's compass in this frame (S-35, 仮; the map is a guide, not to scale): north is back toward the workshop (+Z), so
+ * the way down runs south (-Z) and east, where エリア1 lies, is on the left (-X): 下りながら正面に広場と灯塔、左手（東）に
+ * 工房街の煙突. The map puts the workshop north-east of the plaza; due north keeps エリア1's chimneys in the view from the
+ * slope (judgement asked for in process/slices/S-35.md).
+ */
+export const COMPASS = {
+  north: [0, 1] as const,
+  east: [-1, 0] as const,
+  south: [0, -1] as const,
+  west: [1, 0] as const,
+};
+
+/**
+ * 坂道 (S-35): one straight way from the brow at the road's end down to the plaza's rim, 80 m from the gate (街の配置: 門から
+ * 約 80m の坂道), as wide as the road. It goes down on a cosine (level where it meets the road and the plaza, steepest half
+ * way: atan(π·drop / 2·length) ≈ 14° for 12 m over 76 m, well inside what the body climbs, S-03: 40°). 仮: the drop (the
+ * design gives the hill no height).
+ */
+export const SLOPE = { minX: ROAD.minX, maxX: ROAD.maxX, fromZ: ROAD.minZ, toZ: GATE.z - 80, drop: 12 };
+
+/** Height of the slope's top at z (0 above the brow, -drop on the plaza's side of its foot). */
+export function slopeHeight(z: number): number {
+  if (z >= SLOPE.fromZ) return 0;
+  if (z <= SLOPE.toZ) return -SLOPE.drop;
+  const t = (SLOPE.fromZ - z) / (SLOPE.fromZ - SLOPE.toZ);
+  return (-SLOPE.drop * (1 - Math.cos(Math.PI * t))) / 2;
+}
+
+/**
+ * Height of the ground you walk on at (x, z): 0 in the workshop, on the way and the far shore (the bridge's arch aside), the
+ * slope's on it, the plaza's past its foot. The fall guard's floor is a metre under it (落下死はない).
+ */
+export function groundHeight(_x: number, z: number): number {
+  return slopeHeight(z);
+}
+
+/** 中央広場 (街の配置: 半径約 25m): a round terrace of stone at the slope's foot. `center` is on its floor. */
+export const PLAZA_RADIUS = 25;
+export const PLAZA = {
+  center: [0, -SLOPE.drop, SLOPE.toZ - PLAZA_RADIUS] as Vec3,
+  radius: PLAZA_RADIUS,
+} as const;
+export const PLAZA_Y = PLAZA.center[1];
+
+/**
+ * 灯塔 (世界観: 中央の灯塔の大玉が割れて光が散った; ハリノの地図: 高さ約 40m, 街のどこからも見える, ルール5): in the middle of the
+ * plaza, its foot on the plaza's floor. Stacked bubbles of glass with brass bands, a brass spire, and on top the great orb in
+ * its brass cage, broken open. `base` is the bottom bubble (a ball of glass the body walks round: its collider is that ball).
+ */
+export const LIGHTHOUSE: Vec3 = PLAZA.center;
+export const LIGHTHOUSE_HEIGHT = 40;
+export const LIGHTHOUSE_BASE = { radius: 5, lift: 1 } as const;
+
+/**
+ * The plaza's rim (仮): a balustrade of brass and frosted glass on the circle, with an opening where the slope comes in and
+ * one for each of the three gates. `openingHalf` is the half width of an opening along the rim; `height` the rail's.
+ */
+export const PLAZA_RIM = { height: 1.0, thickness: 0.2, openingHalf: 1.75 } as const;
+
+/**
+ * The plaza's three gates (街の配置: 広場から出る3つの門のうち、東のエリア1の門だけが開いている): brass arches in the rim, toward
+ * エリア1 (east), エリア2 雫の水路 (south) and エリア3 鐘の温室 (west). The south and west ones are shut, their bars letting the
+ * canal and the greenhouse be glimpsed beyond (格子越しに水路と温室の気配が少し見える).
+ */
+export const PLAZA_GATE = { halfWidth: 1.6, height: 3.6, depth: 0.2 } as const;
+export const PLAZA_GATES = [
+  { name: 'east', dir: COMPASS.east, open: true },
+  { name: 'south', dir: COMPASS.south, open: false },
+  { name: 'west', dir: COMPASS.west, open: false },
+] as const;
+export type PlazaGateName = (typeof PLAZA_GATES)[number]['name'];
+
+/** Where a gate of the plaza stands (x, z): on the rim, along its direction. */
+export function plazaGateAt(dir: readonly [number, number], radius: number = PLAZA.radius): [number, number] {
+  return [PLAZA.center[0] + dir[0] * radius, PLAZA.center[2] + dir[1] * radius];
+}
+
+/**
+ * 東の門の先 (S-35, 仮 until S-36 builds エリア1): a few metres of stone on from the open east gate, as wide as the slope, ending
+ * at a brass railing with a lamp at each end, エリア1's hill and its chimneys beyond (ルール6; ルール9: 柵と次の場所の眺め).
+ * `length` from the rim to the railing.
+ */
+export const EAST_ROAD = { length: 6, halfWidth: 1.4, railing: 1.0 } as const;
+/** The east road's end (x): the railing stands just inside it. */
+export const EAST_ROAD_END_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + EAST_ROAD.length);
+
+/**
+ * 工房街の煙突 (空間の可読性と導線 5: 各エリアにも固有の目印; ハリノの地図: エリア1の坂の上、雫の部屋3のそば): S-35 draws it as a
+ * landmark far off on エリア1's hill, east of the plaza a little to the south, so that from the slope's brow it stands to the
+ * left of the lighthouse (左手（東）) and from the plaza it rises over the open east gate. `foot` is where it stands on the
+ * hill, `top` its height above the plaza's floor. 仮: S-36 lays out エリア1 (process/slices/S-35.md, S-36 への引き継ぎ).
+ */
+export const AREA1_CHIMNEY = {
+  foot: [PLAZA.center[0] - 120, PLAZA_Y + 10, PLAZA.center[2] - 26] as Vec3,
+  top: 34,
+} as const;
+
+/**
+ * Beyond the shut gates (S-35, 仮: 格子越しに水路と温室の気配): エリア2's canal running south from past the south gate, with its
+ * landmark the drop towers (雫塔) along it, and エリア3's greenhouse dome (温室のドーム) far to the west. Placed so that from the
+ * plaza, on a gate's axis, they show between its posts. `CANAL`: from `from` to `to` metres past the gate, `halfWidth` of
+ * water, its surface `drop` below the plaza's floor. A tower: x off the canal's line, metres past the gate, height.
+ */
+export const CANAL = { from: 6, to: 110, halfWidth: 1.7, drop: 0.9 } as const;
+export const DROP_TOWERS: readonly (readonly [number, number, number])[] = [
+  [-6, 60, 24],
+  [6, 85, 30],
+  [0, 115, 22],
+] as const;
+/** The towers stand on ground this far below the plaza's floor (in the mist). */
+export const DROP_TOWER_FOOT = 4;
+/** エリア3's greenhouse: its dome's centre (on the ground, in the mist) and radius, west of the plaza. */
+export const GREENHOUSE = {
+  center: [PLAZA.center[0] + PLAZA.radius + 120, PLAZA_Y - 5, PLAZA.center[2]] as Vec3,
+  radius: 24,
+} as const;
+
+/**
+ * 光の膜 (S-35; 発案者 2026-10-23: 玉を持たずに坂道へは出られない): a film of light in the gate's arch — the slope's entrance,
+ * whose first 4 m are the road — that softly holds whoever comes to it from the far shore without the vidro in hand; the vidro
+ * left on its pedestal then glows faintly to say where it is. With the vidro in hand there is nothing to it.
+ * `callReach`: the vidro calls while the body is this close to the film, held by it.
+ */
+export const MEMBRANE = { z: GATE.z, callReach: 0.9 } as const;
 
 /**
  * Where the light motes over the gap (surface layer, room-art.ts: a hint of the bridge) end their drift: they rise just over
@@ -358,9 +487,6 @@ export const LAMPS: readonly { x: number; z: number }[] = [
 export const LAMP_HEIGHT = 2.25;
 export const LAMP_POST_RADIUS = 0.035;
 
-/** The town and the lighthouse across the valley (ルール5: 灯塔は街のどこからでも見える). */
-export const LIGHTHOUSE: Vec3 = [3, 0, -82];
-
 /**
  * 床の材質 (S-22: 足音は床の材質ごとに変える — 石畳・曇りガラス・真鍮の格子), as S-06 drew and built the floors:
  *  - the workshop's floor disc is frosted glass (room-art.ts createFrostedFloorMaterial; its walk collider has the same
@@ -369,13 +495,18 @@ export const LIGHTHOUSE: Vec3 = [3, 0, -82];
  *  - the back layer's bridge deck is frosted glass (room-art.ts deckMaterial: 歩く床は曇り、手すりだけ透明).
  *  - 真鍮の格子: the grate in front of the furnace (S-24, GRATE; the workshop's glb draws it on the glass floor). It is
  *    the only brass underfoot: what you hear is what you see (空間の可読性 4). Listed first, so it wins over the disc.
+ *  - S-35: the slope, the plaza and the road past its east gate are 石畳 too (slope.ts, plaza.ts draw them as stone).
  * The first zone that holds a point decides; off every floor the answer is 石畳, the town's ground.
  */
 export interface FloorZone {
   readonly name: string;
   readonly material: FloorMaterial;
-  /** A disc around the origin (the workshop), a box on x and z, or a rectangle turned to face `axis`. */
+  /**
+   * A disc around `center` (x, z; the origin, the workshop, by default), a box on x and z, or a rectangle turned to face
+   * `axis`.
+   */
   readonly radius?: number;
+  readonly center?: readonly [number, number];
   readonly box?: {
     readonly minX: number;
     readonly maxX: number;
@@ -412,10 +543,33 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
   { name: 'far', material: 'stone', box: FAR },
   // S-34: the road past the gate, the far shore's stone going on
   { name: 'road', material: 'stone', box: ROAD },
+  // S-35: the slope down (a little into the plaza, where it lies on its floor), the plaza, the road past its east gate
+  {
+    name: 'slope',
+    material: 'stone',
+    box: { minX: SLOPE.minX, maxX: SLOPE.maxX, minZ: SLOPE.toZ, maxZ: SLOPE.fromZ },
+  },
+  {
+    name: 'plaza',
+    material: 'stone',
+    radius: PLAZA.radius,
+    center: [PLAZA.center[0], PLAZA.center[2]],
+  },
+  {
+    name: 'east-road',
+    material: 'stone',
+    box: {
+      minX: EAST_ROAD_END_X,
+      maxX: PLAZA.center[0] - PLAZA.radius + 0.5,
+      minZ: PLAZA.center[2] - EAST_ROAD.halfWidth,
+      maxZ: PLAZA.center[2] + EAST_ROAD.halfWidth,
+    },
+  },
 ];
 
 function inZone(f: FloorZone, x: number, z: number): boolean {
-  if (f.radius !== undefined) return Math.hypot(x, z) <= f.radius;
+  if (f.radius !== undefined)
+    return Math.hypot(x - (f.center?.[0] ?? 0), z - (f.center?.[1] ?? 0)) <= f.radius;
   if (f.box) return x >= f.box.minX && x <= f.box.maxX && z >= f.box.minZ && z <= f.box.maxZ;
   if (f.rect) {
     const dx = x - f.rect.center[0];
@@ -468,8 +622,40 @@ export const SPAWNS = {
   door: { feet: [0, 0, -3.75] as Vec3, yaw: Math.PI, pitch: -0.12 },
   /** S-34: on the far shore before the gate, looking at it (and through it, the road and the town). */
   gate: { feet: [0.3, 0, -17.4] as Vec3, yaw: 0.05, pitch: 0.02 },
-  /** S-34: on the road past the gate, the lookout's railing ahead and the town beyond it. */
+  /** S-34: on the road past the gate, the slope (S-35) and the plaza with its lighthouse ahead. */
   road: { feet: [0.3, 0, -21.6] as Vec3, yaw: -0.04, pitch: -0.07 },
+  /** S-35: at the slope's brow, looking down it to the plaza and the broken lighthouse (エリア1's chimney on the left). */
+  slope: { feet: [0.2, 0, -23.8] as Vec3, yaw: 0.02, pitch: -0.07 },
+  /** S-35: in the plaza by the slope's foot, looking up at the broken lighthouse. */
+  plaza: {
+    feet: [PLAZA.center[0] + 5, PLAZA_Y, PLAZA.center[2] + 22] as Vec3,
+    yaw: Math.atan2(5, 22),
+    pitch: 0.58,
+  },
+  /** S-35: held at the film in the gate's arch (without the vidro, after the close), looking back at its pedestal. */
+  film: {
+    feet: [0.2, 0, MEMBRANE.z + 0.3] as Vec3,
+    yaw: Math.atan2(1.15, -6.8),
+    pitch: -0.08,
+  },
+  /** S-35: in the plaza, looking at the shut south gate: the canal and its drop towers beyond the bars (エリア2). */
+  south: {
+    feet: [PLAZA.center[0], PLAZA_Y, PLAZA.center[2] - 12.5] as Vec3,
+    yaw: 0,
+    pitch: 0.06,
+  },
+  /** S-35: in the plaza, looking at the shut west gate: the greenhouse's dome beyond the bars (エリア3). */
+  west: {
+    feet: [PLAZA.center[0] + 12.5, PLAZA_Y, PLAZA.center[2]] as Vec3,
+    yaw: -Math.PI / 2,
+    pitch: 0.06,
+  },
+  /** S-35: in the plaza, looking at the open east gate (エリア1), its short road and the chimney's hill beyond. */
+  east: {
+    feet: [PLAZA.center[0] - 9, PLAZA_Y, PLAZA.center[2] + 4] as Vec3,
+    yaw: Math.atan2(16, 4),
+    pitch: 0.06,
+  },
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;

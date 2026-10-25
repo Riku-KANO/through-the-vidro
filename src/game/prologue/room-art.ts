@@ -246,8 +246,8 @@ function rng(seed: number): () => number {
   };
 }
 
-/** 石畳 on top, darker rock on the sides, so every lip reads sharply against the valley. */
-function stoneMaterial(tile: number): THREE.MeshStandardNodeMaterial {
+/** 石畳 on top, darker rock on the sides, so every lip reads sharply against the valley (S-35: the slope and the town too). */
+export function stoneMaterial(tile: number): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.86, metalness: 0 });
   const p = positionWorld.xz.div(tile);
   // running bond: every other row shifts by half a stone
@@ -339,7 +339,9 @@ export function buildRoomArt(
   quality: QualityPreset,
   field: LayerField,
   // gate: false — the gate is drawn elsewhere (S-34: finale.ts, whose leaves open)
-  options: { trialWall?: Box; gate?: boolean } = {},
+  // town: false — the town and its lighthouse are drawn elsewhere (S-35: plaza.ts, round the central plaza)
+  // mistFloor — the mist lies under this height instead of under y = 0 (S-35: the ground of the slope, slope.ts)
+  options: { trialWall?: Box; gate?: boolean; town?: boolean; mistFloor?: THREE.Node<'float'> } = {},
 ): RoomArt {
   const scene = new THREE.Scene();
   const disposables: { dispose(): void }[] = [];
@@ -381,8 +383,9 @@ export function buildRoomArt(
   const fogFar = uniform(FOG_FAR);
   // the valley fills with mist: everything below the way sinks into a deeper blue, so the gap reads as depth;
   // far away the mist pales into the horizon (空間の可読性と導線 8: 奥ほど霞ませる)
+  const mistY = options.mistFloor ? positionWorld.y.sub(options.mistFloor) : positionWorld.y;
   const mist = float(1)
-    .sub(smoothstep(MIST_FROM, MIST_TO, positionWorld.y))
+    .sub(smoothstep(MIST_FROM, MIST_TO, mistY))
     .mul(0.97);
   const mistColor = mix(c3(MIST_DEEP), horizon.mul(0.86), rangeFogFactor(fogNear.mul(0.7), fogFar.mul(1.1)));
   scene.fogNode = fog(mix(horizon.mul(0.92), mistColor, mist), max(rangeFogFactor(fogNear, fogFar), mist));
@@ -840,7 +843,7 @@ export function buildRoomArt(
   put(orbLight, 'shared');
 
   // ---- the town and its lighthouse across the valley, rising out of the mist (遠景: cheap glass, 灯塔) -----
-  {
+  if (options.town !== false) {
     const rand = rng(20261021);
     const spheres: { p: THREE.Vector3; r: number }[] = [];
     const rings: THREE.BufferGeometry[] = [];

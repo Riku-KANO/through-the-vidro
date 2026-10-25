@@ -8,7 +8,7 @@ import {
   type Vec3,
 } from '../../layers/footing';
 import { cutSurfaceIds } from '../../layers/surface';
-import { cylinderMesh, type MeshData } from '../player/walk-lab-field';
+import { arcWallMesh, cylinderMesh, type MeshData } from '../player/walk-lab-field';
 import {
   FAR,
   GATE,
@@ -16,14 +16,32 @@ import {
   LAMP_HEIGHT,
   LAMP_POST_RADIUS,
   LAMPS,
-  LOOKOUT,
+  LIGHTHOUSE,
+  LIGHTHOUSE_BASE,
+  MEMBRANE,
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_RADIUS,
+  PLAZA,
+  PLAZA_GATE,
+  PLAZA_GATES,
+  PLAZA_RIM,
+  PLAZA_Y,
+  plazaGateAt,
   ROAD,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
+import {
+  EAST_ROAD_BOX,
+  EAST_ROAD_RAIL,
+  gateTangent,
+  LIGHTHOUSE_RAIL,
+  PLAZA_FLOOR_RADIUS,
+  plazaGatePosts,
+  rimArcs,
+} from './plaza';
 import { deckMesh, domeWall } from './shapes';
+import { slopeDeckShape, slopeRailShape } from './slope';
 
 /**
  * Rapier side of the prologue room (S-03's world, S-02's back-layer footing).
@@ -63,14 +81,136 @@ function trimesh(R: typeof RAPIER, mesh: MeshData, at: Vec3): RAPIER.ColliderDes
   );
 }
 
-/** A slab with its top at y = 0 over an x/z rectangle (rounded edges, like the drawn stone). */
-function slab(R: typeof RAPIER, minX: number, maxX: number, minZ: number, maxZ: number): RAPIER.ColliderDesc {
+/** A slab with its top at y = `top` (0 by default) over an x/z rectangle (rounded edges, like the drawn stone). */
+function slab(
+  R: typeof RAPIER,
+  minX: number,
+  maxX: number,
+  minZ: number,
+  maxZ: number,
+  top = 0,
+): RAPIER.ColliderDesc {
   return R.ColliderDesc.roundCuboid(
     (maxX - minX) / 2 - ROUND,
     SLAB / 2 - ROUND,
     (maxZ - minZ) / 2 - ROUND,
     ROUND,
-  ).setTranslation((minX + maxX) / 2, -SLAB / 2, (minZ + maxZ) / 2);
+  ).setTranslation((minX + maxX) / 2, top - SLAB / 2, (minZ + maxZ) / 2);
+}
+
+/** A thin upright wall standing on y = `bottom`, its length along the unit (dx, dz) (a railing's plane, a shut gate). */
+function wall(
+  R: typeof RAPIER,
+  at: [number, number],
+  along: readonly [number, number],
+  length: number,
+  bottom: number,
+  height: number,
+  thickness: number,
+): RAPIER.ColliderDesc {
+  const yaw = Math.atan2(-along[1], along[0]);
+  return R.ColliderDesc.cuboid(length / 2, height / 2, thickness / 2)
+    .setTranslation(at[0], bottom + height / 2, at[1])
+    .setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) });
+}
+
+/**
+ * S-35: the slope and the central plaza (slope.ts, plaza.ts draw them from the same numbers): the slope's deck and its two
+ * railings; the plaza's floor, the rim's balustrade between its openings, the gates' posts and the shut gates' bars, the
+ * lighthouse's foot (the ball of glass) and the railing round it; the road past the east gate, its railings and its end.
+ */
+function townColliders(R: typeof RAPIER): RAPIER.ColliderDesc[] {
+  const descs: RAPIER.ColliderDesc[] = [];
+  const [cx, , cz] = PLAZA.center;
+  descs.push(trimesh(R, slopeDeckShape(), [0, 0, 0]));
+  for (const side of [1, -1] as const) descs.push(trimesh(R, slopeRailShape(side), [0, 0, 0]));
+  descs.push(
+    trimesh(
+      R,
+      cylinderMesh(
+        {
+          kind: 'cylinder',
+          centre: { x: 0, y: 0, z: 0 },
+          radius: PLAZA_FLOOR_RADIUS,
+          height: SLAB,
+          surface: 'walk',
+        },
+        128,
+      ),
+      [cx, PLAZA_Y - SLAB / 2, cz],
+    ),
+  );
+  const half = PLAZA_RIM.thickness / 2;
+  for (const { from, to } of rimArcs()) {
+    const mesh = arcWallMesh(
+      {
+        kind: 'arcWall',
+        centre: { x: 0, y: 0, z: 0 },
+        inner: PLAZA.radius - half,
+        outer: PLAZA.radius + half,
+        height: PLAZA_RIM.height,
+        from,
+        to,
+        surface: 'wall',
+      },
+      Math.max(8, Math.round((to - from) * 40)),
+    );
+    descs.push(trimesh(R, mesh, [cx, PLAZA_Y, cz]));
+  }
+  const springs = PLAZA_GATE.height - PLAZA_GATE.halfWidth * 0.6;
+  for (const g of PLAZA_GATES) {
+    for (const [x, z] of plazaGatePosts(g.dir))
+      descs.push(R.ColliderDesc.capsule(springs / 2, 0.085).setTranslation(x, PLAZA_Y + springs / 2, z));
+    // a shut gate's leaves stop you across the whole arch (their bars are 0.27 m apart: nothing gets through)
+    if (!g.open)
+      descs.push(
+        wall(R, plazaGateAt(g.dir), gateTangent(g.dir), 2 * PLAZA_GATE.halfWidth, PLAZA_Y, 2.4, 0.08),
+      );
+  }
+  const [lx, ly, lz] = LIGHTHOUSE;
+  descs.push(R.ColliderDesc.ball(LIGHTHOUSE_BASE.radius).setTranslation(lx, ly + LIGHTHOUSE_BASE.lift, lz));
+  descs.push(
+    trimesh(
+      R,
+      arcWallMesh(
+        {
+          kind: 'arcWall',
+          centre: { x: 0, y: 0, z: 0 },
+          inner: LIGHTHOUSE_RAIL.radius - 0.03,
+          outer: LIGHTHOUSE_RAIL.radius + 0.03,
+          height: LIGHTHOUSE_RAIL.height,
+          from: 0,
+          to: 2 * Math.PI,
+          surface: 'wall',
+        },
+        96,
+      ),
+      [lx, ly, lz],
+    ),
+  );
+  const b = EAST_ROAD_BOX;
+  descs.push(slab(R, b.minX, b.maxX, b.minZ, b.maxZ, PLAZA_Y));
+  const { inset, height, thickness } = EAST_ROAD_RAIL;
+  const x0 = b.minX + inset;
+  const x1 = cx - PLAZA.radius - 0.25;
+  for (const z of [b.minZ + inset, b.maxZ - inset])
+    descs.push(wall(R, [(x0 + x1) / 2, z], [1, 0], x1 - x0, PLAZA_Y, height, thickness));
+  descs.push(wall(R, [x0, (b.minZ + b.maxZ) / 2], [0, 1], b.maxZ - b.minZ, PLAZA_Y, height, thickness));
+  return descs;
+}
+
+/**
+ * S-35 (発案者 2026-10-23: 玉を持たずに坂道へは出られない): `allowGround` with the film at the slope's entrance. While `holding()`
+ * says the film holds the body (session.ts membraneHolds: the vidro not in hand, the body on the shore's side), ground past
+ * the film is no ground: the body eases to a stop before it like at any edge (PlayerController's soft edges), and never
+ * steps through.
+ */
+export function withMembrane(
+  allowGround: (x: number, y: number, z: number, collider: RAPIER.Collider) => boolean,
+  holding: () => boolean,
+  membraneZ: number = MEMBRANE.z,
+): (x: number, y: number, z: number, collider: RAPIER.Collider) => boolean {
+  return (x, y, z, collider) => allowGround(x, y, z, collider) && !(z < membraneZ && holding());
 }
 
 /** Every static collider of the room. Round parts collide as the triangles that are drawn. */
@@ -89,20 +229,16 @@ export function addRoomColliders(R: typeof RAPIER, world: RAPIER.World): RAPIER.
   // The workshop's furniture (the bench, the furnace…) collides as the _col shapes of its glb (S-24, room.ts loads it
   // and src/game/assets adds them): the same artist-made shapes as what is drawn.
   // the way, the far shore and (S-34) the road past the gate, one slab with the shore (no seam to catch on under the
-  // gate), ending at the lookout's railing. The gate's posts here; its leaves swing open (GateLeaves).
+  // gate), on to the slope's brow (S-35: the slope goes on from there). The gate's posts here; its leaves swing open
+  // (GateLeaves).
   descs.push(slab(R, PATH.minX, PATH.maxX, PATH.minZ, PATH.maxZ));
   descs.push(slab(R, FAR.minX, FAR.maxX, ROAD.minZ, FAR.maxZ));
   for (const x of [-GATE.halfWidth, GATE.halfWidth])
     descs.push(
       R.ColliderDesc.capsule(GATE_SPRINGS / 2, GATE_POST_RADIUS).setTranslation(x, GATE_SPRINGS / 2, GATE.z),
     );
-  descs.push(
-    R.ColliderDesc.cuboid((ROAD.maxX - ROAD.minX) / 2, LOOKOUT.height / 2, LOOKOUT.depth / 2).setTranslation(
-      (ROAD.minX + ROAD.maxX) / 2,
-      LOOKOUT.height / 2,
-      LOOKOUT.z,
-    ),
-  );
+  // S-35: the slope down to the central plaza, the plaza and the road past its east gate
+  descs.push(...townColliders(R));
   // the pedestal and the lamp posts
   const pedestal = cylinderMesh(
     { kind: 'cylinder', centre: { x: 0, y: 0, z: 0 }, radius: PEDESTAL_RADIUS, height: 1, surface: 'wall' },
@@ -400,13 +536,15 @@ export class GateLeaves {
 }
 
 /**
- * Last line of 落下死はない: if a body ever drops below the walkways (y < floorY), put it back where it last
- * stood on solid, shared ground (never on back footing, which can vanish).
+ * Last line of 落下死はない: if a body ever drops below the walkways (y under the guard's floor at its x and z), put it back
+ * where it last stood on solid, shared ground (never on back footing, which can vanish). The floor is a height, or (S-35:
+ * the slope goes down 12 m to the plaza) a height for each x and z — a metre under the ground there (layout.ts
+ * groundHeight).
  */
 export class FallGuard {
   private safe: [number, number, number] | null = null;
 
-  constructor(readonly floorY = -1) {}
+  constructor(readonly floorY: number | ((x: number, z: number) => number) = -1) {}
 
   observe(feet: Vec3, grounded: boolean, onBackFooting: boolean): void {
     if (!grounded || onBackFooting) return;
@@ -419,7 +557,8 @@ export class FallGuard {
 
   /** Where to put the body back, or null while it is above the floor of the guard (or nothing is known). */
   rescue(feet: Vec3): Vec3 | null {
-    return feet[1] < this.floorY && this.safe ? [this.safe[0], this.safe[1], this.safe[2]] : null;
+    const floor = typeof this.floorY === 'number' ? this.floorY : this.floorY(feet[0], feet[2]);
+    return feet[1] < floor && this.safe ? [this.safe[0], this.safe[1], this.safe[2]] : null;
   }
 }
 

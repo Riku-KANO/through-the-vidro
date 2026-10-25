@@ -5,16 +5,16 @@ import { createBrassMaterial, createGlass } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import { glassEase } from '../../layers/tween';
-import { GATE, GATE_OPEN_DEG, GATE_SPRINGS, LAMP_HEIGHT, LAMP_POST_RADIUS, LOOKOUT, ROAD } from './layout';
+import { GATE, GATE_OPEN_DEG, GATE_SPRINGS } from './layout';
 
 /**
  * 序章の締め (S-34; 発案者 2026-10-22, 2026-10-23): the light drop taken, its light runs back out of the vidro across the
  * bridge and fixes it onto the surface (定着: the drawing is LayerField's settled region, the rule session.ts); when the light
- * has reached the far shore, the gate at its back opens (the reason it opens is seen: パズル設計 > 原則4). Past it, the first
- * 4 m of the slope down to the plaza (S-35), with a provisional railing over the mist and the town (門の先の道).
+ * has reached the far shore, the gate at its back opens (the reason it opens is seen: パズル設計 > 原則4). Past it, the slope
+ * down to the plaza (S-35: slope.ts, plaza.ts; S-34's provisional railing and lamps at the road's end are gone).
  *
  * This file is how that looks and moves: the gate (its posts and arch as S-06 drew them, and two brass leaves that swing
- * open about the posts), its keystone lamp, the lookout's railing and lamps, and the curves the room plays them on.
+ * open about the posts), its keystone lamp, and the curves the room plays them on.
  * Built from code like the rest of the way (room-art.ts), on the shared layer; Blender takes it over with the area's art.
  * アートディレクション > 形のルール: straight and thin lines only as brass frames (the bars, the rails), everything else round
  * (the arch, the rings, the globes). Values here are 仮 (process/slices/S-34.md).
@@ -54,7 +54,7 @@ export interface FinaleArt {
   dispose(): void;
 }
 
-/** Builds the gate, its keystone lamp and the lookout into `scene`, every piece through `field` (shared layer). */
+/** Builds the gate and its keystone lamp into `scene`, every piece through `field` (shared layer). */
 export function buildFinale(quality: QualityPreset, field: LayerField, scene: THREE.Object3D): FinaleArt {
   const disposables: { dispose(): void }[] = [];
   const keep = <T extends { dispose(): void }>(x: T): T => {
@@ -72,9 +72,6 @@ export function buildFinale(quality: QualityPreset, field: LayerField, scene: TH
     scene.add(o);
   };
   const brass = keep(createBrassMaterial());
-  const lampMilk = keep(
-    createGlass('milky', quality, { glow: { color: 0xffbf80, intensity: 1.5 } }).material,
-  );
   const keystoneMilk = keep(
     createGlass('milky', quality, { glow: { color: 0xffc58a, intensity: 2.4 } }).material,
   );
@@ -166,56 +163,6 @@ export function buildFinale(quality: QualityPreset, field: LayerField, scene: TH
   };
   const right = leaf(1);
   const left = leaf(-1);
-
-  // ---- the lookout at the road's end: a brass railing with rings, two lamps, the lip ---------------------------------
-  {
-    const parts: THREE.BufferGeometry[] = [];
-    const x0 = ROAD.minX + 0.12;
-    const x1 = ROAD.maxX - 0.12;
-    const z = LOOKOUT.z;
-    const h = LOOKOUT.height;
-    const posts = 7;
-    for (let i = 0; i < posts; i++) {
-      const x = x0 + ((x1 - x0) * i) / (posts - 1);
-      parts.push(new THREE.CylinderGeometry(0.02, 0.026, h, 8).translate(x, h / 2, z));
-      if (i < posts - 1) {
-        const mid = x + (x1 - x0) / (posts - 1) / 2;
-        parts.push(new THREE.TorusGeometry(0.15, 0.01, 8, 36).translate(mid, (h + 0.55) / 2, z));
-      }
-    }
-    for (const [y, r] of [
-      [h, 0.03],
-      [0.55, 0.014],
-      [0.1, 0.014],
-    ] as const)
-      parts.push(
-        new THREE.CylinderGeometry(r, r, x1 - x0 + 0.06, 8)
-          .rotateZ(Math.PI / 2)
-          .translate((x0 + x1) / 2, y, z),
-      );
-    // the brass lip along the road's end (形は縁で伝える)
-    parts.push(
-      new THREE.CylinderGeometry(0.018, 0.018, ROAD.maxX - ROAD.minX + 0.04, 6)
-        .rotateZ(Math.PI / 2)
-        .translate(0, 0, ROAD.minZ - 0.01),
-    );
-    const globes: THREE.BufferGeometry[] = [];
-    for (const x of [-LOOKOUT.lampX, LOOKOUT.lampX]) {
-      parts.push(
-        new THREE.CylinderGeometry(LAMP_POST_RADIUS, LAMP_POST_RADIUS * 1.5, LAMP_HEIGHT, 8).translate(
-          x,
-          LAMP_HEIGHT / 2,
-          z,
-        ),
-      );
-      parts.push(
-        new THREE.TorusGeometry(0.11, 0.012, 6, 24).rotateX(Math.PI / 2).translate(x, LAMP_HEIGHT - 0.06, z),
-      );
-      globes.push(new THREE.SphereGeometry(0.12, 24, 12).translate(x, LAMP_HEIGHT + 0.04, z));
-    }
-    put(new THREE.Mesh(merged(parts), brass));
-    put(new THREE.Mesh(merged(globes), lampMilk));
-  }
 
   return {
     leaves: { left, right },

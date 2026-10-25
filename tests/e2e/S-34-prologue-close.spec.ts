@@ -10,7 +10,8 @@ import { expect, type Page, test } from '@playwright/test';
  *  3. real input from the dead end: place → cross → touch the drop → the light settles the bridge (timed: 1–2 s), and when
  *     it has reached the far shore the gate opens (発案者 2026-10-23; timed) → back over the bridge → pick the vidro up ON
  *     the bridge (the exception to 裏の足場の上では拾えない) → the bridge stays, colliders and all → across again, through
- *     the gate, along the road to the railing. The close's two sounds are played (sound.finale), apart from the S-16 cues.
+ *     the gate onto the road and over the slope's brow (S-35: the railing at the road's end is gone; the slope goes on down
+ *     to the plaza, S-35's spec). The close's two sounds are played (sound.finale), apart from the S-16 cues.
  * Screens → artifacts/screens/S-34/<backend>/, the run → artifacts/S-34/run-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
@@ -63,7 +64,9 @@ interface RoomProbe {
     drop: [number, number, number];
     gateZ: number;
     roadEndZ: number;
-    lookoutZ: number;
+    /** S-35: the film in the gate's arch, the broken lighthouse's top. */
+    membraneZ: number;
+    lighthouseTop: [number, number, number];
   };
 }
 interface SoundProbe {
@@ -282,27 +285,6 @@ async function walkTo(
   }
 }
 
-/** Holds a key until the body has been at rest for 0.4 s of scene time (or the limit). */
-async function pushUntilStopped(page: Page, key: string, limitMs = 10_000): Promise<RoomProbe[]> {
-  const out: RoomProbe[] = [];
-  await page.keyboard.down(key);
-  let stillSince: number | null = null;
-  const end = Date.now() + limitMs;
-  try {
-    while (Date.now() < end) {
-      const r = await room(page);
-      out.push(r);
-      if (r.speed > 0.03) stillSince = null;
-      else stillSince ??= r.time;
-      if (stillSince !== null && r.time - stillSince > 0.4 && out.length > 10) break;
-      await page.waitForTimeout(40);
-    }
-  } finally {
-    await page.keyboard.up(key);
-  }
-  return out;
-}
-
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-34', backend);
@@ -371,12 +353,12 @@ for (const backend of backends) {
         },
       ],
       [
-        // past the gate: the short road, the lookout's railing and lamps, the mist and the town beyond (門の先の道)
+        // past the gate: the road, the slope going down from its brow to the plaza and the lighthouse (門の先の道, S-35)
         'road',
         'spawn=road&finaleHold=4.5',
         (r) => {
           expect(r.position.z).toBeLessThan(r.layout.gateZ);
-          expect(r.position.z).toBeGreaterThan(r.layout.lookoutZ);
+          expect(r.position.z).toBeGreaterThan(r.layout.roadEndZ);
           expect(r.grounded).toBe(true);
         },
       ],
@@ -463,7 +445,7 @@ for (const backend of backends) {
     expect(start.orb).toBe('hand');
     expect(start.finale.settle).toBe(0);
     expect(start.finale.gateOpen).toBe(false);
-    const { edgeZ, farZ, pedestalOrb, drop, gateZ, lookoutZ } = start.layout;
+    const { edgeZ, farZ, pedestalOrb, drop, gateZ, roadEndZ, lighthouseTop } = start.layout;
 
     // the first click locks the view (and, alone, starts the room's own audio: S-16)
     cursor.x = 640;
@@ -535,7 +517,7 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     await snap('bridge-stays');
 
-    // 門をくぐる: across again with the vidro in hand, through the open gate, along the road to the railing
+    // 門をくぐる: across again with the vidro in hand, through the open gate, along the road and over the slope's brow
     const across = await walkTo(page, 0.2, farZ - 0.8, 0.3);
     for (const q of across.way) {
       expect(q.grounded, `on the way back over at z ${q.position.z.toFixed(2)}`).toBe(true);
@@ -545,14 +527,11 @@ for (const backend of backends) {
     expect(through.end.position.z).toBeLessThan(gateZ - 1);
     expect(through.end.grounded).toBe(true);
     await snap('through-gate');
-    await lookAt(page, [0, 1.4, lookoutZ - 30]);
-    const push = await pushUntilStopped(page, 'KeyW');
-    const stop = push.at(-1) as RoomProbe;
-    expect(push.every((q) => q.grounded && Math.abs(q.position.y) < 0.03)).toBe(true);
-    // the railing stops you (行き止まりの理由: 柵), the town beyond it
-    expect(stop.position.z).toBeGreaterThan(lookoutZ);
-    expect(stop.position.z).toBeLessThan(lookoutZ + 0.6);
-    await lookAt(page, [3, 12, -82]);
+    // S-35: no railing at the road's end any more: on over the brow, the feet going down with the slope
+    const brow = await walkTo(page, 0, roadEndZ - 3, 0.3);
+    expect(brow.way.every((q) => q.grounded)).toBe(true);
+    expect(brow.end.position.y).toBeLessThan(-0.02);
+    await lookAt(page, lighthouseTop);
     await page.waitForTimeout(200);
     await snap('lookout');
     // and back the way you came: the open gate, the bridge, the workshop

@@ -488,12 +488,13 @@ for (const backend of backends) {
   test(`S-22 footfalls before the first gesture are never played, nor anything else of the room's steps after it [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(150_000);
+    // S-35: the script goes on down the slope to the plaza (about 100 s of play)
+    test.setTimeout(300_000);
     mkdirSync(out, { recursive: true });
     const errors = collectErrors(page);
     // the scripted play walks the whole way with no gesture: every footfall happens while there is no audio
     await page.goto(`/?scene=prologue-proto&direct=1&autoplay=1${webgl}`);
-    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 90_000);
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 200_000);
     expect(done.footfalls, 'the script walked').toBeGreaterThan(10);
     let s = await sound(page);
     expect(s.state).toBe('locked');

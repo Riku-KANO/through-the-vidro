@@ -385,11 +385,12 @@ for (const backend of backends) {
   test(`S-16 nothing sounds before the first gesture, and nothing is played later [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(150_000);
+    // S-35: the script goes on down the slope to the plaza (about 100 s of play)
+    test.setTimeout(300_000);
     const errors = collectErrors(page);
     // the scripted play has no gesture: every event happens while audio waits for one
     await page.goto(`/?scene=prologue-proto&direct=1&autoplay=1${webgl}`);
-    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 90_000);
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 200_000);
     const s = await sound(page);
     expect(s.state).toBe('locked');
     expect(s.unlocked).toBe(false);

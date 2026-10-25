@@ -110,8 +110,11 @@ export const AMBIENCE = {
     maxActive: DOOR_SWINGS[1] * (1 + DOOR_BOUNCES),
   },
   chimes: {
-    // above 1: they hang 26 m off at the bench (1/26 by distance); from the far shore, 6.5 m, they are as loud as a step
-    level: 2,
+    // well above 1: S-22 tuned them as level 2 hung 26 m off the bench (1/26 by distance). S-35 hangs them in the town past
+    // the central plaza on the same bearing, about 195 m from the bench, so 2 × 195/26 keeps them as loud there and along
+    // the way as S-22 tuned them (the panner's inverse law has no farthest distance). From the nearest place you walk
+    // (about 55 m) they are softer than S-22's were from its far shore (6.5 m off at level 2): never near
+    level: 14.9,
     /** Seconds between gusts that ring them, and before the first one. */
     gap: [5, 13] as const,
     first: [1.2, 4] as const,

@@ -7,6 +7,7 @@ import { expect, type Page, test } from '@playwright/test';
  * render paths: 潜る → 作業台の玉を手にする → 歩く → 行き止まりで止まる → 覗く → 置く → 渡る → 雫.
  * Also with real input: 置いている間は覗けない, 橋の上では拾えない.
  * S-34 carries the play-through on to the close: 雫 → 橋を戻る → 玉を拾う (on the settled bridge) → 門をくぐる.
+ * S-35 carries it on down the slope to the central plaza, to the front of its open east gate (real input and autoplay).
  * Screens → artifacts/screens/S-06/<backend>/, the event log → artifacts/S-06/run-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
@@ -64,7 +65,11 @@ interface RoomProbe {
     pedestalOrb: [number, number, number];
     drop: [number, number, number];
     gateZ: number;
-    lookoutZ: number;
+    /** S-35: the slope's foot, the plaza, the broken lighthouse's top and the plaza's open east gate. */
+    slopeEndZ: number;
+    plaza: { center: [number, number, number]; radius: number };
+    lighthouseTop: [number, number, number];
+    eastGate: [number, number, number];
   };
 }
 
@@ -163,11 +168,22 @@ async function lookAt(page: Page, p: [number, number, number]): Promise<void> {
   }
 }
 
-/** Walks (W) toward a point on the ground, steering with the mouse, until within `within` metres. */
-async function walkTo(page: Page, x: number, z: number, within = 0.3, timeout = 20_000): Promise<RoomProbe> {
+/**
+ * Walks (W, with Shift when `sprint`: 早歩き) toward a point on the ground, steering with the mouse, until within `within`
+ * metres. The view is kept level with the feet (S-35: down the slope too).
+ */
+async function walkTo(
+  page: Page,
+  x: number,
+  z: number,
+  within = 0.3,
+  timeout = 20_000,
+  sprint = false,
+): Promise<RoomProbe> {
   const end = Date.now() + timeout;
-  await lookAt(page, [x, 1.5, z]);
+  await lookAt(page, [x, (await room(page)).position.y + 1.5, z]);
   await page.keyboard.down('KeyW');
+  if (sprint) await page.keyboard.down('ShiftLeft');
   try {
     for (;;) {
       const r = await room(page);
@@ -182,6 +198,7 @@ async function walkTo(page: Page, x: number, z: number, within = 0.3, timeout = 
     }
   } finally {
     await page.keyboard.up('KeyW');
+    if (sprint) await page.keyboard.up('ShiftLeft');
   }
 }
 
@@ -210,10 +227,10 @@ for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-06', backend);
 
-  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop → back → pick up → gate [${backend}]`, async ({
+  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop → back → pick up → gate → slope → plaza [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(330_000);
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(join(root, 'artifacts/S-06'), { recursive: true });
     const errors = collectErrors(page);
@@ -427,18 +444,33 @@ for (const backend of backends) {
     const kept = await waitRoom(page, 'r.sphereRadius === 0', 3_000);
     expect(kept.bridgeColliders).toBe(kept.bridgeSegments);
     expect(kept.grounded).toBe(true);
-    // 門をくぐる: back over the bridge with the vidro in hand, through the open gate, to the lookout's railing
+    // 門をくぐる: back over the bridge with the vidro in hand, through the open gate (its film lets the vidro's bearer by)
     await walkTo(page, 0.2, farZ - 0.8, 0.3);
     const through = await walkTo(page, 0, closed.layout.gateZ - 1.6, 0.3);
     expect(through.position.z).toBeLessThan(closed.layout.gateZ - 1);
     expect(through.grounded).toBe(true);
     await snap('through-gate');
-    await lookAt(page, [0, 1.4, closed.layout.lookoutZ - 30]);
-    const toRail = await pushUntilStopped(page, 'KeyW');
-    const atRail = toRail.at(-1) as RoomProbe;
-    expect(atRail.position.z).toBeGreaterThan(closed.layout.lookoutZ);
-    expect(atRail.position.z).toBeLessThan(closed.layout.lookoutZ + 0.6);
-    await snap('lookout');
+    // S-35: down the slope (早歩き) to the central plaza, the broken lighthouse ahead, then across it to the open east gate
+    const { slopeEndZ, plaza, lighthouseTop, eastGate } = closed.layout;
+    const foot = await walkTo(page, 0, slopeEndZ - 1.5, 0.5, 90_000, true);
+    expect(foot.grounded).toBe(true);
+    expect(foot.position.y).toBeCloseTo(plaza.center[1], 1);
+    await lookAt(page, lighthouseTop);
+    await page.waitForTimeout(200);
+    await snap('plaza-lighthouse');
+    // the gate's front: a few metres in from the rim, toward the plaza's centre
+    const toCentre = [plaza.center[0] - eastGate[0], plaza.center[2] - eastGate[2]];
+    const len = Math.hypot(toCentre[0] ?? 0, toCentre[1] ?? 0);
+    const front: [number, number] = [
+      eastGate[0] + ((toCentre[0] ?? 0) / len) * 3,
+      eastGate[2] + ((toCentre[1] ?? 0) / len) * 3,
+    ];
+    const atGate = await walkTo(page, front[0], front[1], 0.4, 60_000);
+    expect(atGate.grounded).toBe(true);
+    expect(Math.hypot(atGate.position.x - eastGate[0], atGate.position.z - eastGate[2])).toBeLessThan(3.6);
+    await lookAt(page, [eastGate[0], eastGate[1] + 2, eastGate[2]]);
+    await page.waitForTimeout(200);
+    await snap('east-gate');
     const end = await room(page);
     expect(end.events).toEqual(
       expect.arrayContaining(['pickup:bench', 'place', 'dropTaken', 'pickup:pedestal']),
@@ -531,14 +563,14 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate by script [${backend}]`, async ({
+  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate → down to the plaza's east gate by script [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
     const errors = collectErrors(page);
     await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
     await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
-    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 90_000);
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 200_000);
     expect(done.events).toEqual(
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
     );
@@ -550,6 +582,11 @@ for (const backend of backends) {
     expect(done.finale.gateOpen).toBe(true);
     expect(done.bridgeColliders).toBe(done.bridgeSegments);
     expect(done.position.z).toBeLessThan(done.layout.gateZ - 1);
+    // S-35: on down the slope and across the plaza, to the front of its open east gate
+    const { eastGate, plaza } = done.layout;
+    expect(Math.hypot(done.position.x - eastGate[0], done.position.z - eastGate[2])).toBeLessThan(3.6);
+    expect(done.position.y).toBeCloseTo(plaza.center[1], 1);
+    expect(done.grounded).toBe(true);
     expect(done.fallRescues, 'the fall guard never had to act').toBe(0);
     // every phase in budget (the frame's all passes), and no compile stall in a transition or in play
     const phases = await page.evaluate(
