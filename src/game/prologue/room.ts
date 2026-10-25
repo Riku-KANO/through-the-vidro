@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { readsBackdrop } from '../../core/glass';
+import { readsBackdrop, withGlassUnculled } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
@@ -880,7 +880,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     warm() {
       prewarm = true;
       stage();
-      pipeline.render(frame);
+      // S-38: the glass all around compiles in this draw, not only what this pose sees (the workshop's wares behind the
+      // landing pose were compiled when first looked back at, one frame each): the game's own pipeline (scene pass, its
+      // backdrop, the layer masks) draws them with the view's culling lifted for the glass alone (core/glass/warm.ts)
+      withGlassUnculled(art.scene, () => pipeline.render(frame));
       prewarm = false;
       stage();
     },
