@@ -88,7 +88,7 @@ export function vidroCalls(
 
 /**
  * 仮 (S-39 玉のささやき): seconds between the first two whispers of the vidro left behind, while it keeps calling (繰り返すときは
- * 間を置く). Longer than the call takes to fade (CALL_FALL_SECONDS), so a step back and straight in again is not a new call.
+ * 間を置く). Longer than the call takes to fade (CALL_FALL_SECONDS).
  */
 export const WHISPER_GAP_SECONDS = 3.2;
 
@@ -98,7 +98,11 @@ export const WHISPER_GAP_SECONDS = 3.2;
  */
 export const WHISPER_GAPS_SECONDS: readonly number[] = [WHISPER_GAP_SECONDS, 6, 12];
 
-/** 仮 (S-39): once the vidro has stopped calling this long (you stepped away from the film), the gaps start again from the first. */
+/**
+ * 仮 (S-39; 発案者の判断 2026-10-25: 膜から離れて戻ると最初の間に戻る): once the vidro has stopped calling this long (counted from the
+ * step it stops: you stepped away from the film), the gaps start again from the first. As long as the first gap, so a step back
+ * and straight in again is not a new call: the gap since the last whisper still holds (a whisper is only due once that has passed).
+ */
 export const WHISPER_RESET_SECONDS = WHISPER_GAP_SECONDS;
 
 /** S-39: the gap after the `count`-th whisper of this call (1: after the first; 0, none yet: the first gap). */
@@ -452,7 +456,7 @@ export class PrologueSession {
     // gaps start again from the first
     if (this.sinceWhisper !== null) this.sinceWhisper += dt;
     this.quietFor = this.calling ? 0 : this.quietFor + dt;
-    if (this.quietFor >= WHISPER_RESET_SECONDS) this.whispers = 0;
+    if (this.quietFor >= WHISPER_RESET_SECONDS - 1e-9) this.whispers = 0;
     if (whisperDue(this.calling, this.sinceWhisper, whisperGap(this.whispers))) {
       this.sinceWhisper = 0;
       this.whispers += 1;

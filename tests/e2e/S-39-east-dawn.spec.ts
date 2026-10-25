@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { rms } from '../../src/core/audio/analysis';
 import { Biquad } from '../../src/core/audio/dsp';
-import { WHISPER_GAP_SECONDS } from '../../src/game/prologue/session';
+import { WHISPER_GAP_SECONDS, whisperGap } from '../../src/game/prologue/session';
 
 /**
  * S-39: east to the dawn (発案者 2026-10-25; 設計書 rev 49), on both render paths.
@@ -407,7 +407,8 @@ for (const backend of backends) {
     const away = await waitRoom(page, 'r.membrane.call === 0', 5_000);
     expect(away.position.z - membraneZ).toBeGreaterThan(0.9);
     const n = away.membrane.whispers.length;
-    await page.waitForTimeout((WHISPER_GAP + 0.6) * 1000);
+    // past the gap the next whisper would have come after (the gaps widen: S-39 統合)
+    await page.waitForTimeout((whisperGap(2) + 0.6) * 1000);
     const later = await room(page);
     expect(later.membrane.whispers).toHaveLength(n);
 

@@ -580,13 +580,30 @@ describe('S-39: the session’s whisper, on its own bus (not the room’s event 
     s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
     stepFor(s, WHISPER_GAP_SECONDS + whisperGap(2) + 0.1, { feet: AT_FILM });
     expect(hints).toHaveLength(3);
-    // away until the call has gone and the reset has passed, then in again pushing: at once, then the first gap again
-    stepFor(s, CALL_FALL_SECONDS + WHISPER_RESET_SECONDS + 0.1, { feet: SHORE });
+    // away a little longer than the reset (counted from the step it stops calling), then in again pushing: at once, then the
+    // first gap again
+    stepFor(s, WHISPER_RESET_SECONDS + 0.1, { feet: SHORE });
     expect(hints).toHaveLength(3);
     s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
     expect(hints).toHaveLength(4);
     stepFor(s, WHISPER_GAP_SECONDS + 0.05, { feet: AT_FILM, pushing: true });
     expect(hints).toHaveLength(5);
+  });
+
+  it('away a little shorter than the reset, the widened gap holds (a step back and in again is not a new call)', () => {
+    const { s, hints } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    stepFor(s, WHISPER_GAP_SECONDS + 0.05, { feet: AT_FILM });
+    expect(hints).toHaveLength(2);
+    // the next gap is the wider one; away a little shorter than the reset, and in again pushing
+    stepFor(s, WHISPER_RESET_SECONDS - 0.3, { feet: SHORE });
+    stepFor(s, 0.3, { feet: AT_FILM, pushing: true });
+    expect(s.call).toBeGreaterThan(0);
+    // past the first gap since the second whisper, and still quiet until the wider one has passed
+    stepFor(s, whisperGap(2) - (0.05 + WHISPER_RESET_SECONDS) - 0.1, { feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(2);
+    stepFor(s, 0.2, { feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(3);
   });
 
   it('a step back and straight in again does not shorten the gap', () => {

@@ -88,7 +88,7 @@ import { type FinaleEvent, GATE_OPEN_SECONDS, type HintEvent, SETTLE_SECONDS } f
  *    (from the gate), once each as they start (room.finale; src/audio/finale.ts). Played through the engine's voices
  *    like any event's sound, but logged and counted apart from the cues (`probe.finale`): the cues are S-16's table.
  *  - S-39: 玉のささやき — the vidro left behind whispers (a small glass ring, src/audio/whisper.ts) from where it stands each
- *    time the room's hints say so (room.hints; session.ts whisperDue: as it starts calling, then the gap apart). Like the
+ *    time the room's hints say so (room.hints; session.ts whisperDue: as it starts calling, then the gaps apart, widening). Like the
  *    close's sounds, logged and counted apart from the cues (`probe.whisper`).
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
