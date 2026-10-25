@@ -74,7 +74,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   物の色だけを見るときは、隠す代わりに平らな色の材質に替えて差を取り、揺れる灯りの雑音は差の大きさで比べ、手の玉の円は除く
   （`tests/e2e/S-30-furnace-colour.spec.ts`）。
 - **部屋の出来事の記録（`room.events` → `probe.events`）に新しい種類を足さない（S-34）。** S-16・S-18 の e2e は記録の名前をすべて音の表と照合し、
-  知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`）。
+  知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`、ヒントの `room.hints`。S-39）。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -228,5 +228,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **Web Audio の inverse の距離の法則は maxDistance で頭打ちにならない（S-35）。** 遠い音源の大きさは level ÷ 距離で決まる（遠くの風鈴は
   195m で level 14.9）。頭打ちにする古い実装に備えて、遠い場所の panner は maxDistance を大きくする（`AmbientSpot.far`）。音の聞こえ方の検査
   （作業台で風の上に浮く）は音源の方位で変わる（HRTF）ので、音源を動かすときは方位を保つか、検査をやり直す。
+- **街の東西にある物は `COMPASS`（`src/game/prologue/layout.ts`）を通して置く（S-39）。** ゲームの中の東は夜明けの側（+X、坂を下りる右手）で、
+  地図の図（北が上）とは左右が鏡写し。x の符号を直に書かない。
 - **新しい場所のガラスは、区域ごとに InstancedMesh を分ける（S-35）。** 1つにすると境界球が全体を覆い、画面の外でも描かれる（通常と覗くパスの両方）。
 

@@ -438,11 +438,11 @@ const SHOT_GAP_MS = 300;
 const RESTORES: readonly string[] = ['furnace', 'door'];
 /**
  * Draw calls of the four fixed views with S-26's glb (S37_PHASE=s26, the same on both paths): one more lightmap adds none.
- * Measured again in S-35's world at its integration (2026-10-25: the slope, the plaza and the town seen from the workshop;
- * S-26's were wake 67, furnace 43). When the world seen from these views grows, measure them again on the branch before it
- * meets S-37's glb (S37_PHASE=s26).
+ * Measured again in the world each time it grew in these views (S-26: wake 67, furnace 43; S-35's slope, plaza and town:
+ * wake 90, furnace 59; S-39's, east on the dawn's side, Area 1's hill behind the furnace: below, 2026-10-25). When the world
+ * seen from these views grows, measure them again with S-26's glb put in for the run (S37_PHASE=s26).
  */
-const DRAWS: Record<string, number> = { wake: 90, furnace: 59, shelf: 38, door: 72 };
+const DRAWS: Record<string, number> = { wake: 89, furnace: 61, shelf: 38, door: 72 };
 
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';

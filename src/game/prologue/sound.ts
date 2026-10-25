@@ -30,6 +30,7 @@ import { strikeGlass } from '../../audio/glass-tuning';
 import { VIDRO_VOLUMES } from '../../audio/levels';
 import { type PopenKind, playPopen } from '../../audio/popen';
 import { VIDRO_ROOMS } from '../../audio/rooms';
+import { loadWhisperBank, WHISPER_LEVEL, whisperSource } from '../../audio/whisper';
 import { loadBank, scheduleBuffer, startLoop } from '../../core/audio/bank';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import type { GlassStrength } from '../../core/audio/glass';
@@ -63,7 +64,7 @@ import {
   WORKSHOP_TOP,
 } from './layout';
 import type { RoomProbe } from './room';
-import { type FinaleEvent, GATE_OPEN_SECONDS, SETTLE_SECONDS } from './session';
+import { type FinaleEvent, GATE_OPEN_SECONDS, type HintEvent, SETTLE_SECONDS } from './session';
 
 /**
  * 序章の音 (S-16): the prologue room's events (room.events, S-06) answered with S-09's sounds.
@@ -86,6 +87,9 @@ import { type FinaleEvent, GATE_OPEN_SECONDS, SETTLE_SECONDS } from './session';
  *  - S-34: the close — the drop's light settling the bridge (from the light, following it across) and the gate opening
  *    (from the gate), once each as they start (room.finale; src/audio/finale.ts). Played through the engine's voices
  *    like any event's sound, but logged and counted apart from the cues (`probe.finale`): the cues are S-16's table.
+ *  - S-39: 玉のささやき — the vidro left behind whispers (a small glass ring, src/audio/whisper.ts) from where it stands each
+ *    time the room's hints say so (room.hints; session.ts whisperDue: as it starts calling, then the gap apart). Like the
+ *    close's sounds, logged and counted apart from the cues (`probe.whisper`).
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
 
@@ -199,6 +203,8 @@ export interface SoundRoom {
   readonly events: EventBus<PrologueEvent>;
   /** S-34: the close (the light settling the bridge, the gate opening), apart from `events`. */
   readonly finale?: EventBus<FinaleEvent>;
+  /** S-39: the hints (the vidro left behind whispering), apart from `events` and the close's. */
+  readonly hints?: EventBus<HintEvent>;
   /** The game camera: the listener, and the frame the hand orb is held in. */
   readonly camera: THREE.Object3D;
   readonly probe: Pick<
@@ -230,6 +236,18 @@ export interface FinalePlayed {
   event: 'settle' | 'gateOpen';
   at: [number, number, number];
   distance: number;
+}
+
+/* ---------- S-39: 玉のささやき ---------- */
+
+/** The vidro's whisper (S-39): synthesized now, a recording can take its place there (src/audio/whisper.ts). */
+export const WHISPER_SOURCE = whisperSource();
+
+/** One whisper that played: from where (the vidro), how far from the listener, and when (the room's clock, s). */
+export interface WhisperPlayed {
+  at: [number, number, number];
+  distance: number;
+  time: number;
 }
 
 /* ---------- S-22: where the workshop's ambience is placed ---------- */
@@ -390,6 +408,8 @@ export interface SoundBanks {
   ambience: AmbienceBanks;
   /** S-34. Without it the close stays silent (and says so: probe.finale.refused). */
   finale?: FinaleBanks;
+  /** S-39. Without it the vidro's whisper stays silent (and says so: probe.whisper.refused). */
+  whisper?: AudioBuffer | null;
 }
 
 export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<SoundBanks> {
@@ -397,6 +417,7 @@ export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal
     footsteps: await loadFootstepBanks(ctx, signal),
     ambience: await loadAmbienceBanks(ctx, signal),
     finale: await loadFinaleBanks(ctx, FINALE_SOURCES, signal),
+    whisper: await loadWhisperBank(ctx, WHISPER_SOURCE, signal),
   };
 }
 
@@ -405,11 +426,11 @@ export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal
 export type SoundLabSpec =
   /**
    * One sound of a bank at unity, onto the ambience bus (no emitter), in a room's reverb. The loops (wind, S-25 fire)
-   * play on from the start. S-34: 'finale' #0 is the bridge settling, #1 the gate opening.
+   * play on from the start. S-34: 'finale' #0 is the bridge settling, #1 the gate opening. S-39: 'whisper' #0.
    */
   | {
       kind: 'sound';
-      bank: FloorMaterial | 'chimes' | 'drops' | 'wind' | 'fire' | 'door-chime' | 'finale';
+      bank: FloorMaterial | 'chimes' | 'drops' | 'wind' | 'fire' | 'door-chime' | 'finale' | 'whisper';
       index: number;
       seconds: number;
       room?: 'workshop' | 'dome';
@@ -427,6 +448,20 @@ export type SoundLabSpec =
       at: SpawnName;
       volume?: number;
       only?: readonly string[];
+    }
+  /**
+   * S-39: the room's ambience heard from a spawn as above (facing `yaw` instead of the spawn's, when given), and
+   * (`whisper`) the vidro's whisper from its pedestal `when` seconds in, at its level on the effects bus (as the room plays
+   * it): is it heard where you stand?
+   */
+  | {
+      kind: 'whisper';
+      seconds: number;
+      seed: number;
+      at: SpawnName;
+      yaw?: number;
+      when: number;
+      whisper: boolean;
     };
 
 export interface SoundLabResult {
@@ -468,7 +503,9 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
                     ? FURNACE_SOURCE
                     : bank === 'finale'
                       ? [FINALE_SOURCES.settle, FINALE_SOURCES.gate][index]
-                      : FOOTSTEP_SOURCES[bank][index];
+                      : bank === 'whisper'
+                        ? [WHISPER_SOURCE][index]
+                        : FOOTSTEP_SOURCES[bank][index];
         if (!source) throw new RangeError(`no sound ${bank} #${index}`);
         const [buf] = await loadBank(ctx, [source]);
         if (!buf) throw new Error(`sound ${source.id} did not render`);
@@ -489,23 +526,38 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
         }
       } else {
         const spawn = SPAWNS[spec.at];
-        const [fx, fy, fz] = lookDirection(spawn.yaw, 0);
+        const yaw = spec.kind === 'whisper' && spec.yaw !== undefined ? spec.yaw : spawn.yaw;
+        const [fx, fy, fz] = lookDirection(yaw, 0);
         engine.setListener(
           { x: spawn.feet[0], y: spawn.feet[1] + EYE_HEIGHT, z: spawn.feet[2] },
           { x: fx, y: fy, z: fz },
           { x: 0, y: 1, z: 0 },
         );
-        engine.setVolume('ambience', spec.volume ?? VIDRO_VOLUMES.ambience);
+        engine.setVolume(
+          'ambience',
+          (spec.kind === 'ambience' ? spec.volume : undefined) ?? VIDRO_VOLUMES.ambience,
+        );
         const banks = await loadAmbienceBanks(ctx);
         const { player } = placeAmbience(engine, banks, {
           seed: spec.seed,
           waitForRunning: false,
-          only: spec.only,
+          only: spec.kind === 'ambience' ? spec.only : undefined,
         });
         player.start(0);
         for (let t = 0; t <= seconds; t += 0.1) player.update(t);
         hits = player.hits;
         draughts = player.draughts;
+        // S-39: the whisper from the vidro on its pedestal, as the room plays it (sound.ts playWhisper)
+        if (spec.kind === 'whisper' && spec.whisper) {
+          const [buf] = await loadBank(ctx, [WHISPER_SOURCE]);
+          if (!buf) throw new Error('the whisper did not render');
+          const emitter = engine.createEmitter('sfx', {
+            x: PEDESTAL_ORB[0],
+            y: PEDESTAL_ORB[1],
+            z: PEDESTAL_ORB[2],
+          });
+          scheduleBuffer(ctx, emitter.input, buf, spec.when, { gain: WHISPER_LEVEL });
+        }
       }
       return engine;
     },
@@ -558,6 +610,8 @@ export interface SoundProbe {
   readonly ambience: AmbienceProbe;
   /** S-34: the close's sounds (the bridge settling, the gate opening), counted apart from the cues. */
   readonly finale: FinaleSoundProbe;
+  /** S-39: the vidro's whisper, counted apart from the cues. */
+  readonly whisper: WhisperSoundProbe;
   /** S-22 sensor (not enumerable, so probes copied by the e2e leave it out): renders a sound offline. */
   readonly render: (spec: SoundLabSpec) => Promise<SoundLabResult>;
 }
@@ -572,6 +626,19 @@ export interface FinaleSoundProbe {
   played: FinalePlayed[];
   refused: string[];
   /** Voices the engine started for them (the engine's whole count takes them in: engineVoices). */
+  voicesStarted: number;
+}
+
+/**
+ * S-39: the vidro's whisper. Each whisper the room's hints ask for is answered once, as it happens: played (from where, how
+ * far, when), or refused (no audio yet, its sound not loaded, or the engine refused it) and then never played later.
+ */
+export interface WhisperSoundProbe {
+  /** Its sound is loaded and its emitter placed. */
+  ready: boolean;
+  played: WhisperPlayed[];
+  refused: string[];
+  /** Voices the engine started for it (the engine's whole count takes them in: engineVoices). */
   voicesStarted: number;
 }
 
@@ -647,6 +714,7 @@ function pannerPosition(node: AudioNode): [number, number, number] {
   ];
 }
 const MAX_STEPS_LOGGED = 64;
+const MAX_WHISPERS_LOGGED = 32;
 
 export interface PrologueSound {
   readonly probe: SoundProbe;
@@ -831,6 +899,47 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   };
   const offFinale = room.finale?.on(playFinale) ?? null;
 
+  // S-39: the vidro's whisper, once its buffer is loaded; apart from the cues (S-16's table) and the close's
+  let whisper: { buffer: AudioBuffer; emitter: Emitter } | null = null;
+  const whisperLog = { played: [] as WhisperPlayed[], refused: [] as string[], voices: 0 };
+  const whisperAt = { x: PEDESTAL_ORB[0], y: PEDESTAL_ORB[1], z: PEDESTAL_ORB[2] };
+  const refuseWhisper = (type: string): void => {
+    whisperLog.refused.push(type);
+    if (whisperLog.refused.length > MAX_WHISPERS_LOGGED) whisperLog.refused.shift();
+  };
+  /** A whisper: from the vidro where it stands (the pedestal; the bench), once, now (or refused, never later). */
+  const playWhisper = (event: HintEvent): void => {
+    if (disposed || event.type !== 'whisper') return;
+    if (!engine || !whisper) {
+      refuseWhisper(event.type);
+      return;
+    }
+    follow();
+    const [x, y, z] = sourcePoint('orb', roomProbe.orb, [handWorld.x, handWorld.y, handWorld.z]);
+    whisperAt.x = x;
+    whisperAt.y = y;
+    whisperAt.z = z;
+    whisper.emitter.setPosition(whisperAt);
+    const { buffer } = whisper;
+    const before = engine.snapshot().voicesStarted;
+    const started = engine.startVoice(
+      { level: WHISPER_LEVEL, emitter: whisper.emitter },
+      (ctx, destination, when) => scheduleBuffer(ctx, destination, buffer, when, { gain: WHISPER_LEVEL }),
+    );
+    whisperLog.voices += engine.snapshot().voicesStarted - before;
+    if (!started) {
+      refuseWhisper(event.type);
+      return;
+    }
+    whisperLog.played.push({
+      at: [x, y, z],
+      distance: Math.hypot(x - ear.x, y - ear.y, z - ear.z),
+      time: roomProbe.time,
+    });
+    if (whisperLog.played.length > MAX_WHISPERS_LOGGED) whisperLog.played.shift();
+  };
+  const offHints = room.hints?.on(playWhisper) ?? null;
+
   /** The engine is there (its own, or handed over): place the emitters in the room. */
   const attach = (e: AudioEngine): void => {
     engine = e;
@@ -861,6 +970,12 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
           const gate = e.createEmitter('sfx', { x: GATE_SOUND[0], y: GATE_SOUND[1], z: GATE_SOUND[2] });
           live.push(settle, gate);
           finale = { banks: banks.finale, settle, gate };
+        }
+        // S-39: the vidro's whisper, from where it stands
+        if (banks.whisper) {
+          const emitter = e.createEmitter('sfx', whisperAt);
+          live.push(emitter);
+          whisper = { buffer: banks.whisper, emitter };
         }
       },
       (err) => {
@@ -1034,6 +1149,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         voicesStarted: finaleLog.voices,
       };
     },
+    get whisper(): WhisperSoundProbe {
+      return {
+        ready: whisper !== null,
+        played: [...whisperLog.played],
+        refused: [...whisperLog.refused],
+        voicesStarted: whisperLog.voices,
+      };
+    },
     get footsteps(): FootstepsProbe {
       return {
         ready: steps !== null,
@@ -1078,6 +1201,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       off();
       offFinale?.();
       finale = null;
+      offHints?.();
+      whisper = null;
       subscribed = false;
       stopListening();
       stopWaiting?.();

@@ -325,17 +325,35 @@ export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.min
  * last left). Shapes are 仮 (code-made, 泡と曲面と真鍮の枠): what is settled here is where things stand, how the way leads,
  * what is seen from where and what stops the body (process/slices/S-35.md).
  *
- * The town's compass in this frame (S-35, 仮; the map is a guide, not to scale): north is back toward the workshop (+Z), so
- * the way down runs south (-Z) and east, where エリア1 lies, is on the left (-X): 下りながら正面に広場と灯塔、左手（東）に
- * 工房街の煙突. The map puts the workshop north-east of the plaza; due north keeps エリア1's chimneys in the view from the
- * slope (judgement asked for in process/slices/S-35.md).
+ * The town's compass in this frame (S-35; S-39, 発案者 2026-10-25, 設計書 rev 49): the workshop stands due north of the plaza
+ * (+Z), so the way down runs south (-Z), and east — エリア1, 朝 — is on its right (+X): the side where the dawn is about to
+ * rise in the workshop's sky and where the sun baked into the workshop shines from (room-art.ts DAWN, left as they were).
+ * 坂を下りると夜明けの光とエリア1の煙突が同じ東の側に見える. West (エリア3's greenhouse, 夕方) is on the left, south (エリア2's
+ * canal) straight on past the plaza. The map's figure has east on the other hand: the town here is its mirror image (left
+ * and right swapped), the price of keeping the workshop's sky and bake (S-35 judged east the left, and the dawn read as
+ * the west: process/slices/S-35.md 判断待ち1).
  */
 export const COMPASS = {
   north: [0, 1] as const,
-  east: [-1, 0] as const,
+  east: [1, 0] as const,
   south: [0, -1] as const,
-  west: [1, 0] as const,
+  west: [-1, 0] as const,
 };
+
+/** `a`·`u` + `b`·`v` on the ground (x, z): a step off the plaza's centre along two of the compass's directions. */
+function along(
+  u: readonly [number, number],
+  a: number,
+  v: readonly [number, number] = [0, 0],
+  b = 0,
+): [number, number] {
+  return [u[0] * a + v[0] * b, u[1] * a + v[1] * b];
+}
+
+/** Yaw (S-03 PlayerController: 0 looks down -Z, positive turns left) that looks along (dx, dz) on the ground. */
+function yawToward(dx: number, dz: number): number {
+  return Math.atan2(-dx, -dz);
+}
 
 /**
  * 坂道 (S-35): one straight way from the brow at the road's end down to the plaza's rim, 80 m from the gate (街の配置: 門から
@@ -410,15 +428,32 @@ export function plazaGateAt(dir: readonly [number, number], radius: number = PLA
 export const EAST_ROAD = { length: 6, halfWidth: 1.4, railing: 1.0 } as const;
 /** The east road's end (x): the railing stands just inside it. */
 export const EAST_ROAD_END_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + EAST_ROAD.length);
+/**
+ * The east road's stone as a box on x and z, from its end to `under` metres in under the plaza's rim (the road runs along
+ * x: COMPASS.east is ±X).
+ */
+export function eastRoadBox(under: number): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const rimX = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius - under);
+  return {
+    minX: Math.min(EAST_ROAD_END_X, rimX),
+    maxX: Math.max(EAST_ROAD_END_X, rimX),
+    minZ: PLAZA.center[2] - EAST_ROAD.halfWidth,
+    maxZ: PLAZA.center[2] + EAST_ROAD.halfWidth,
+  };
+}
 
 /**
  * 工房街の煙突 (空間の可読性と導線 5: 各エリアにも固有の目印; ハリノの地図: エリア1の坂の上、雫の部屋3のそば): S-35 draws it as a
  * landmark far off on エリア1's hill, east of the plaza a little to the south, so that from the slope's brow it stands to the
- * left of the lighthouse (左手（東）) and from the plaza it rises over the open east gate. `foot` is where it stands on the
- * hill, `top` its height above the plaza's floor. 仮: S-36 lays out エリア1 (process/slices/S-35.md, S-36 への引き継ぎ).
+ * right of the lighthouse against the dawn's warm horizon (S-39: 右手（東）, 夜明けの側) and from the plaza it rises over the
+ * open east gate. `foot` is where it stands on the hill, `top` its height above the plaza's floor. 仮: S-36 lays out
+ * エリア1 (process/slices/S-39.md, S-36 への引き継ぎ).
  */
 export const AREA1_CHIMNEY = {
-  foot: [PLAZA.center[0] - 120, PLAZA_Y + 10, PLAZA.center[2] - 26] as Vec3,
+  foot: (() => {
+    const [dx, dz] = along(COMPASS.east, 120, COMPASS.south, 26);
+    return [PLAZA.center[0] + dx, PLAZA_Y + 10, PLAZA.center[2] + dz] as Vec3;
+  })(),
   top: 34,
 } as const;
 
@@ -438,7 +473,10 @@ export const DROP_TOWERS: readonly (readonly [number, number, number])[] = [
 export const DROP_TOWER_FOOT = 4;
 /** エリア3's greenhouse: its dome's centre (on the ground, in the mist) and radius, west of the plaza. */
 export const GREENHOUSE = {
-  center: [PLAZA.center[0] + PLAZA.radius + 120, PLAZA_Y - 5, PLAZA.center[2]] as Vec3,
+  center: (() => {
+    const [dx, dz] = along(COMPASS.west, PLAZA.radius + 120);
+    return [PLAZA.center[0] + dx, PLAZA_Y - 5, PLAZA.center[2] + dz] as Vec3;
+  })(),
   radius: 24,
 } as const;
 
@@ -555,16 +593,7 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
     radius: PLAZA.radius,
     center: [PLAZA.center[0], PLAZA.center[2]],
   },
-  {
-    name: 'east-road',
-    material: 'stone',
-    box: {
-      minX: EAST_ROAD_END_X,
-      maxX: PLAZA.center[0] - PLAZA.radius + 0.5,
-      minZ: PLAZA.center[2] - EAST_ROAD.halfWidth,
-      maxZ: PLAZA.center[2] + EAST_ROAD.halfWidth,
-    },
-  },
+  { name: 'east-road', material: 'stone', box: eastRoadBox(0.5) },
 ];
 
 function inZone(f: FloorZone, x: number, z: number): boolean {
@@ -624,14 +653,20 @@ export const SPAWNS = {
   gate: { feet: [0.3, 0, -17.4] as Vec3, yaw: 0.05, pitch: 0.02 },
   /** S-34: on the road past the gate, the slope (S-35) and the plaza with its lighthouse ahead. */
   road: { feet: [0.3, 0, -21.6] as Vec3, yaw: -0.04, pitch: -0.07 },
-  /** S-35: at the slope's brow, looking down it to the plaza and the broken lighthouse (エリア1's chimney on the left). */
-  slope: { feet: [0.2, 0, -23.8] as Vec3, yaw: 0.02, pitch: -0.07 },
-  /** S-35: in the plaza by the slope's foot, looking up at the broken lighthouse. */
-  plaza: {
-    feet: [PLAZA.center[0] + 5, PLAZA_Y, PLAZA.center[2] + 22] as Vec3,
-    yaw: Math.atan2(5, 22),
-    pitch: 0.58,
-  },
+  /**
+   * S-35: at the slope's brow, looking down it to the plaza and the broken lighthouse (エリア1's chimney on the right, in the
+   * dawn's warm horizon: S-39; the town's views are S-35's mirrored with it).
+   */
+  slope: { feet: [-0.2, 0, -23.8] as Vec3, yaw: -0.02, pitch: -0.07 },
+  /** S-35: in the plaza by the slope's foot (a little to the west of it), looking up at the broken lighthouse. */
+  plaza: (() => {
+    const [dx, dz] = along(COMPASS.west, 5, COMPASS.north, 22);
+    return {
+      feet: [PLAZA.center[0] + dx, PLAZA_Y, PLAZA.center[2] + dz] as Vec3,
+      yaw: yawToward(-dx, -dz),
+      pitch: 0.58,
+    };
+  })(),
   /** S-35: held at the film in the gate's arch (without the vidro, after the close), looking back at its pedestal. */
   film: {
     feet: [0.2, 0, MEMBRANE.z + 0.3] as Vec3,
@@ -645,17 +680,28 @@ export const SPAWNS = {
     pitch: 0.06,
   },
   /** S-35: in the plaza, looking at the shut west gate: the greenhouse's dome beyond the bars (エリア3). */
-  west: {
-    feet: [PLAZA.center[0] + 12.5, PLAZA_Y, PLAZA.center[2]] as Vec3,
-    yaw: -Math.PI / 2,
-    pitch: 0.06,
-  },
-  /** S-35: in the plaza, looking at the open east gate (エリア1), its short road and the chimney's hill beyond. */
-  east: {
-    feet: [PLAZA.center[0] - 9, PLAZA_Y, PLAZA.center[2] + 4] as Vec3,
-    yaw: Math.atan2(16, 4),
-    pitch: 0.06,
-  },
+  west: (() => {
+    const [dx, dz] = along(COMPASS.west, 12.5);
+    return {
+      feet: [PLAZA.center[0] + dx, PLAZA_Y, PLAZA.center[2] + dz] as Vec3,
+      yaw: yawToward(...COMPASS.west),
+      pitch: 0.06,
+    };
+  })(),
+  /**
+   * S-35: in the plaza, looking at the open east gate (エリア1), its short road and the chimney's hill beyond (S-39: toward the
+   * dawn, its warm sky beside the gate).
+   */
+  east: (() => {
+    const [dx, dz] = along(COMPASS.east, 9, COMPASS.north, 4);
+    // to the gate on the rim: 16 m on east, 4 m back south
+    const [tx, tz] = along(COMPASS.east, 16, COMPASS.south, 4);
+    return {
+      feet: [PLAZA.center[0] + dx, PLAZA_Y, PLAZA.center[2] + dz] as Vec3,
+      yaw: yawToward(tx, tz),
+      pitch: 0.06,
+    };
+  })(),
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;

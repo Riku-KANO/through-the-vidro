@@ -33,7 +33,9 @@ import {
 } from './layout';
 import {
   EAST_ROAD_BOX,
+  EAST_ROAD_END_RAIL_X,
   EAST_ROAD_RAIL,
+  EAST_ROAD_RIM_X,
   gateTangent,
   LIGHTHOUSE_RAIL,
   PLAZA_FLOOR_RADIUS,
@@ -191,10 +193,11 @@ function townColliders(R: typeof RAPIER): RAPIER.ColliderDesc[] {
   const b = EAST_ROAD_BOX;
   descs.push(slab(R, b.minX, b.maxX, b.minZ, b.maxZ, PLAZA_Y));
   const { inset, height, thickness } = EAST_ROAD_RAIL;
-  const x0 = b.minX + inset;
-  const x1 = cx - PLAZA.radius - 0.25;
+  // across its end, and along its sides from the rim (plaza.ts draws them from the same numbers)
+  const x0 = EAST_ROAD_END_RAIL_X;
+  const x1 = EAST_ROAD_RIM_X;
   for (const z of [b.minZ + inset, b.maxZ - inset])
-    descs.push(wall(R, [(x0 + x1) / 2, z], [1, 0], x1 - x0, PLAZA_Y, height, thickness));
+    descs.push(wall(R, [(x0 + x1) / 2, z], [1, 0], Math.abs(x1 - x0), PLAZA_Y, height, thickness));
   descs.push(wall(R, [x0, (b.minZ + b.maxZ) / 2], [0, 1], b.maxZ - b.minZ, PLAZA_Y, height, thickness));
   return descs;
 }

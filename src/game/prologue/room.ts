@@ -67,6 +67,7 @@ import { buildRoomArt } from './room-art';
 import {
   type FinaleEvent,
   finaleFront,
+  type HintEvent,
   type InteractTarget,
   PrologueSession,
   peekModifier,
@@ -160,9 +161,10 @@ export interface RoomProbe {
   finale: FinaleProbe;
   /**
    * S-35: the film at the slope's entrance — whether it holds the body now (the vidro not in hand, on the shore's side),
-   * how much it shows (0..1) and how much the vidro left behind is calling (0..1, its faint glow).
+   * how much it shows (0..1) and how much the vidro left behind is calling (0..1, its faint glow). S-39: when it whispered
+   * (the room's clock, s; the last 16), each a hint on room.hints.
    */
-  membrane: { holding: boolean; film: number; call: number };
+  membrane: { holding: boolean; film: number; call: number; whispers: number[] };
   layout: {
     edgeZ: number;
     farZ: number;
@@ -229,6 +231,8 @@ export interface PrologueRoom extends DiveWorld {
   readonly events: EventBus<PrologueEvent>;
   /** S-34: the close's events (the light settling the bridge, the gate opening), apart from `events`. */
   readonly finale: EventBus<FinaleEvent>;
+  /** S-39: the hints (the vidro left behind whispering), apart from `events` and the close's. */
+  readonly hints: EventBus<HintEvent>;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
@@ -252,6 +256,8 @@ const CALL_CUP = 0.8;
 /** 仮 (S-34): the keystone lamp is lit by the time the gate is this far (0..1) into its opening. */
 const KEYSTONE_LIGHTS = 0.25;
 const MAX_EVENTS = 40;
+/** S-39: the whispers kept on the probe (their times). */
+const MAX_WHISPERS = 16;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -292,6 +298,7 @@ interface Shell {
   probe: RoomProbe;
   events: EventBus<PrologueEvent>;
   finale: EventBus<FinaleEvent>;
+  hints: EventBus<HintEvent>;
 }
 
 /** The built room: everything heavy (Rapier, the art, the pipelines). */
@@ -320,6 +327,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   camera.position.set(s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]);
   const events = new EventBus<PrologueEvent>();
   const finale = new EventBus<FinaleEvent>();
+  const hints = new EventBus<HintEvent>();
   const probe: RoomProbe = {
     ready: false,
     playing: false,
@@ -368,7 +376,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       frontZ: null,
       events: [],
     },
-    membrane: { holding: false, film: 0, call: 0 },
+    membrane: { holding: false, film: 0, call: 0, whispers: [] },
     layout: {
       edgeZ: EDGE_Z,
       farZ: FAR.maxZ,
@@ -406,6 +414,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     probe,
     events,
     finale,
+    hints,
     pose(u, outPos, outTarget) {
       dive.pose(u, outPos, outTarget);
       if (!built) return;
@@ -415,7 +424,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built.fogRange.far.value = 150 + away * 3;
     },
     prepare() {
-      building ??= buildRoom(ctx, opts, { camera, probe, events, finale }).then((b) => {
+      building ??= buildRoom(ctx, opts, { camera, probe, events, finale, hints }).then((b) => {
         if (disposed) {
           b.dispose();
           return;
@@ -439,13 +448,14 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built = null;
       events.clear();
       finale.clear();
+      hints.clear();
     },
   };
 }
 
 async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Promise<BuiltRoom> {
   const { renderer, canvas, overlay, quality } = ctx;
-  const { camera, probe, events, finale } = shell;
+  const { camera, probe, events, finale, hints } = shell;
   // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col.
   // Loaded alongside Rapier, before anything that would need releasing if the file failed to load.
   const [R, workshop] = await Promise.all([
@@ -475,8 +485,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     ...(trialWall ? { trialWall: TRIAL_SURFACE_WALL } : {}),
     // the gate is the close's (finale.ts): its leaves open
     gate: false,
-    // S-35: the town and its lighthouse are the plaza's (plaza.ts); the mist lies under the slope's ground
-    town: false,
+    // S-35: the mist lies under the slope's ground (the town and its lighthouse are the plaza's: plaza.ts)
     mistFloor: slopeGroundNode(),
   });
   const finaleArt = buildFinale(quality, field, art.scene);
@@ -584,6 +593,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const offFinale = session.finaleEvents.on((e) => {
     probe.finale.events.push(e.type);
     finale.emit(e);
+  });
+  // S-39: the hints on theirs (the vidro's whisper: its sound is src/audio/whisper.ts, played by sound.ts)
+  const offHints = session.hintEvents.on((e) => {
+    if (e.type === 'whisper') {
+      probe.membrane.whispers.push(time);
+      if (probe.membrane.whispers.length > MAX_WHISPERS) probe.membrane.whispers.shift();
+    }
+    hints.emit(e);
   });
 
   let playing = false;
@@ -1027,8 +1044,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       offInput();
       offEvents();
       offFinale();
+      offHints();
       session.events.clear();
       session.finaleEvents.clear();
+      session.hintEvents.clear();
       input.dispose();
       prompt.remove();
       player.dispose();

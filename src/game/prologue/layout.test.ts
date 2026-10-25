@@ -77,6 +77,7 @@ import {
   WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_OBJECTS,
 } from './layout';
+import { WORKSHOP_LIGHTS } from './room-art';
 
 /** Level-design invariants of the prologue (パズル設計 > 原則, 空間の可読性と導線). */
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -475,10 +476,13 @@ describe('S-35: the slope from the gate down to the central plaza', () => {
     for (let z = SLOPE.fromZ - 0.1; z > SLOPE.toZ; z -= 3)
       expect(floorAt(0.4, z)).toEqual({ zone: 'slope', material: 'stone' });
     expect(floorAt(PLAZA.center[0] + 10, PLAZA.center[2] - 7)).toEqual({ zone: 'plaza', material: 'stone' });
-    expect(floorAt(EAST_ROAD_END_X + 1, PLAZA.center[2])).toEqual({ zone: 'east-road', material: 'stone' });
+    expect(floorAt(EAST_ROAD_END_X - COMPASS.east[0], PLAZA.center[2])).toEqual({
+      zone: 'east-road',
+      material: 'stone',
+    });
   });
 
-  it('from its brow, the plaza and the broken lighthouse are straight ahead (ルール6), エリア1’s chimney on the left (東, ルール5)', () => {
+  it('from its brow, the plaza and the broken lighthouse are straight ahead (ルール6), エリア1’s chimney on the right (東, ルール5; S-39)', () => {
     const s = SPAWNS.slope;
     expect(s.feet[2]).toBeLessThan(GATE.z);
     expect(s.feet[2]).toBeGreaterThan(SLOPE.fromZ);
@@ -492,25 +496,89 @@ describe('S-35: the slope from the gate down to the central plaza', () => {
     expect(angleDeg(e, look(s), PLAZA.center)).toBeLessThan(FOV_DEFAULT / 2 - 5);
     // looking down at the plaza
     expect(PLAZA.center[1]).toBeLessThan(e[1] - 8);
-    // the chimney: left of the lighthouse, and still inside the 16:9 picture's half width (about 51°)
+    // the chimney: right of the lighthouse, and still inside the 16:9 picture's half width (about 51°)
     const chimneyTop: Vec3 = [AREA1_CHIMNEY.foot[0], PLAZA_Y + AREA1_CHIMNEY.top, AREA1_CHIMNEY.foot[2]];
-    const left = leftOf(e, ahead, chimneyTop);
-    expect(left).toBeGreaterThan(20);
-    expect(left).toBeLessThan(47);
+    const right = -leftOf(e, ahead, chimneyTop);
+    expect(right).toBeGreaterThan(20);
+    expect(right).toBeLessThan(47);
     // and over the horizon, against the sky
     expect(chimneyTop[1]).toBeGreaterThan(e[1] + 5);
+    // ルール6 too: the shut south gate (the canal, エリア2) lies on straight ahead, past the plaza
+    const [sx, sz] = plazaGateAt(COMPASS.south);
+    expect(Math.abs(leftOf(e, ahead, [sx, PLAZA_Y, sz]))).toBeLessThan(5);
   });
 
-  it('east is on the left of the way down (左手（東）): the compass turns with the map, the workshop to the north', () => {
+  it('east is on the right of the way down (S-39: 夜明けの側): the compass turns with the map, the workshop due north', () => {
     const way = lookDirection(0, 0);
     expect(way[2]).toBeLessThan(0);
-    // the way down runs south; east is its left (yaw +90°)
+    // the way down runs south; east is its right (yaw −90°), west its left
     expect(COMPASS.south).toEqual([0, -1]);
-    const left = lookDirection(Math.PI / 2, 0);
-    expect(COMPASS.east[0]).toBeCloseTo(left[0], 9);
-    expect(COMPASS.east[1]).toBeCloseTo(left[2], 9);
+    expect(COMPASS.north).toEqual([0, 1]);
+    const right = lookDirection(-Math.PI / 2, 0);
+    expect(COMPASS.east[0]).toBeCloseTo(right[0], 9);
+    expect(COMPASS.east[1]).toBeCloseTo(right[2], 9);
     expect(COMPASS.west[0]).toBeCloseTo(-COMPASS.east[0], 9);
     expect(COMPASS.west[1]).toBeCloseTo(-COMPASS.east[1], 9);
+    // the workshop (the origin) stands due north of the plaza's centre
+    expect(PLAZA.center[0]).toBe(0);
+    expect(PLAZA.center[2]).toBeLessThan(-50);
+  });
+});
+
+/* ---------- S-39 東西を夜明けに合わせる (発案者 2026-10-25; 設計書 rev 49: 坂を下りると夜明けの光とエリア1の煙突が同じ東の側に見える) ---------- */
+
+describe('S-39: east is the side of the dawn — the workshop’s sky and its baked sun stay as they are', () => {
+  /** The dawn's direction on the ground (room-art.ts DAWN, as the sky and the bake have it: WORKSHOP_LIGHTS.sky.dawn). */
+  const dawn = (() => {
+    const [x, , z] = WORKSHOP_LIGHTS.sky.dawn;
+    const l = Math.hypot(x, z);
+    return [x / l, z / l] as const;
+  })();
+  /** room-art.ts's sky: how far toward the dawn's warm horizon a direction on the ground lies (its `towardDawn`, 0..1). */
+  const towardDawn = (dx: number, dz: number): number => {
+    const l = Math.hypot(dx, dz);
+    return Math.max(0, (dx * dawn[0] + dz * dawn[1]) / l) ** 5;
+  };
+  /** Degrees right (+) of straight down the way (yaw 0) at which a direction on the ground lies. */
+  const rightOfWay = (dx: number, dz: number): number => (Math.atan2(dx, -dz) * 180) / Math.PI;
+
+  it('the dawn rises ahead and to the right of the way down, on the east side; the sun baked into the workshop with it', () => {
+    expect(rightOfWay(dawn[0], dawn[1])).toBeGreaterThan(20);
+    expect(rightOfWay(dawn[0], dawn[1])).toBeLessThan(80);
+    // east of the plaza, a little to the south (朝: エリア1)
+    expect(dawn[0] * COMPASS.east[0] + dawn[1] * COMPASS.east[1]).toBeGreaterThan(0.5);
+    expect(dawn[0] * COMPASS.west[0] + dawn[1] * COMPASS.west[1]).toBeLessThan(-0.5);
+    // the sun (the realtime one and the one make_workshop.py bakes from the same numbers) shines from that side
+    const { at, target } = WORKSHOP_LIGHTS.sun;
+    expect(rightOfWay(at[0] - target[0], at[2] - target[2])).toBeGreaterThan(20);
+  });
+
+  it('from the slope’s brow, エリア1’s chimney stands in the warm horizon of the dawn: the same side, to the right', () => {
+    const s = SPAWNS.slope;
+    const e: Vec3 = [s.feet[0], s.feet[1] + EYE_HEIGHT, s.feet[2]];
+    const top: Vec3 = [AREA1_CHIMNEY.foot[0], PLAZA_Y + AREA1_CHIMNEY.top, AREA1_CHIMNEY.foot[2]];
+    const [dx, dz] = [top[0] - e[0], top[2] - e[2]];
+    expect(rightOfWay(dx, dz)).toBeGreaterThan(20);
+    // the sky behind the chimney is more than half way to the dawn's warmth (it is 0 a quarter turn from the dawn)
+    expect(towardDawn(dx, dz)).toBeGreaterThan(0.5);
+    // the hill it stands on (its houses climb from the plaza's side to it) is east of the plaza, the dawn's side
+    expect((AREA1_CHIMNEY.foot[0] - PLAZA.center[0]) * COMPASS.east[0]).toBeGreaterThan(80);
+    // and the greenhouse (エリア3, 夕方) on the other side, away from the dawn
+    const [gx, , gz] = GREENHOUSE.center;
+    expect(rightOfWay(gx - e[0], gz - e[2])).toBeLessThan(-20);
+    expect(towardDawn(gx - e[0], gz - e[2])).toBe(0);
+  });
+
+  it('from the plaza, the open east gate looks toward the dawn: the chimney over it, the warm sky beside it', () => {
+    const [gx, gz] = plazaGateAt(COMPASS.east);
+    const [cx, , cz] = PLAZA.center;
+    // the gate's way out and the dawn are within 45° of each other
+    expect(towardDawn(gx - cx, gz - cz)).toBeGreaterThan(0.15);
+    // the east view takes in the dawn's direction (its 16:9 picture is about 51° either side)
+    const v = SPAWNS.east;
+    const look = lookDirection(v.yaw, 0);
+    const apart = (Math.acos(look[0] * dawn[0] + look[2] * dawn[1]) * 180) / Math.PI;
+    expect(apart).toBeLessThan(40);
   });
 });
 
@@ -547,7 +615,8 @@ describe('S-35: the central plaza, its broken lighthouse and its three gates', (
   it('past the open east gate a few metres of road end at a railing (仮 until S-36), エリア1’s chimney beyond (ルール6, 9)', () => {
     expect(EAST_ROAD.length).toBeGreaterThan(3);
     expect(EAST_ROAD.length).toBeLessThan(10);
-    expect(EAST_ROAD_END_X).toBeLessThan(PLAZA.center[0] - PLAZA.radius - 3);
+    // (along the east, whichever way it points: S-39 turned it round)
+    expect((EAST_ROAD_END_X - PLAZA.center[0]) * COMPASS.east[0]).toBeGreaterThan(PLAZA.radius + 3);
     // from the plaza the chimney rises over the open east gate
     const [gx, gz] = plazaGateAt(COMPASS.east);
     const toGate = Math.atan2(gz - PLAZA.center[2], gx - PLAZA.center[0]);

@@ -310,7 +310,8 @@ for (const backend of backends) {
     const after = 'finaleHold=4.5&finaleOrb=hand';
     const frames: [string, string, (r: RoomProbe) => void][] = [
       [
-        // 坂の入口から広場を見下ろす: the slope going down ahead, the plaza and the broken lighthouse below, エリア1's chimney left
+        // 坂の入口から広場を見下ろす: the slope going down ahead, the plaza and the broken lighthouse below, エリア1's chimney
+        // right, in the dawn's warm horizon (S-39: east turned to the dawn's side)
         'slope-down',
         `spawn=slope&${after}`,
         (r) => {

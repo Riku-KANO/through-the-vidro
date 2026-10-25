@@ -15,6 +15,7 @@ import {
   type FinaleEvent,
   GATE_OPEN_SECONDS,
   GATE_OPENS_AT_SECONDS,
+  type HintEvent,
   membraneHolds,
   PrologueSession,
   peekModifier,
@@ -22,6 +23,8 @@ import {
   type SessionOptions,
   SHAKE_SECONDS,
   vidroCalls,
+  WHISPER_GAP_SECONDS,
+  whisperDue,
 } from './session';
 
 const PEDESTAL = 'p';
@@ -489,5 +492,106 @@ describe('S-35: the session’s film and the vidro’s call (そのとき台座�
     expect(s.film).toBe(0);
     expect(s.call).toBe(0);
     expect(s.holdsAtMembrane(AT_FILM[2])).toBe(false);
+  });
+});
+
+/* ---------- S-39: 玉のささやき (ヒント設計 2; 設計書 rev 49: 台座の玉がかすかに光り、小さく鳴って知らせる) ---------- */
+
+describe('S-39: when it whispers (判定は純粋関数: the call and the time since the last whisper)', () => {
+  it('whispers the moment the vidro starts calling, and while it calls, again once the gap has passed — never sooner', () => {
+    expect(whisperDue(true, null)).toBe(true);
+    expect(whisperDue(true, WHISPER_GAP_SECONDS - 0.01)).toBe(false);
+    expect(whisperDue(true, WHISPER_GAP_SECONDS)).toBe(true);
+    // not calling: never (standing at the film without pushing, the vidro in hand, away from the film)
+    expect(whisperDue(false, null)).toBe(false);
+    expect(whisperDue(false, WHISPER_GAP_SECONDS * 3)).toBe(false);
+  });
+
+  it('the gap is long enough not to nag and short enough to be heard again while you stand there (仮: 2–6 s)', () => {
+    expect(WHISPER_GAP_SECONDS).toBeGreaterThanOrEqual(2);
+    expect(WHISPER_GAP_SECONDS).toBeLessThanOrEqual(6);
+    // longer than the call takes to fade (a step back and straight in again is not a new call to whisper about)
+    expect(WHISPER_GAP_SECONDS).toBeGreaterThan(CALL_FALL_SECONDS);
+  });
+});
+
+describe('S-39: the session’s whisper, on its own bus (not the room’s event log: S-16’s table of sounds)', () => {
+  /** The close played through to the gate open, the vidro on the pedestal, standing on the far shore; its hints recorded. */
+  function gateOpen(): {
+    s: PrologueSession;
+    hints: HintEvent[];
+    events: PrologueEvent[];
+    finale: FinaleEvent[];
+  } {
+    const { s, finale } = dropJustTaken({ membrane: FILM });
+    for (let t = 0; t < FINALE_SECONDS + 0.1; t += DT) s.step(DT, { wantPeek: false, feet: SHORE });
+    const hints: HintEvent[] = [];
+    s.hintEvents.on((e) => hints.push(e));
+    finale.length = 0;
+    return { s, hints, events: record(s), finale };
+  }
+  const stepFor = (s: PrologueSession, seconds: number, input: { feet: Vec3; pushing?: boolean }): void => {
+    for (let t = 0; t < seconds - 1e-9; t += DT) s.step(DT, { wantPeek: false, ...input });
+  };
+
+  it('whispers once, in the very step the vidro starts calling (the call’s own hysteresis), not before', () => {
+    const { s, hints } = gateOpen();
+    // walking up to the film and standing there: quiet
+    stepFor(s, 1, { feet: AT_FILM });
+    expect(hints).toEqual([]);
+    expect(s.call).toBe(0);
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(s.call).toBeGreaterThan(0);
+    expect(hints).toEqual([{ type: 'whisper' }]);
+    // still pushing: no more until the gap
+    stepFor(s, WHISPER_GAP_SECONDS - 0.1, { feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(1);
+  });
+
+  it('while it keeps calling (you let go and turn round to look for it) it whispers again, the gap apart', () => {
+    const { s, hints } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    stepFor(s, WHISPER_GAP_SECONDS + 0.05, { feet: AT_FILM });
+    expect(hints).toHaveLength(2);
+    stepFor(s, 2 * WHISPER_GAP_SECONDS, { feet: AT_FILM });
+    expect(hints).toHaveLength(4);
+  });
+
+  it('a step back and straight in again does not shorten the gap', () => {
+    const { s, hints } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(1);
+    // back off the film until the call has gone, and in again pushing
+    stepFor(s, CALL_FALL_SECONDS + 0.1, { feet: SHORE });
+    expect(s.call).toBe(0);
+    stepFor(s, 0.3, { feet: AT_FILM, pushing: true });
+    expect(s.call).toBeGreaterThan(0);
+    expect(hints).toHaveLength(1);
+    // once the gap since the last one has passed, it whispers (still calling)
+    stepFor(s, WHISPER_GAP_SECONDS - (CALL_FALL_SECONDS + 0.1 + 0.3) + 0.05, {
+      feet: AT_FILM,
+      pushing: true,
+    });
+    expect(hints).toHaveLength(2);
+  });
+
+  it('stepping back from the film, it stops whispering; with the vidro in hand it never does', () => {
+    const { s, hints } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    stepFor(s, 3 * WHISPER_GAP_SECONDS, { feet: SHORE });
+    expect(hints).toHaveLength(1);
+    const { s: carried, hints: none } = gateOpen();
+    expect(carried.interact({ kind: 'pedestal', id: PEDESTAL }, NEAR_LEDGE)).toBe('pickup');
+    stepFor(carried, 3 * WHISPER_GAP_SECONDS, { feet: AT_FILM, pushing: true });
+    expect(none).toEqual([]);
+  });
+
+  it('puts nothing on the room’s event log nor on the close’s bus', () => {
+    const { s, hints, events, finale } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    stepFor(s, 2 * WHISPER_GAP_SECONDS, { feet: AT_FILM });
+    expect(hints.length).toBeGreaterThan(1);
+    expect(events).toEqual([]);
+    expect(finale).toEqual([]);
   });
 });

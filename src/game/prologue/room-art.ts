@@ -57,7 +57,6 @@ import {
   LAMP_HEIGHT,
   LAMP_POST_RADIUS,
   LAMPS,
-  LIGHTHOUSE,
   PATH,
   PEDESTAL_BASE,
   PEDESTAL_ORB,
@@ -339,9 +338,9 @@ export function buildRoomArt(
   quality: QualityPreset,
   field: LayerField,
   // gate: false — the gate is drawn elsewhere (S-34: finale.ts, whose leaves open)
-  // town: false — the town and its lighthouse are drawn elsewhere (S-35: plaza.ts, round the central plaza)
   // mistFloor — the mist lies under this height instead of under y = 0 (S-35: the ground of the slope, slope.ts)
-  options: { trialWall?: Box; gate?: boolean; town?: boolean; mistFloor?: THREE.Node<'float'> } = {},
+  // (the town and its lighthouse are plaza.ts's since S-35, round the central plaza: S-39 took the old ones out of here)
+  options: { trialWall?: Box; gate?: boolean; mistFloor?: THREE.Node<'float'> } = {},
 ): RoomArt {
   const scene = new THREE.Scene();
   const disposables: { dispose(): void }[] = [];
@@ -463,7 +462,6 @@ export function buildRoomArt(
   const domeGlass = glass('clear', { placement: 'behind-glass', haze: TOWN_HAZE, thickness: 0.05 });
   domeGlass.side = THREE.DoubleSide;
   const shardGlass = glass('clear', { placement: 'behind-glass', haze: TOWN_HAZE, thickness: 0.03 });
-  const townGlass = glass('clear', { placement: 'far', haze: TOWN_HAZE, thickness: 0.06 });
   const panelGlass = glass('clear', { placement: 'near', thickness: 0.03 });
   const lampMilk = glass('milky', { glow: { color: 0xffbf80, intensity: 1.5 } });
   const cupMilk = glass('milky', { glow: { color: 0xffd2a0, intensity: 1.1 } });
@@ -841,86 +839,6 @@ export function buildRoomArt(
   const orbLight = new THREE.PointLight(0xffcf8a, 0, 5, 2);
   orbLight.position.set(PEDESTAL_ORB[0], PEDESTAL_ORB[1] + 0.1, PEDESTAL_ORB[2]);
   put(orbLight, 'shared');
-
-  // ---- the town and its lighthouse across the valley, rising out of the mist (遠景: cheap glass, 灯塔) -----
-  if (options.town !== false) {
-    const rand = rng(20261021);
-    const spheres: { p: THREE.Vector3; r: number }[] = [];
-    const rings: THREE.BufferGeometry[] = [];
-    const [lx, , lz] = LIGHTHOUSE;
-    for (let k = 0; k < 34; k++) {
-      const a = (k / 34) * Math.PI * 2 + rand() * 0.25;
-      const rad = 9 + rand() * 32;
-      const c = new THREE.Vector3(lx + Math.sin(a) * rad, 0, lz + Math.cos(a) * rad);
-      const main = 2.4 + rand() * 3.4;
-      const base = -2.5 + rand() * 2.0;
-      spheres.push({ p: c.clone().setY(base + main * (0.35 + rand() * 0.3)), r: main });
-      const count = 1 + Math.floor(rand() * 3);
-      for (let i = 0; i < count; i++) {
-        const r = main * (0.35 + rand() * 0.45);
-        const o = new THREE.Vector3(rand() - 0.5, 0, rand() - 0.5)
-          .normalize()
-          .multiplyScalar(main * (0.55 + rand() * 0.4));
-        spheres.push({
-          p: c
-            .clone()
-            .add(o)
-            .setY(base + r * (0.3 + rand() * 0.9) + (rand() < 0.3 ? main * 0.8 : 0)),
-          r,
-        });
-      }
-    }
-    // 灯塔: stacked bubbles, brass bands, a brass spire and the great orb, broken (光が失われた理由: 大玉が割れ)
-    const tower: [number, number][] = [
-      [5.0, 1.0],
-      [3.9, 7.0],
-      [3.0, 11.8],
-      [2.3, 15.6],
-      [1.7, 18.6],
-    ];
-    for (const [r, y] of tower) {
-      spheres.push({ p: new THREE.Vector3(lx, y, lz), r });
-      rings.push(
-        new THREE.TorusGeometry(r * 0.99, 0.07, 8, 72).rotateX(Math.PI / 2).translate(lx, y - r * 0.15, lz),
-      );
-    }
-    // far → near from the way, so the transparent bubbles blend in order
-    const from = new THREE.Vector3(0, 1.6, -14);
-    spheres.sort((a, b) => b.p.distanceToSquared(from) - a.p.distanceToSquared(from));
-    const town = new THREE.InstancedMesh(
-      keep(new THREE.SphereGeometry(1, 28, 18)),
-      townGlass,
-      spheres.length,
-    );
-    const m4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    spheres.forEach((b, i) => {
-      town.setMatrixAt(i, m4.compose(b.p, q, new THREE.Vector3(b.r, b.r, b.r)));
-    });
-    town.computeBoundingSphere();
-    town.renderOrder = 1;
-    instanced.push(town);
-    put(town, 'shared');
-    const spireY = 23;
-    rings.push(new THREE.CylinderGeometry(0.16, 0.34, 6.4, 12).translate(lx, spireY - 1.4, lz));
-    // a brass cage round the great orb, the orb itself cracked open
-    for (let i = 0; i < 3; i++)
-      rings.push(
-        new THREE.TorusGeometry(3.15, 0.07, 8, 96)
-          .rotateX(Math.PI / 2)
-          .rotateZ((i * Math.PI) / 3 + 0.3)
-          .translate(lx, spireY + 4.2, lz),
-      );
-    put(mesh(merged(rings), brass), 'shared');
-    const great = mesh(
-      new THREE.SphereGeometry(2.9, 48, 32, 0.4, Math.PI * 2 - 1.1, 0, Math.PI * 0.82),
-      townGlass,
-    );
-    great.position.set(lx, spireY + 4.2, lz);
-    great.rotation.z = 0.25;
-    great.renderOrder = 1;
-    put(great, 'shared');
-  }
 
   // ---- light motes over the gap, drifting toward the far shore (光の粒の流れ, ルール7) ---------------
   // They hint at the back layer at the dead end (行き止まりの理由: 裏の層の気配) and fade near the eye.

@@ -8,7 +8,6 @@ import {
   float,
   max,
   min,
-  mix,
   mx_noise_float,
   normalView,
   positionLocal,
@@ -19,7 +18,6 @@ import {
   sqrt,
   uniform,
   vec3,
-  vec4,
 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { createBrassMaterial, createGlass } from '../../core/glass';
@@ -42,7 +40,7 @@ import { stoneMaterial } from './room-art';
  * 坂道 (S-35; 進行構造とエリア設計 > 街の配置と序章の締め): the way on from the gate, down about 80 m to the central plaza. Its
  * stone deck, the brass railings along both edges that stop the body softly (足場の縁はやわらかい柵で止める: 落下なし), its lamps,
  * and 光の膜 — the film of light in the gate's arch that will not let you out onto the slope without the vidro in hand
- * (発案者 2026-10-23). Built from code (仮: Blender takes it over with the area's art), from the same numbers as its
+ * (発案者 2026-10-23; S-39: milky frosted glass like the UI's, 発案者 2026-10-25). Built from code (仮: Blender takes it over with the area's art), from the same numbers as its
  * colliders (physics.ts): what is drawn is what stops you (空間の可読性と導線 4).
  * アートディレクション > 形のルール: straight and thin lines only as brass (the railings, the lips), the rest round.
  */
@@ -228,10 +226,23 @@ function archAt(x: number): number {
 
 /* ---------- the drawing ---------- */
 
-/** 仮: how bright the film is at its frame and across it, and how much brighter while it holds someone (linear, additive). */
+/**
+ * S-39 (発案者 2026-10-25; 設計書 rev 49: 膜は乳白の曇りガラスで、虹色にしない — 虹色は裏の層と光の雫の色): the film is the UI's
+ * frosted glass (src/ui/styles.ts .vd-frost: white at 14% over the scene, a white edge at 22% and a highlight at 35% along
+ * its top) standing in the gate's arch. 仮 values, linear: its milky white, how much of it covers the scene across the
+ * film and at its frame, the frost's grain (曇り: a fine, still mottling and a slow drift of brighter haze), and how much
+ * thicker it grows while it holds someone (session.call). One hue throughout: whatever stands behind it shows paler, never
+ * tinted (tests/e2e/S-39-*.spec.ts). It reads the backdrop not at all (no transmission: nothing to warm, AGENTS.md S-38).
+ */
+const FILM_MILK = [0.92, 0.94, 0.96] as const;
+const FILM_FACE = 0.14;
 const FILM_RIM = 0.26;
-const FILM_FACE = 0.05;
-const FILM_PRESS = 0.7;
+const FILM_TOP = 0.12;
+const FILM_GRAIN = 0.03;
+const FILM_HAZE = 0.05;
+const FILM_PRESS = 0.6;
+/** Never more opaque than this (the way on stays seen through it: ルール6). */
+const FILM_MAX = 0.55;
 
 export interface SlopeArt {
   /** 0..1: how much the film in the gate's arch shows (session.film). */
@@ -347,7 +358,7 @@ export function buildSlope(quality: QualityPreset, field: LayerField, scene: THR
     put(new THREE.Mesh(merged(globes), lampMilk));
   }
 
-  // ---- 光の膜: a film of light filling the gate's arch, like a soap film in a ring (泡と真鍮の枠) -----------------------
+  // ---- 光の膜: a film of milky frosted glass filling the gate's arch, held in its brass frame (泡と真鍮の枠) --------------
   const film = uniform(0);
   const press = uniform(0);
   const clock = uniform(0);
@@ -367,39 +378,41 @@ export function buildSlope(quality: QualityPreset, field: LayerField, scene: THR
       new THREE.MeshBasicNodeMaterial({
         transparent: true,
         depthWrite: false,
-        blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
       }),
     );
+    // a flat film: one pass for both faces (three would draw a double-sided transparent material twice)
+    m.forceSinglePass = true;
     m.fog = false;
     const p = positionLocal;
     // how far (m) from the frame: the posts, the floor, the arch
     const ax = abs(p.x);
     const top = float(GATE_SPRINGS).add(sqrt(max(float(0), float(hw * hw).sub(p.x.mul(p.x)))).mul(0.6));
-    const edge = min(min(float(hw).sub(ax), top.sub(p.y)), p.y);
-    const rim = exp(edge.div(0.14).pow(2).negate());
-    // the film's colours drift slowly like a soap film's (thin-film colours: 虹色, the back layer's light)
-    const swirl = mx_noise_float(vec3(p.x.mul(1.1), p.y.mul(1.1), clock.mul(0.12)));
-    const hue = swirl.mul(0.9).add(p.y.mul(0.22)).add(clock.mul(0.02));
-    const rainbow = cos(hue.add(vec3(0, 0.33, 0.67)).mul(Math.PI * 2))
+    const fromTop = top.sub(p.y);
+    const edge = min(min(float(hw).sub(ax), fromTop), p.y);
+    // the frame's white edge (the UI's border), and its highlight along the arch (the UI's inset highlight at the top)
+    const rim = exp(edge.div(0.1).pow(2).negate());
+    const highlight = exp(fromTop.div(0.22).pow(2).negate());
+    // 曇り: a fine still grain, and a slow drift of brighter haze across it (no colour in either: one milky white)
+    const grain = mx_noise_float(vec3(p.x.mul(19), p.y.mul(19), 0.5));
+    const haze = mx_noise_float(vec3(p.x.mul(0.9), p.y.mul(0.9), clock.mul(0.1)))
       .mul(0.5)
       .add(0.5);
+    // like glass, it covers more seen edge-on
     const grazing = float(1)
       .sub(abs(dot(normalView, positionViewDirection)))
       .pow(2);
-    const bright = float(FILM_FACE)
+    const cover = float(FILM_FACE)
       .add(rim.mul(FILM_RIM))
-      .add(grazing.mul(0.08))
-      .mul(film)
+      .add(highlight.mul(FILM_TOP))
+      .add(grain.mul(FILM_GRAIN))
+      .add(haze.mul(FILM_HAZE))
+      .add(grazing.mul(0.1))
       .mul(press.mul(FILM_PRESS).add(1));
     // gone right at the eye, like the sphere's film (画面をうるさくしない)
     const near = smoothstep(0.3, 1.3, positionView.length());
-    m.colorNode = vec4(
-      mix(vec3(1.0, 0.86, 0.62), rainbow, 0.6)
-        .mul(bright)
-        .mul(near),
-      1,
-    );
+    m.colorNode = vec3(...FILM_MILK);
+    m.opacityNode = clamp(cover, 0, FILM_MAX).mul(film).mul(near);
     const mesh = new THREE.Mesh(geometry, m);
     mesh.name = 'slope-film';
     mesh.position.set(0, 0, MEMBRANE.z);
