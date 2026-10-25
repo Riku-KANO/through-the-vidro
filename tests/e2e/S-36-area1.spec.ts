@@ -309,14 +309,18 @@ interface Region {
   x1: number;
   y1: number;
 }
-/** Mean luminance, near-black share, share of pixels brighter than `bright` (in a region of the page, all by default). */
+/**
+ * Mean luminance, near-black share, share of pixels brighter than `bright`, and share of warm bright ones (the light drop's
+ * core through the vidro: luminance over 0.75, red over blue by more than 0.05), in a region of the page (all by default)
+ * or a circle (pixels).
+ */
 async function measure(
   page: Page,
   png: Buffer,
   region?: Region,
   circle?: { x: number; y: number; r: number },
   bright = 0.85,
-): Promise<{ mean: number; dark: number; bright: number }> {
+): Promise<{ mean: number; dark: number; bright: number; warm: number }> {
   return page.evaluate(
     async ([b64, reg, circ, lim]) => {
       const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
@@ -330,6 +334,7 @@ async function measure(
       let sum = 0;
       let dark = 0;
       let lit = 0;
+      let warm = 0;
       let n = 0;
       for (let y = r.y0; y < r.y1; y += 2)
         for (let x = r.x0; x < r.x1; x += 2) {
@@ -339,9 +344,11 @@ async function measure(
           sum += l;
           if (l < 0.06) dark++;
           if (l > (lim as number)) lit++;
+          if (l > 0.75 && ((d[i] ?? 0) - (d[i + 2] ?? 0)) / 255 > 0.05) warm++;
           n++;
         }
-      return { mean: sum / Math.max(1, n), dark: dark / Math.max(1, n), bright: lit / Math.max(1, n) };
+      const k1 = Math.max(1, n);
+      return { mean: sum / k1, dark: dark / k1, bright: lit / k1, warm: warm / k1 };
     },
     [png.toString('base64'), region ?? null, circle ?? null, bright] as const,
   );
@@ -533,32 +540,32 @@ for (const backend of backends) {
     expect(stopped.position.z).toBeLessThan(wall.min[2]);
     expect(stopped.position.z).toBeGreaterThan(wall.min[2] - 0.7);
     expect(stopped.area1.wall.off).toBe(0);
-    await page.keyboard.down('KeyS');
-    await page.waitForTimeout(900);
-    await page.keyboard.up('KeyS');
-    // 覗く: through the vidro the wall is gone and the drop's light shows behind it
-    await waitRoom(page, 'r.speed < 0.03');
-    await lookAt(page, drop);
-    await page.waitForTimeout(300);
-    const plain = await page.screenshot({ path: join(shotDir, 'room1-before-peek.png') });
-    const passes0 = (await room(page)).backPassFrames;
-    await page.mouse.down({ button: 'right' });
-    const peeked = await waitRoom(page, 'r.peekAmount > 0.999');
-    await page.waitForTimeout(400);
-    const peekPng = await page.screenshot({ path: join(shotDir, 'room1-peek.png') });
-    const peekRoom = await room(page);
-    await page.mouse.up({ button: 'right' });
-    expect(peeked.peeking).toBe(true);
-    expect(peekRoom.backPassFrames).toBeGreaterThan(passes0 + 5);
+    // 覗く: through the vidro the wall is gone and the drop's light shows behind it (a metre before the wall, looking at
+    // where the drop hovers; the same place and look again once it is taken, to tell its light from the vidro's glints)
+    const peekFrom = wall.min[2] - 1.0;
+    const peekAt = async (name: string) => {
+      await walkTo(page, x, peekFrom, { within: 0.12 });
+      await waitRoom(page, 'r.speed < 0.03');
+      await lookAt(page, drop);
+      await page.waitForTimeout(200);
+      const passes = (await room(page)).backPassFrames;
+      await page.mouse.down({ button: 'right' });
+      const p = await waitRoom(page, 'r.peekAmount > 0.999');
+      await page.waitForTimeout(400);
+      const png = await page.screenshot({ path: join(shotDir, `${name}.png`) });
+      const q = await room(page);
+      await page.mouse.up({ button: 'right' });
+      await waitRoom(page, 'r.peekAmount === 0');
+      // the orb's circle in pixels (orbScreen: normalized, its radius a share of the height), a little inside its rim
+      const circle = { x: q.orbScreen.x * 1280, y: q.orbScreen.y * 720, r: q.orbScreen.r * 720 * 0.85 };
+      return { peeking: p.peeking, passes, room: q, inOrb: await measure(page, png, undefined, circle) };
+    };
+    const withDrop = await peekAt('room1-peek');
+    const peekRoom = withDrop.room;
+    expect(withDrop.peeking).toBe(true);
+    expect(peekRoom.backPassFrames).toBeGreaterThan(withDrop.passes + 5);
     expect(peekRoom.drawCalls, 'draw calls peeking in 部屋1').toBeLessThanOrEqual(BUDGET.drawCalls);
     expect(peekRoom.triangles).toBeLessThanOrEqual(BUDGET.triangles);
-    const o = peekRoom.orbScreen;
-    const circle = { x: o.x, y: o.y, r: o.r * 0.8 };
-    const inOrbPeek = await measure(page, peekPng, undefined, circle);
-    const inOrbPlain = await measure(page, plain, undefined, circle);
-    // the drop's bright core in the orb's circle while peeking, none of it there before
-    expect(inOrbPeek.bright, 'the drop’s light through the vidro').toBeGreaterThan(inOrbPlain.bright + 0.002);
-    await waitRoom(page, 'r.peekAmount === 0');
     // 置く: the sphere grows and cuts the whole wall
     await lookAt(page, pedestalOrb);
     await waitRoom(page, "r.target === 'pedestal'", 5_000);
@@ -597,6 +604,11 @@ for (const backend of backends) {
     await page.keyboard.press('KeyE');
     const back = await waitRoom(page, "r.orb === 'hand' && r.area1.wall.off === 0", 3_000);
     expect(back.events).toContain('pickup:pedestal');
+    // the same peek with the drop taken: what the drop's light added through the vidro is gone
+    const noDrop = await peekAt('room1-peek-taken');
+    expect(withDrop.inOrb.warm, 'the drop’s light through the vidro').toBeGreaterThan(
+      noDrop.inOrb.warm + 0.003,
+    );
     await lookAt(page, [x, back.position.y + 1.4, wall.max[2] + 10]);
     const again = (await pushUntilStopped(page, 'KeyW')).at(-1) as RoomProbe;
     expect(again.position.z).toBeLessThan(wall.min[2]);
@@ -611,8 +623,8 @@ for (const backend of backends) {
       JSON.stringify(
         {
           backend,
-          inOrbPeek,
-          inOrbPlain,
+          inOrbPeek: withDrop.inOrb,
+          inOrbTaken: noDrop.inOrb,
           peek: { draws: peekRoom.drawCalls, tris: peekRoom.triangles },
           errors,
         },

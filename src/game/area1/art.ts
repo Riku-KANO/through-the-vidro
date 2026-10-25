@@ -70,6 +70,11 @@ export interface Area1Art {
   readonly root: THREE.Group;
   /** What to warm, one entry per frame: each entry's meshes are drawn uncut by the view that frame (core/glass/warm.ts). */
   readonly warm: readonly THREE.Object3D[][];
+  /**
+   * Boxes that hold what is drawn (each floor, each house with its roof, the gate): the room adds エリア1 to the scene at a
+   * frame none of them is in the camera's view.
+   */
+  readonly bounds: readonly THREE.Box3[];
   /** 部屋1's light drop (back layer). The room poses it: hovering, flying into the vidro, gone. */
   readonly drop: THREE.Object3D;
   /** 0..1 eased focus of the pedestal's cup and of the drop (調べられる物に近づくと縁が淡く光る). */
@@ -134,8 +139,11 @@ export function* buildArea1(
     return x;
   };
   const merged = (parts: THREE.BufferGeometry[]): THREE.BufferGeometry => {
-    const g = mergeGeometries(parts);
+    // pieces of different kinds (RoundedBoxGeometry and the polyhedra come without an index): merge them all unindexed
+    const flat = parts.some((p) => !p.index) ? parts.map((p) => (p.index ? p.toNonIndexed() : p)) : parts;
+    const g = mergeGeometries(flat);
     for (const p of parts) p.dispose();
+    for (const p of flat) p.dispose();
     if (!g) throw new Error('area1: mergeGeometries failed');
     g.computeBoundingSphere();
     return keep(g);
@@ -152,7 +160,10 @@ export function* buildArea1(
   // ---- materials ---------------------------------------------------------------------------------------------------
   const stone = keep(stoneMaterial(0.62));
   const grey = keep(new THREE.MeshStandardNodeMaterial({ color: GREY, roughness: 0.88, metalness: 0 }));
-  const rubble = keep(new THREE.MeshStandardNodeMaterial({ color: RUBBLE, roughness: 0.95, metalness: 0 }));
+  // each stone of the wall a little lighter or darker (its colour attribute)
+  const rubble = keep(
+    new THREE.MeshStandardNodeMaterial({ color: RUBBLE, roughness: 0.95, metalness: 0, vertexColors: true }),
+  );
   const brass = keep(createBrassMaterial());
   const lampMilk = keep(createGlass('milky', quality, { glow: LAMP_GLOW }).material);
   // the lamps toward the next room: dark until lit, one after the other (each globe carries its index)
@@ -315,27 +326,49 @@ export function* buildArea1(
     const rand = rng(36);
     const { min, max } = ROOM1_WALL.box;
     const parts: THREE.BufferGeometry[] = [];
-    const n = 6;
-    const width = (max[0] - min[0]) / n;
     const depth = max[2] - min[2];
-    for (let i = 0; i < n; i++) {
-      // a broken top: the middle stands tallest, the ends lower, each block a little askew (inside the box)
-      const h = (max[1] - min[1]) * (0.82 + 0.18 * rand()) * (i === 0 || i === n - 1 ? 0.9 : 1);
-      const g = new RoundedBoxGeometry(width * 0.96, h, depth * 0.9, 2, 0.04);
-      g.rotateY((rand() - 0.5) * 0.06);
-      g.translate(min[0] + width * (i + 0.5), min[1] + h / 2, (min[2] + max[2]) / 2);
-      parts.push(bare(g));
+    const midZ = (min[2] + max[2]) / 2;
+    /** One stone of the wall, shaded a little apart from its neighbours (a colour per stone). */
+    const stoneAt = (x0: number, x1: number, y0: number, h: number, shade: number): void => {
+      const w = x1 - x0;
+      const g = bare(new RoundedBoxGeometry(w * 0.97, h * 0.96, depth * (0.84 + 0.14 * rand()), 2, 0.035));
+      g.rotateY((rand() - 0.5) * 0.05);
+      g.translate((x0 + x1) / 2, y0 + h / 2, midZ + (rand() - 0.5) * 0.03);
+      const n = g.getAttribute('position').count;
+      const c = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) c.set([shade, shade, shade * 0.98], i * 3);
+      g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+      parts.push(g);
+    };
+    // courses of stones, each course shifted from the one below; the upper courses broken (崩れた: stones missing, the top
+    // ragged), all inside the collider's box and none of the gaps low enough for the body to pass
+    const rows = 4;
+    const course = (max[1] - min[1]) / rows;
+    for (let r = 0; r < rows; r++) {
+      const keepShare = r < 2 ? 1 : r === 2 ? 0.86 : 0.5;
+      let x = min[0] - (r % 2 === 1 ? 0.22 : 0);
+      while (x < max[0] - 0.05) {
+        const x1 = Math.min(max[0], x + 0.42 + rand() * 0.34);
+        const x0 = Math.max(min[0], x);
+        const sag = r === rows - 1 ? rand() * 0.25 : 0;
+        if (x1 - x0 > 0.12 && rand() < keepShare)
+          stoneAt(x0, x1, min[1] + r * course, course - sag, 0.82 + rand() * 0.3);
+        x = x1;
+      }
     }
     // fallen pieces on the wall's line, low (the body walks over where the wall is cut)
-    for (let i = 0; i < 7; i++) {
-      const g = new THREE.DodecahedronGeometry(0.05 + rand() * 0.06, 0);
+    for (let i = 0; i < 9; i++) {
+      const g = bare(new THREE.DodecahedronGeometry(0.05 + rand() * 0.07, 0));
       g.scale(1, 0.55, 1);
       g.translate(
         min[0] + 0.2 + rand() * (max[0] - min[0] - 0.4),
         min[1] + 0.03,
         min[2] + 0.05 + rand() * (depth - 0.1),
       );
-      parts.push(bare(g));
+      const n = g.getAttribute('position').count;
+      const shade = 0.8 + rand() * 0.25;
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(shade), 3));
+      parts.push(g);
     }
     put(new THREE.Mesh(merged(parts), rubble), 'area1-wall', 'surface');
   }
@@ -486,9 +519,41 @@ export function* buildArea1(
   const scl = new THREE.Vector3();
   yield;
 
+  // what is drawn, as boxes (for the room's test of the view before it adds エリア1)
+  const bounds: THREE.Box3[] = [];
+  const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void => {
+    bounds.push(new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)));
+  };
+  {
+    const [cx, , cz] = AREA1_PLAZA.center;
+    const r = AREA1_PLAZA.radius + 1;
+    box(cx - r, AREA1_Y - 6, cz - r, cx + r, AREA1_Y + 3.2, cz + r);
+    box(AREA1_STREET.fromX, AREA1_Y - 6, STREET_SOUTH_Z, AREA1_STREET.toX, AREA1_Y + 3, STREET_NORTH_Z);
+    box(ROOM1_ALLEY.minX, AREA1_Y - 6, ROOM1_ALLEY.minZ, ROOM1_ALLEY.maxX, AREA1_Y + 3, ROOM1_ALLEY.maxZ);
+    const hw = AREA1_SLOPE.halfWidth;
+    box(
+      AREA1_SLOPE.x - hw,
+      AREA1_Y - 6,
+      AREA1_GATE.z - 8,
+      AREA1_SLOPE.x + hw,
+      area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height + 3,
+      AREA1_SLOPE.fromZ,
+    );
+    for (const h of AREA1_HOUSES)
+      box(
+        h.minX,
+        AREA1_Y - 6,
+        h.minZ,
+        h.maxX,
+        AREA1_Y + h.height + Math.min(h.maxX - h.minX, h.maxZ - h.minZ) / 2,
+        h.maxZ,
+      );
+  }
+
   return {
     root,
     warm,
+    bounds,
     drop,
     focus,
     setNext(lit) {

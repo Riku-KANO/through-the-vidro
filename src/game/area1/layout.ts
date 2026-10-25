@@ -1,4 +1,4 @@
-import type { Box, Vec3 } from '../../layers/footing';
+import type { Vec3 } from '../../layers/footing';
 import type { AreaDecl, PedestalDecl, RoomDecl, SurfaceDecl } from '../area';
 
 /**
@@ -304,12 +304,6 @@ export function area1Ground(x: number, z: number): number | null {
 }
 
 /**
- * What エリア1 builds behind the scenes (S-36: 中央広場にいる間に裏で組み立てる): the box holding all of it, for the room to add it
- * while it is out of view (no pop-in in sight).
- */
-export const AREA1_BOUNDS: Box = { min: [78, AREA1_Y - 8, -150], max: [131, AREA1_Y + 14, -106] };
-
-/**
  * Where the far town's bubbles (plaza.ts: エリア1's hill, built with the town while loading) must not stand: the road's end, the
  * entrance plaza and the street with their houses, the slope up to the summit (they would stand in the way, or show
  * through the grey houses).
@@ -322,7 +316,7 @@ export const AREA1_KEEP_OUT: readonly { minX: number; maxX: number; minZ: number
 
 /**
  * 見る位置 (?spawn=…): on the road where the sky moves toward morning, in the entrance plaza looking up at the chimney, before
- * 部屋1's alley (the wall and the pedestal ahead), before the slope's shut gate.
+ * 部屋1's alley (the wall and the pedestal ahead), before its wall looking at the drop behind it, before the slope's shut gate.
  */
 export const AREA1_SPAWNS = {
   'area1-road': {
@@ -346,9 +340,23 @@ export const AREA1_SPAWNS = {
     yaw: Math.PI,
     pitch: -0.1,
   },
+  /** 部屋1, before the crumbled wall, the vidro in hand, looking at where the drop hovers behind it (覗けば見える). */
+  'area1-wall': (() => {
+    const feet: Vec3 = [
+      (ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2 - 0.4,
+      AREA1_Y,
+      ROOM1_WALL.box.min[2] - 1.0,
+    ];
+    const [dx, dy, dz] = [
+      ROOM1_DROP.at[0] - feet[0],
+      ROOM1_DROP.at[1] - (feet[1] + 1.6),
+      ROOM1_DROP.at[2] - feet[2],
+    ];
+    return { feet, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
+  })(),
   'area1-gate': {
-    feet: [AREA1_SLOPE.x, area1SlopeHeight(AREA1_GATE.z + 2), AREA1_GATE.z + 2] as Vec3,
+    feet: [AREA1_SLOPE.x - 0.3, area1SlopeHeight(AREA1_GATE.z + 4.5), AREA1_GATE.z + 4.5] as Vec3,
     yaw: 0,
-    pitch: 0.12,
+    pitch: 0.16,
   },
 } as const;

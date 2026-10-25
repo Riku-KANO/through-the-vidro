@@ -1,9 +1,10 @@
 import * as THREE from 'three/webgpu';
-import { readsBackdrop, withGlassUnculled } from '../../core/glass';
+import { drawsGlass, readsBackdrop, withGlassUnculled } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
 import { segmentsUnder, type Vec3 } from '../../layers/footing';
+import { viewMask } from '../../layers/layers';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
 import { glassEase } from '../../layers/tween';
 import {
@@ -17,7 +18,6 @@ import {
 import { type Area1Art, buildArea1 } from '../area1/art';
 import {
   AREA1,
-  AREA1_BOUNDS,
   AREA1_CHIMNEY,
   AREA1_GATE,
   AREA1_PLAZA,
@@ -126,10 +126,13 @@ export type TargetKind = 'bench' | 'pedestal' | 'drop';
 
 /**
  * S-36: エリア1 as the room builds it behind the scenes — waiting (not yet in the central plaza), building (a part a frame),
- * built (waiting to be added while it is out of view), warming (its pipelines, one entry a frame, before it is seen), ready.
+ * compiling (its shaders compiled in the background, three's compileAsync: no frame waits on them), built (waiting to be
+ * added while it is out of view), warming (its pipelines, one entry a frame, before it is seen), ready.
  */
 export interface Area1Probe {
-  state: 'waiting' | 'building' | 'built' | 'warming' | 'ready';
+  state: 'waiting' | 'building' | 'compiling' | 'built' | 'warming' | 'ready';
+  /** Seconds the background compile took (null before it is done). */
+  compileSeconds: number | null;
   /** The room's clock (s) when it started building, when it was added to the scene, when it was ready. */
   startedAt: number | null;
   addedAt: number | null;
@@ -141,6 +144,9 @@ export interface Area1Probe {
   worstMs: number;
   /** Entries warmed (its meshes, one a frame, drawn uncut by the view). */
   warmed: number;
+  /** ms of each build step (inside the room's update), and of each warm frame's drawing (inside its render). */
+  buildMs: number[];
+  warmMs: number[];
   /** 部屋1's crumbled wall: its segments, and how many of their colliders a placed vidro's sphere cuts now (S-28). */
   wall: { segments: number; off: number };
   /** 0..1: the lamps toward the next room, lit once 部屋1's drop is taken (次の部屋の方向が見える). */
@@ -437,6 +443,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     daylight: daylightAt(s.feet[0]),
     area1: {
       state: 'waiting',
+      compileSeconds: null,
       startedAt: null,
       addedAt: null,
       readyAt: null,
@@ -444,6 +451,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       frames: 0,
       worstMs: 0,
       warmed: 0,
+      buildMs: [],
+      warmMs: [],
       wall: { segments: surfaceSegments(ROOM1_WALL).length, off: 0 },
       next: 0,
     },
@@ -944,10 +953,6 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const area1Here = (): boolean => a1.colliders !== null;
   const dropShell = art.drop.children[1] as THREE.Mesh | undefined;
   const dropCore = art.drop.children[0] as THREE.Mesh | undefined;
-  const area1Box = new THREE.Box3(
-    new THREE.Vector3(...AREA1_BOUNDS.min),
-    new THREE.Vector3(...AREA1_BOUNDS.max),
-  );
   const startArea1 = (): void => {
     if (a1.gen || a1.art || !dropShell || !dropCore) return;
     a1.gen = buildArea1(quality, field, {
@@ -981,14 +986,19 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     if (a1.lastFrame !== null) {
       probe.area1.frames++;
       probe.area1.worstMs = Math.max(probe.area1.worstMs, now - a1.lastFrame);
+      (probe.area1 as unknown as { frameMs: number[] }).frameMs ??= [];
+      (probe.area1 as unknown as { frameMs: number[] }).frameMs.push(Math.round(now - a1.lastFrame));
     }
     a1.lastFrame = now;
     if (st === 'building' && a1.gen) {
+      const t0 = performance.now();
       const r = a1.gen.next();
+      probe.area1.buildMs.push(Math.round((performance.now() - t0) * 10) / 10);
       if (r.done) {
         a1.art = r.value;
         a1.gen = null;
-        probe.area1.state = 'built';
+        probe.area1.state = 'compiling';
+        compileArea1(r.value);
       }
       return;
     }
@@ -996,11 +1006,65 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       camera.updateMatrixWorld();
       frustum.setFromProjectionMatrix(
         viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+        camera.coordinateSystem,
       );
-      const inView = frustum.intersectsBox(area1Box);
+      const inView = a1.art?.bounds.some((b) => frustum.intersectsBox(b)) ?? false;
       // on the road to it, it is added whatever the view (its floor must be there to walk onto)
       if (!inView || body.fx > AREA1_ROAD.fromX + 4) addArea1(inView);
     }
+  };
+  /**
+   * Compiles エリア1's shaders in the background (three's compileAsync: each pipeline made asynchronously, a yield between
+   * objects), before it is added: the peek image's into the peek image's own target (the same render context as the peek
+   * pass: those pipelines are the very ones it draws with), and the scene pass's into a target of its formats (three makes
+   * the scene pass's again when it first draws them, nested in the finishing, but the GPU has compiled their shaders by
+   * then: S-36 measured 150–220 ms frames without this). The glass (部屋1's drop: the prologue's, compiled while loading)
+   * stays out of it: no transmission is drawn into a target of another size than the screen (AGENTS.md).
+   */
+  const compileArea1 = (built: Area1Art): void => {
+    const started = performance.now();
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(1, size.x);
+    const h = Math.max(1, size.y);
+    const scenePassLike = new THREE.RenderTarget(w, h, { type: THREE.HalfFloatType });
+    scenePassLike.depthTexture = new THREE.DepthTexture(w, h);
+    const lens = camera.clone();
+    const compileInto = (target: THREE.RenderTarget, layers: number): Promise<void> => {
+      const unculled: THREE.Object3D[] = [];
+      const hidden: THREE.Object3D[] = [];
+      built.root.traverse((o) => {
+        if (drawsGlass(o) && o.visible) {
+          o.visible = false;
+          hidden.push(o);
+        }
+        if (o.frustumCulled) {
+          o.frustumCulled = false;
+          unculled.push(o);
+        }
+      });
+      const previous = renderer.getRenderTarget();
+      lens.layers.mask = layers;
+      renderer.setRenderTarget(target);
+      try {
+        // three gathers what to compile synchronously, before its first await
+        return renderer.compileAsync(built.root, lens, art.scene);
+      } finally {
+        renderer.setRenderTarget(previous);
+        for (const o of unculled) o.frustumCulled = true;
+        for (const o of hidden) o.visible = true;
+      }
+    };
+    void compileInto(pipeline.backTarget, viewMask('peek'))
+      .then(() => compileInto(scenePassLike, viewMask('main')))
+      .catch((err: unknown) => {
+        console.error('S-36: エリア1 could not be compiled in the background:', err);
+      })
+      .finally(() => {
+        scenePassLike.dispose();
+        if (probe.area1.state !== 'compiling') return;
+        probe.area1.compileSeconds = (performance.now() - started) / 1000;
+        probe.area1.state = 'built';
+      });
   };
   /** 部屋1's wall, the lamps toward the next room and the motes (stage, every frame). */
   const stageArea1 = (): void => {
@@ -1020,18 +1084,23 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     built.focus.pedestal.value = focusNow.area1Pedestal;
     built.focus.drop.value = focusNow.area1Drop;
   };
-  /** Draws the next of エリア1's warm entries uncut by the view this frame (render). Returns the undo, or null. */
-  const warmArea1 = (): (() => void) | null => {
+  /**
+   * Draws the next of エリア1's warm entries uncut by the view this frame (render): each entry over two frames, the scene pass
+   * first, then the peek image too (each frame makes at most one entry's pipelines for one pass). Returns the undo and
+   * whether to draw the peek image, or null.
+   */
+  const warmArea1 = (): { undo: () => void; peek: boolean } | null => {
     const built = a1.art;
     if (!built || probe.area1.state !== 'warming') return null;
-    const entry = built.warm[a1.warmAt];
+    const entry = built.warm[a1.warmAt >> 1];
     if (!entry) {
       probe.area1.state = 'ready';
       probe.area1.readyAt = time;
       return null;
     }
+    const peekToo = (a1.warmAt & 1) === 1;
     a1.warmAt++;
-    probe.area1.warmed = a1.warmAt;
+    probe.area1.warmed = a1.warmAt >> 1;
     const unculled: THREE.Object3D[] = [];
     for (const root of entry)
       root.traverse((o) => {
@@ -1039,8 +1108,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         o.frustumCulled = false;
         unculled.push(o);
       });
-    return () => {
-      for (const o of unculled) o.frustumCulled = true;
+    return {
+      peek: peekToo,
+      undo: () => {
+        for (const o of unculled) o.frustumCulled = true;
+      },
     };
   };
 
@@ -1168,12 +1240,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   };
 
   // S-36: straight into the town (a dev spawn: ?spawn=east, area1-…), エリア1 is there from the first frame — built before it,
-  // its pipelines made in the first frames (through the home the body comes down the slope, and it is built behind the scenes)
-  if (spawn.feet[2] < SLOPE.toZ) {
+  // its pipelines made in the first frames (through the home the body comes down the slope, and it is built behind the scenes;
+  // ?area1=lazy builds it so in a dev spawn too, for measuring)
+  if (spawn.feet[2] < SLOPE.toZ && ctx.params.get('area1') !== 'lazy') {
     startArea1();
     const gen = a1.gen as Generator<void, Area1Art> | null;
     for (let r = gen?.next(); gen && r; r = r.done ? undefined : gen.next()) if (r.done) a1.art = r.value;
     a1.gen = null;
+    // compiled with everything else in the first frames (a dev view: nothing to keep smooth there)
     probe.area1.state = 'built';
     addArea1(false);
   }
@@ -1331,15 +1405,17 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     render() {
       // S-36: one of エリア1's meshes drawn uncut by the view, also in the peek image (a hair of peek the composite does not show)
-      const undo = warmArea1();
-      if (undo) {
+      const warming = warmArea1();
+      if (warming) {
         const peekWas = frame.peek;
-        frame.peek = Math.max(peekWas, 1e-4);
+        if (warming.peek) frame.peek = Math.max(peekWas, 1e-4);
+        const t0 = performance.now();
         try {
           pipeline.render(frame);
         } finally {
           frame.peek = peekWas;
-          undo();
+          warming.undo();
+          probe.area1.warmMs.push(Math.round((performance.now() - t0) * 10) / 10);
         }
       } else pipeline.render(frame);
       frames++;
