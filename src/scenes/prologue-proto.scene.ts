@@ -17,8 +17,11 @@ export const title =
  * URL switches:
  *   (none)         the whole prologue: loading → home → dive → the workshop
  *   autoplay=1     the same, played by the script (S-04's home autoplay, then the in-room autopilot)
- *   direct=1       start in the workshop without the home; spawn=bench|furnace|shelf|door|path|dead-end|far|gate|road
- *                  (gate/road: S-34's gate and the road past it)
+ *   direct=1       start in the workshop without the home;
+ *                  spawn=bench|furnace|shelf|door|path|dead-end|far|gate|road|slope|plaza|east|south|west|film
+ *                  (gate/road: S-34's gate and the road past it; S-35: slope = the slope's brow looking down to the plaza,
+ *                  plaza = up at the broken lighthouse, east/south/west = the plaza's gates (east open, toward the dawn
+ *                  since S-39), film = held at the film in the gate's arch, looking back at the vidro's pedestal)
  *   finaleHold=<s> (S-34, with a spawn) as if the drop had been taken that many seconds ago, held there: the light over
  *                  the bridge, what it has settled and the gate; &finaleOrb=hand: the vidro then taken back
  *                  (furnace/shelf/door: S-24's views of the interior)

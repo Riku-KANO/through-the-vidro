@@ -1,6 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
+import { rms } from '../../src/core/audio/analysis';
+import { Biquad } from '../../src/core/audio/dsp';
+import { WHISPER_GAP_SECONDS } from '../../src/game/prologue/session';
 
 /**
  * S-39: east to the dawn (発案者 2026-10-25; 設計書 rev 49), on both render paths.
@@ -8,7 +11,7 @@ import { expect, type Page, test } from '@playwright/test';
  *     the moment it starts calling (you push on at the film), and again after a gap while it keeps calling; the whisper is
  *     on its own bus (never on the room's event log: S-16's table of sounds), counted apart from the cues
  *  2. the film at the slope's entrance is milky frosted glass (UI と同じ乳白の曇りガラス), not rainbow: shown and hidden in the
- *     same view, what it adds over the scene keeps one hue across the arch (a thin film's colours would swing round)
+ *     same view, it makes what is behind it paler and leaves its hue (a thin film's colours would turn it this way and that)
  *  3. one lighthouse: the old town's branch in room-art.ts is gone (S-35 提案3): on the plaza's axis stand the five bubbles
  *     and the one great orb plaza.ts builds, no second tower
  * The east and west turned round are checked by layout.test.ts (the dawn and the chimney on the same side), and seen in
@@ -65,8 +68,7 @@ const backends = (process.env.BACKENDS ?? 'webgpu,webgl2').split(',');
 /** S-03 mouse sensitivity (rad per pixel). */
 const SENSITIVITY = 0.0022;
 const GPU_VALIDATION = /Destroyed texture|GPUValidationError|\[Invalid |used in a submit/i;
-/** session.ts WHISPER_GAP_SECONDS (仮). */
-const WHISPER_GAP = 3.2;
+const WHISPER_GAP = WHISPER_GAP_SECONDS;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -109,6 +111,24 @@ async function waitSound(page: Page, fn: string, timeout = 30_000): Promise<Soun
     { timeout },
   );
   return sound(page);
+}
+
+interface LabResult {
+  sampleRate: number;
+  left: number[] | Float32Array;
+  right: number[] | Float32Array;
+}
+
+/** An offline render of the room's sound (sound.ts renderSoundLab, through the game's engine), as mono. */
+async function lab(page: Page, spec: unknown): Promise<{ sampleRate: number; mono: Float32Array }> {
+  const r = (await page.evaluate(
+    (s) =>
+      (window.__vidro.sceneProbe as { sound: { render(spec: unknown): Promise<unknown> } }).sound.render(s),
+    spec,
+  )) as LabResult;
+  const left = Float32Array.from(r.left);
+  const right = Float32Array.from(r.right);
+  return { sampleRate: r.sampleRate, mono: left.map((v, i) => (v + (right[i] as number)) / 2) };
 }
 
 /** Mouse position, tracked so look moves are relative (the page is pointer-locked). */
@@ -198,20 +218,20 @@ function screenBox(r: RoomProbe, points: P3[]): Region {
 }
 
 /**
- * What a thing adds over the scene in `region`, from two PNGs of the same view with it shown (a) and hidden (b):
- *  - shown: the share of the pixels it brightens by more than 0.015 of luminance
- *  - spread: how far the colour of what it adds swings across them — each pixel's added colour as chromaticity
- *    (r, g, b over their sum, for the pixels it brightens by more than 0.03), and the mean distance from their mean. One
- *    milky white over the scene keeps one hue (what it adds only follows the background a little); a thin film's colours
- *    swing round the hue circle
- *  - added: the mean added colour (0..1 sRGB) of those pixels
+ * What a veil does to the scene behind it in `region`, from two PNGs of the same view with it shown (a) and hidden (b),
+ * each pixel's colour in an opponent space (sRGB: r − g, (r + g)/2 − b; its angle the hue, its length the chroma):
+ *  - shown: the share of the pixels it lightens by more than 0.015 of luminance
+ *  - tintDeg: how far it turns the hue of what is behind it, in degrees (the mean over the pixels with some colour behind,
+ *    chroma > 0.04, weighted by that chroma). A milky white makes things paler and leaves their hue; a thin film's
+ *    colours turn it this way and that
+ *  - gained: the share of the pixels it makes more colourful (chroma up by more than 0.02): a white veil takes colour away
  */
-async function addedColour(
+async function veil(
   page: Page,
   a: Buffer,
   b: Buffer,
   region: Region,
-): Promise<{ shown: number; spread: number; added: [number, number, number]; counted: number }> {
+): Promise<{ shown: number; tintDeg: number; gained: number; weighed: number }> {
   return page.evaluate(
     async ([a64, b64, reg]) => {
       const pixels = async (src: string) => {
@@ -225,35 +245,43 @@ async function addedColour(
       const A = await pixels(a64 as string);
       const B = await pixels(b64 as string);
       const r = reg as { x0: number; y0: number; x1: number; y1: number };
+      const lum = (d: Uint8ClampedArray, i: number) =>
+        (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      const opponent = (d: Uint8ClampedArray, i: number) => {
+        const red = (d[i] ?? 0) / 255;
+        const green = (d[i + 1] ?? 0) / 255;
+        const blue = (d[i + 2] ?? 0) / 255;
+        const o1 = red - green;
+        const o2 = (red + green) / 2 - blue;
+        return { hue: Math.atan2(o2, o1), chroma: Math.hypot(o1, o2) };
+      };
       let n = 0;
       let shown = 0;
-      const chroma: [number, number, number][] = [];
-      const sum = [0, 0, 0];
+      let gained = 0;
+      let weight = 0;
+      let turned = 0;
+      let weighed = 0;
       for (let y = r.y0; y < r.y1; y += 2)
         for (let x = r.x0; x < r.x1; x += 2) {
           const i = (y * A.w + x) * 4;
           n++;
-          const d = [0, 1, 2].map((k) => ((A.d[i + k] ?? 0) - (B.d[i + k] ?? 0)) / 255) as [
-            number,
-            number,
-            number,
-          ];
-          const l = 0.2126 * d[0] + 0.7152 * d[1] + 0.0722 * d[2];
-          if (l > 0.015) shown++;
-          if (l > 0.03 && d[0] > 0 && d[1] > 0 && d[2] > 0) {
-            const s = d[0] + d[1] + d[2];
-            chroma.push([d[0] / s, d[1] / s, d[2] / s]);
-            for (let k = 0; k < 3; k++) sum[k] = (sum[k] ?? 0) + (d[k] ?? 0);
+          if (lum(A.d, i) - lum(B.d, i) > 0.015) shown++;
+          const pa = opponent(A.d, i);
+          const pb = opponent(B.d, i);
+          if (pa.chroma > pb.chroma + 0.02) gained++;
+          if (pb.chroma > 0.04) {
+            const dh = Math.abs(Math.atan2(Math.sin(pa.hue - pb.hue), Math.cos(pa.hue - pb.hue)));
+            turned += ((dh * 180) / Math.PI) * pb.chroma;
+            weight += pb.chroma;
+            weighed++;
           }
         }
-      const m = [0, 1, 2].map((k) => chroma.reduce((t, c) => t + (c[k] ?? 0), 0) / Math.max(1, chroma.length));
-      const spread =
-        chroma.reduce(
-          (t, c) => t + Math.hypot((c[0] ?? 0) - (m[0] ?? 0), (c[1] ?? 0) - (m[1] ?? 0), (c[2] ?? 0) - (m[2] ?? 0)),
-          0,
-        ) / Math.max(1, chroma.length);
-      const added = [0, 1, 2].map((k) => (sum[k] ?? 0) / Math.max(1, chroma.length)) as [number, number, number];
-      return { shown: n > 0 ? shown / n : 0, spread, added, counted: chroma.length };
+      return {
+        shown: n > 0 ? shown / n : 0,
+        tintDeg: weight > 0 ? turned / weight : 0,
+        gained: n > 0 ? gained / n : 0,
+        weighed,
+      };
     },
     [a.toString('base64'), b.toString('base64'), region] as const,
   );
@@ -280,8 +308,9 @@ async function catchScene(page: Page): Promise<void> {
 /** Shows or hides the film in the gate's arch (the slope's entrance) in the scene the room draws. */
 async function showFilm(page: Page, visible: boolean): Promise<void> {
   await page.evaluate((v) => {
-    const s = (window as unknown as { __s39Scene: { getObjectByName(n: string): { visible: boolean } | undefined } })
-      .__s39Scene;
+    const s = (
+      window as unknown as { __s39Scene: { getObjectByName(n: string): { visible: boolean } | undefined } }
+    ).__s39Scene;
     const film = s.getObjectByName('slope-film');
     if (!film) throw new Error('no slope-film');
     film.visible = v;
@@ -355,10 +384,47 @@ for (const backend of backends) {
     expect(later.membrane.whispers).toHaveLength(n);
 
     const s = await sound(page);
+
+    // heard where you stand (小さく、でも聞こえる): rendered offline through the game's engine (HRTF, the workshop's reverb),
+    // the room's sounds at the film, with and without a whisper from the pedestal (the same seed: the same room). In the
+    // whisper's band (the vidro's D5 and A5) over its first half second, it stands above the room's own sounds by S-22's
+    // measure of a sound heard over the room (the far chimes over the wind: 1.4 times, in their band)
+    const base = { kind: 'whisper', seconds: 4, seed: 7, at: 'film', when: 2 };
+    const withIt = await lab(page, { ...base, whisper: true });
+    const without = await lab(page, { ...base, whisper: false });
+    const sr = withIt.sampleRate;
+    const band = (x: Float32Array): Float32Array => {
+      const hp = new Biquad(sr).highpass(450, 0.7);
+      const lp = new Biquad(sr).lowpass(1400, 0.7);
+      return x.map((v) => lp.process(hp.process(v)));
+    };
+    const whisperAlone = band(withIt.mono.map((v, i) => v - (without.mono[i] as number)));
+    const roomBand = band(without.mono);
+    const [w0, w1] = [Math.round(2 * sr), Math.round(2.5 * sr)];
+    const heard = { whisper: rms(whisperAlone, w0, w1), room: rms(roomBand, w0, w1) };
+    // and quiet (a hint): its loudest is under a fifth of full scale at the film
+    const loudest = whisperAlone.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
     writeFileSync(
       join(root, `artifacts/S-39/whisper-${backend}.json`),
-      JSON.stringify({ backend, whispers: later.membrane.whispers, sound: s, events: later.events, errors }, null, 2),
+      JSON.stringify(
+        {
+          backend,
+          whispers: later.membrane.whispers,
+          sound: s,
+          heard,
+          loudest,
+          events: later.events,
+          errors,
+        },
+        null,
+        2,
+      ),
     );
+    expect(
+      heard.whisper / heard.room,
+      'the whisper over the room’s sounds in its band, at the film',
+    ).toBeGreaterThan(1.4);
+    expect(loudest).toBeLessThan(0.2);
     // every whisper sounded, and on its own: none refused, one voice each; the cues are still S-16's table's
     expect(s.state).toBe('running');
     expect(s.whisper.played).toHaveLength(n);
@@ -372,7 +438,7 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-39 the film in the gate is milky frosted glass: shown and hidden in the same view, what it adds keeps one hue [${backend}]`, async ({
+  test(`S-39 the film in the gate is milky frosted glass: shown and hidden in the same view, it makes what is behind it paler, never tinted [${backend}]`, async ({
     page,
   }) => {
     test.setTimeout(120_000);
@@ -380,9 +446,7 @@ for (const backend of backends) {
     mkdirSync(join(root, 'artifacts/S-39'), { recursive: true });
     const errors = collectErrors(page);
     // the close played out (the gate open), the vidro left on the pedestal: on the far shore before the gate, the film up
-    await page.goto(
-      `/?scene=prologue-proto&spawn=gate&finaleHold=4.5&quality=mid&dynres=0&debug=1${webgl}`,
-    );
+    await page.goto(`/?scene=prologue-proto&spawn=gate&finaleHold=4.5&quality=mid&dynres=0&debug=1${webgl}`);
     const start = await waitRoom(
       page,
       "r.ready && r.playing && r.orb === 'pedestal' && r.membrane.film === 1",
@@ -407,19 +471,18 @@ for (const backend of backends) {
       [1.15, 2.2, gateZ],
     ]);
     expect(arch.x1 - arch.x0).toBeGreaterThan(200);
-    const film = await addedColour(page, shown, hidden, arch);
+    const film = await veil(page, shown, hidden, arch);
     writeFileSync(
       join(root, `artifacts/S-39/film-${backend}.json`),
       JSON.stringify({ backend, arch, film, errors }, null, 2),
     );
     // it is there: a veil over most of the arch
     expect(film.shown, 'share of the arch the film lightens').toBeGreaterThan(0.5);
-    expect(film.counted).toBeGreaterThan(200);
-    // one milky hue across it: no thin film's colours swinging round
-    expect(film.spread, 'how far the hue of what the film adds swings').toBeLessThan(0.03);
-    // and pale: what it adds has no strong cast (its channels within a third of each other)
-    const [ar, ag, ab] = film.added;
-    expect(Math.min(ar, ag, ab)).toBeGreaterThan(Math.max(ar, ag, ab) * 0.66);
+    expect(film.weighed).toBeGreaterThan(1000);
+    // milky: what is behind it shows paler, its hue left as it was (S-35's rainbow film turned it by 20°, this one by ~6°)
+    expect(film.tintDeg, 'degrees the film turns the hue of what is behind it').toBeLessThan(12);
+    // and never more colourful (S-35's: 2.4% of the arch; this one: ~0.1%)
+    expect(film.gained, 'share of the arch made more colourful').toBeLessThan(0.01);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
@@ -474,7 +537,12 @@ for (const backend of backends) {
           if (o.isInstancedMesh) {
             const a = o.instanceMatrix.array;
             for (let i = 0; i < o.count; i++) {
-              const p = apply(o.matrixWorld.elements, a[i * 16 + 12] ?? 0, a[i * 16 + 13] ?? 0, a[i * 16 + 14] ?? 0);
+              const p = apply(
+                o.matrixWorld.elements,
+                a[i * 16 + 12] ?? 0,
+                a[i * 16 + 13] ?? 0,
+                a[i * 16 + 14] ?? 0,
+              );
               if (Math.hypot(p[0] - ax, p[2] - az) < 0.5 && p[1] > ay - 1) {
                 bubbles++;
                 onAxis.push(Math.round((p[1] - ay) * 10) / 10);

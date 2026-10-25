@@ -87,6 +87,32 @@ export function vidroCalls(
 }
 
 /**
+ * 仮 (S-39 玉のささやき): seconds between two whispers of the vidro left behind, while it keeps calling (繰り返すときは間を置く).
+ * Longer than the call takes to fade (CALL_FALL_SECONDS), so a step back and straight in again is not a new call.
+ */
+export const WHISPER_GAP_SECONDS = 3.2;
+
+/**
+ * S-39 玉のささやき (ヒント設計 2; 設計書 rev 49: 台座の玉がかすかに光り、小さく鳴って知らせる): is a whisper due now? The vidro
+ * whispers the moment it starts calling (`calling`: vidroCalls, the call's own hysteresis), and while it keeps calling, again
+ * each time `sinceLast` (seconds since its last whisper, null for none yet) reaches the gap — never sooner, also when the call
+ * has stopped and started again in between.
+ */
+export function whisperDue(
+  calling: boolean,
+  sinceLast: number | null,
+  gap: number = WHISPER_GAP_SECONDS,
+): boolean {
+  return calling && (sinceLast === null || sinceLast >= gap - 1e-9);
+}
+
+/**
+ * S-39: the room's hints (ヒント設計), on their own bus: the vidro left behind whispering. Kept off the room's event log
+ * (events.ts PrologueEvent, S-16's table of sounds) like the close's.
+ */
+export type HintEvent = { type: 'whisper' };
+
+/**
  * The close of the prologue (S-34), on its own bus: the light starts across the bridge / is across, the gate starts to
  * open / is open. Kept off the room's event log (events.ts PrologueEvent), whose names are S-16's table of sounds.
  */
@@ -165,6 +191,8 @@ export class PrologueSession {
   readonly events = new EventBus<PrologueEvent>();
   /** S-34: the close (FinaleEvent), apart from `events`. */
   readonly finaleEvents = new EventBus<FinaleEvent>();
+  /** S-39: the hints (HintEvent: the vidro's whisper), apart from `events` and the close's. */
+  readonly hintEvents = new EventBus<HintEvent>();
 
   private orbsValue: readonly Orb[] = createOrbs(0);
   private onBench: boolean;
@@ -185,6 +213,8 @@ export class PrologueSession {
   private calling = false;
   private feetZ = Number.POSITIVE_INFINITY;
   private pushing = false;
+  /** S-39: seconds since the vidro last whispered (null: not yet). */
+  private sinceWhisper: number | null = null;
 
   constructor(readonly options: SessionOptions) {
     this.onBench = options.orbStart === 'bench';
@@ -400,6 +430,12 @@ export class PrologueSession {
     this.callValue = this.calling
       ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)
       : Math.max(0, this.callValue - dt / CALL_FALL_SECONDS);
+    // S-39: and whispers as it starts calling, again the gap apart while it calls on
+    if (this.sinceWhisper !== null) this.sinceWhisper += dt;
+    if (whisperDue(this.calling, this.sinceWhisper)) {
+      this.sinceWhisper = 0;
+      this.hintEvents.emit({ type: 'whisper' });
+    }
   }
 
   private stepFinale(dt: number): void {

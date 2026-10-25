@@ -30,6 +30,7 @@ import {
   DROP_TOWERS,
   EAST_ROAD,
   EAST_ROAD_END_X,
+  eastRoadBox,
   GATE,
   GATE_OPEN_DEG,
   GREENHOUSE,
@@ -53,8 +54,9 @@ import { stoneMaterial } from './room-art';
  * broken lighthouse in its middle (its great orb burst open, its shards fallen at its foot: 台詞は使わず景色で), the rim's
  * balustrade with its lamps, the three gates (east open onto a few metres of road, south and west shut with the canal and
  * the greenhouse glimpsed through their bars), the town of glass bubbles round about, and エリア1's hill with the chimneys of
- * the workshop street to the east. 夜明け前 (the plaza keeps the time of the area last left: the prologue's). Light motes
- * drift across the plaza toward the open gate (ルール7: 光の粒の流れ).
+ * the workshop street to the east — on the dawn's side (S-39: COMPASS, layout.ts). 夜明け前 (the plaza keeps the time of the
+ * area last left: the prologue's). Light motes drift across the plaza toward the open gate (ルール7: 光の粒の流れ).
+ * What lies east or west is placed along COMPASS (`E`, `W` below: ±1 on x), so turning the compass turns the town with it.
  *
  * Built from code (仮; Blender takes it over with the area's art) from layout.ts, the same numbers as the colliders
  * (physics.ts): the rim's arcs and the gates' posts and bars stop the body where they are drawn (空間の可読性と導線 4).
@@ -111,14 +113,12 @@ export function plazaGatePosts(dir: readonly [number, number]): [[number, number
 export const LIGHTHOUSE_RAIL = { radius: LIGHTHOUSE_BASE.radius + 1.4, height: 0.7 } as const;
 
 /** The road past the east gate as a box on x and z (its slab runs a little in under the rim). */
-export const EAST_ROAD_BOX = {
-  minX: EAST_ROAD_END_X,
-  maxX: PLAZA.center[0] - PLAZA.radius + 0.6,
-  minZ: PLAZA.center[2] - EAST_ROAD.halfWidth,
-  maxZ: PLAZA.center[2] + EAST_ROAD.halfWidth,
-} as const;
+export const EAST_ROAD_BOX = eastRoadBox(0.6);
 /** The east road's railings (仮): along both sides and across its end, `inset` inside the stone's edges. */
 export const EAST_ROAD_RAIL = { inset: 0.08, height: EAST_ROAD.railing, thickness: 0.06 } as const;
+/** x of the railing across the east road's end, and of where its side railings start, just outside the plaza's rim. */
+export const EAST_ROAD_END_RAIL_X = EAST_ROAD_END_X - COMPASS.east[0] * EAST_ROAD_RAIL.inset;
+export const EAST_ROAD_RIM_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + 0.25);
 
 /* ---------- the fog as you go down into the town ---------- */
 
@@ -275,6 +275,9 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   const keystones: THREE.BufferGeometry[] = [];
   const embers: THREE.BufferGeometry[] = [];
   const [cx, , cz] = PLAZA.center;
+  // east and west along x (S-39: the compass turned round; layout.ts COMPASS)
+  const E = COMPASS.east[0];
+  const W = COMPASS.west[0];
 
   // ---- the floor: a round terrace of stone, its sides going down into the mist; the roads past the gates -----------
   {
@@ -445,8 +448,9 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   // ---- the road past the east gate: railings along its sides and across its end, a lamp at each end ---------------
   {
     const { inset, height } = EAST_ROAD_RAIL;
-    const x0 = EAST_ROAD_BOX.minX + inset;
-    const x1 = cx - PLAZA.radius - 0.25;
+    // x0: the railing across the road's end; x1: where the side railings start, by the rim
+    const x0 = EAST_ROAD_END_RAIL_X;
+    const x1 = EAST_ROAD_RIM_X;
     for (const zSide of [EAST_ROAD_BOX.minZ + inset, EAST_ROAD_BOX.maxZ - inset]) {
       for (const [y, r] of [
         [height, 0.026],
@@ -454,7 +458,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         [0.12, 0.013],
       ] as const)
         brassParts.push(
-          new THREE.CylinderGeometry(r, r, x1 - x0, 8)
+          new THREE.CylinderGeometry(r, r, Math.abs(x1 - x0), 8)
             .rotateZ(Math.PI / 2)
             .translate((x0 + x1) / 2, PLAZA_Y + y, zSide),
         );
@@ -646,8 +650,9 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
   }
 
-  // ---- エリア1's hill (東), east of the plaza a little to the south: no ground of its own is drawn — the workshop street's
-  // houses, bubbles piled up it (泡が連なる住居群と坂道), make its shape over the mist, the chimneys standing among them
+  // ---- エリア1's hill (東, the dawn's side), east of the plaza a little to the south: no ground of its own is drawn — the
+  // workshop street's houses, bubbles piled up it (泡が連なる住居群と坂道), make its shape over the mist, the chimneys standing
+  // among them
   const [hx, hy, hz] = AREA1_CHIMNEY.foot;
   const HILL = { rx: 58, ry: 14, rz: 46 } as const;
   /** The hill's ground height at (x, z) (its top is the chimney's foot). */
@@ -718,10 +723,12 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     // エリア1's hill: the workshop street's houses climbing it toward the chimney, each on bigger ones below it down into
     // the mist (the hill is the houses)
     zone = 'hill';
-    const fromX = cx - PLAZA.radius - 30;
+    // from 30 m out past the rim up to just short of the chimney (on its plaza's side)
+    const fromX = cx + E * (PLAZA.radius + 30);
+    const toX = hx - E * 14;
     for (let k = 0; k < 22; k++) {
       const u = k / 21;
-      const x = fromX + (hx + 14 - fromX) * u + (rand() - 0.5) * 12;
+      const x = fromX + (toX - fromX) * u + (rand() - 0.5) * 12;
       const z = cz - 2 + (hz - cz + 2) * u + (rand() - 0.5) * 30;
       const ground = hillY(x, z);
       const main = 2.4 + rand() * 2.4;
@@ -734,7 +741,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     zone = 'far';
     for (let k = 0; k < 8; k++) {
       const south = k < 4;
-      const x = south ? cx + (rand() - 0.5) * 60 : cx + 70 + rand() * 30;
+      const x = south ? cx + (rand() - 0.5) * 60 : cx + W * (70 + rand() * 30);
       const z = south ? cz - 70 - rand() * 40 : cz + (rand() - 0.5) * 70;
       if (south && Math.abs(x - cx) < 6) continue;
       cluster(x, PLAZA_Y - 3, z, 3 + rand() * 3);
@@ -766,7 +773,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   {
     const stacks: THREE.BufferGeometry[] = [];
     const tops: THREE.BufferGeometry[] = [];
-    // [x, z offset from the landmark, height, radius]: the landmark first, then the street's lower chimneys down the hill
+    // [x offset toward the plaza (west), z offset from the landmark, height, radius]: the landmark first, then the street's
+    // lower chimneys down the hill
     const chimneys: [number, number, number, number][] = [
       [0, 0, AREA1_CHIMNEY.top - (hy - PLAZA_Y) + 3, 1.3],
       [20, 10, 13, 0.75],
@@ -776,7 +784,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       [-14, 12, 12, 0.7],
     ];
     for (const [dx, dz, h, r] of chimneys) {
-      const x = hx + dx;
+      const x = hx + W * dx;
       const z = hz + dz;
       // the stack goes down among the houses it stands on
       const y0 = hillY(x, z) - 3;
@@ -886,14 +894,14 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   moteMat.fog = false;
   const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.022, 0)), moteMat, MOTES);
   // they drift over the plaza: left out of the view's work wherever the plaza is not in it
-  motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx - 6, PLAZA_Y + 2, cz + 6), PLAZA.radius);
+  motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6), PLAZA.radius);
   instanced.push(motes);
   put(motes);
   const [ex, ez] = plazaGateAt(COMPASS.east);
   // each mote runs a gentle curve from the slope's foot round the lighthouse's north side to the gate and a little beyond
-  const a0 = new THREE.Vector3(cx + 2, 0, cz + PLAZA.radius - 2);
-  const a1 = new THREE.Vector3(cx - 12, 0, cz + 12);
-  const a2 = new THREE.Vector3(ex - 3, 0, ez);
+  const a0 = new THREE.Vector3(cx + W * 2, 0, cz + PLAZA.radius - 2);
+  const a1 = new THREE.Vector3(cx + E * 12, 0, cz + 12);
+  const a2 = new THREE.Vector3(ex - E * 3, 0, ez);
   const seeds = Array.from({ length: MOTES }, (_, i) => {
     const r = rng(900 + i);
     return {

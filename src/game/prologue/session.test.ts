@@ -517,7 +517,12 @@ describe('S-39: when it whispers (判定は純粋関数: the call and the time s
 
 describe('S-39: the session’s whisper, on its own bus (not the room’s event log: S-16’s table of sounds)', () => {
   /** The close played through to the gate open, the vidro on the pedestal, standing on the far shore; its hints recorded. */
-  function gateOpen(): { s: PrologueSession; hints: HintEvent[]; events: PrologueEvent[]; finale: FinaleEvent[] } {
+  function gateOpen(): {
+    s: PrologueSession;
+    hints: HintEvent[];
+    events: PrologueEvent[];
+    finale: FinaleEvent[];
+  } {
     const { s, finale } = dropJustTaken({ membrane: FILM });
     for (let t = 0; t < FINALE_SECONDS + 0.1; t += DT) s.step(DT, { wantPeek: false, feet: SHORE });
     const hints: HintEvent[] = [];
@@ -525,11 +530,7 @@ describe('S-39: the session’s whisper, on its own bus (not the room’s event 
     finale.length = 0;
     return { s, hints, events: record(s), finale };
   }
-  const stepFor = (
-    s: PrologueSession,
-    seconds: number,
-    input: { feet: Vec3; pushing?: boolean },
-  ): void => {
+  const stepFor = (s: PrologueSession, seconds: number, input: { feet: Vec3; pushing?: boolean }): void => {
     for (let t = 0; t < seconds - 1e-9; t += DT) s.step(DT, { wantPeek: false, ...input });
   };
 
@@ -567,7 +568,10 @@ describe('S-39: the session’s whisper, on its own bus (not the room’s event 
     expect(s.call).toBeGreaterThan(0);
     expect(hints).toHaveLength(1);
     // once the gap since the last one has passed, it whispers (still calling)
-    stepFor(s, WHISPER_GAP_SECONDS - (CALL_FALL_SECONDS + 0.1 + 0.3) + 0.05, { feet: AT_FILM, pushing: true });
+    stepFor(s, WHISPER_GAP_SECONDS - (CALL_FALL_SECONDS + 0.1 + 0.3) + 0.05, {
+      feet: AT_FILM,
+      pushing: true,
+    });
     expect(hints).toHaveLength(2);
   });
 
