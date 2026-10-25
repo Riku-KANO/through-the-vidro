@@ -119,8 +119,11 @@ interface LabResult {
   right: number[] | Float32Array;
 }
 
-/** An offline render of the room's sound (sound.ts renderSoundLab, through the game's engine), as mono. */
-async function lab(page: Page, spec: unknown): Promise<{ sampleRate: number; mono: Float32Array }> {
+/** An offline render of the room's sound (sound.ts renderSoundLab, through the game's engine), and as mono. */
+async function lab(
+  page: Page,
+  spec: unknown,
+): Promise<{ sampleRate: number; left: Float32Array; right: Float32Array; mono: Float32Array }> {
   const r = (await page.evaluate(
     (s) =>
       (window.__vidro.sceneProbe as { sound: { render(spec: unknown): Promise<unknown> } }).sound.render(s),
@@ -128,7 +131,32 @@ async function lab(page: Page, spec: unknown): Promise<{ sampleRate: number; mon
   )) as LabResult;
   const left = Float32Array.from(r.left);
   const right = Float32Array.from(r.right);
-  return { sampleRate: r.sampleRate, mono: left.map((v, i) => (v + (right[i] as number)) / 2) };
+  return { sampleRate: r.sampleRate, left, right, mono: left.map((v, i) => (v + (right[i] as number)) / 2) };
+}
+
+/** 16-bit PCM WAV, for the ear (as S-25's). */
+function wav(path: string, sampleRate: number, channels: Float32Array[]): void {
+  const n = channels[0]?.length ?? 0;
+  const ch = channels.length;
+  const data = Buffer.alloc(44 + n * ch * 2);
+  data.write('RIFF', 0);
+  data.writeUInt32LE(36 + n * ch * 2, 4);
+  data.write('WAVEfmt ', 8);
+  data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20);
+  data.writeUInt16LE(ch, 22);
+  data.writeUInt32LE(sampleRate, 24);
+  data.writeUInt32LE(sampleRate * ch * 2, 28);
+  data.writeUInt16LE(ch * 2, 32);
+  data.writeUInt16LE(16, 34);
+  data.write('data', 36);
+  data.writeUInt32LE(n * ch * 2, 40);
+  for (let i = 0; i < n; i++)
+    for (let c = 0; c < ch; c++) {
+      const v = Math.max(-1, Math.min(1, (channels[c] as Float32Array)[i] as number));
+      data.writeInt16LE(Math.round(v * 32767), 44 + (i * ch + c) * 2);
+    }
+  writeFileSync(path, data);
 }
 
 /** Mouse position, tracked so look moves are relative (the page is pointer-locked). */
@@ -404,6 +432,12 @@ for (const backend of backends) {
     const heard = { whisper: rms(whisperAlone, w0, w1), room: rms(roomBand, w0, w1) };
     // and quiet (a hint): its loudest is under a fifth of full scale at the film
     const loudest = whisperAlone.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    // for the ear: at the film (the room's sounds, the whisper 2 s in, from the pedestal behind you), and the whisper alone
+    const wavDir = join(root, 'artifacts/S-39/wav');
+    mkdirSync(wavDir, { recursive: true });
+    wav(join(wavDir, `whisper-at-film-${backend}.wav`), sr, [withIt.left, withIt.right]);
+    const alone = await lab(page, { kind: 'sound', bank: 'whisper', index: 0, seconds: 2.5 });
+    wav(join(wavDir, `whisper-alone-${backend}.wav`), alone.sampleRate, [alone.left, alone.right]);
     writeFileSync(
       join(root, `artifacts/S-39/whisper-${backend}.json`),
       JSON.stringify(
