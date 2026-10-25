@@ -6,6 +6,7 @@ import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
+import { AREA1_PLAZA, AREA1_SLOPE, AREA1_STREET, ROOM1_DROP, ROOM1_PEDESTAL } from '../area1/layout';
 import { EventBus, eventName, type PrologueEvent } from './events';
 import {
   BENCH_ORB,
@@ -122,6 +123,16 @@ describe('where the sounds come from (HRTF)', () => {
     expect(sourcePoint('orb', 'bench', hand)).toEqual(BENCH_ORB);
     expect(sourcePoint('orb', 'hand', hand)).toEqual(hand);
     expect(sourcePoint('drop', 'hand', hand)).toEqual(DROP);
+  });
+
+  it('S-36: the vidro on whichever pedestal it stands, the drop that was touched (the room says where: probe.orbAt, dropAt)', () => {
+    const hand: Vec3 = [0.1, 1.3, -0.4];
+    const at = { orb: ROOM1_PEDESTAL.orb, drop: ROOM1_DROP.at };
+    expect(sourcePoint('orb', 'pedestal', hand, at)).toEqual(ROOM1_PEDESTAL.orb);
+    expect(sourcePoint('drop', 'hand', hand, at)).toEqual(ROOM1_DROP.at);
+    // the hand is the hand wherever the pedestals are; the bench is the bench
+    expect(sourcePoint('hand', 'pedestal', hand, at)).toEqual(hand);
+    expect(sourcePoint('orb', 'bench', hand, at)).toEqual(BENCH_ORB);
   });
 });
 
@@ -856,8 +867,8 @@ describe('the workshop’s ambience (S-22: 風・遠くの風鈴・水滴を立�
   it('is placed in the room: wind at the dome’s gaps, the chimes far off beyond the gate, drops in a few places', () => {
     const kinds = PROLOGUE_AMBIENCE.map((p) => p.kind);
     expect(kinds.filter((k) => k === 'wind').length).toBeGreaterThanOrEqual(2);
-    // the far chimes in the town (S-22) and, since S-25, the one above the door
-    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(2);
+    // the far chimes in the town (S-22) and, since S-25, the one above the door; since S-36, エリア1's far ones
+    expect(kinds.filter((k) => k === 'chimes')).toHaveLength(3);
     expect(kinds.filter((k) => k === 'drops').length).toBeGreaterThanOrEqual(3);
     const top = WORKSHOP.sphereCenterY + WORKSHOP.radius;
     const skylight = PROLOGUE_AMBIENCE.find((p) => p.id === 'wind:skylight');
@@ -1229,5 +1240,58 @@ describe('S-39: the vidro’s whisper (玉のささやき: 台座の玉がかす
     expect(r.sound.probe.whisper.ready).toBe(false);
     expect(r.sound.probe.whisper.refused).toEqual(['whisper']);
     r.sound.dispose();
+  });
+});
+
+describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in エリア1, each on its own random stream (S-25)', () => {
+  const area1 = PROLOGUE_AMBIENCE.filter((p) => p.id.endsWith(':area1'));
+
+  it('a wind and far chimes, in エリア1 (past the entrance plaza), far from the workshop', () => {
+    expect(area1.map((p) => p.kind).sort()).toEqual(['chimes', 'wind']);
+    for (const p of area1) {
+      expect(p.position[0], p.id).toBeGreaterThan(AREA1_PLAZA.center[0]);
+      expect(Math.hypot(p.position[0], p.position[2]), p.id).toBeGreaterThan(100);
+    }
+    // the chimes hang up the hill, over the street, out of reach (音だけ)
+    const chimes = area1.find((p) => p.kind === 'chimes');
+    expect(chimes?.position[1]).toBeGreaterThan(AREA1_PLAZA.center[1] + 8);
+    expect(chimes?.position[0]).toBeGreaterThan(AREA1_STREET.toX - 10);
+    expect(chimes?.position[2]).toBeLessThan(AREA1_SLOPE.fromZ);
+  });
+
+  it('every place S-36 added draws from a stream of its own, so the workshop’s sounds strike when they did', () => {
+    for (const p of area1) {
+      // a bed (the wind) draws nothing; the chimes draw from their own stream
+      if (p.kind === 'chimes') expect(p.ownStream, p.id).toBe(true);
+    }
+    // the places before S-36, in their order, are as they were (S-22's timing rides on the shared stream's order)
+    const before = PROLOGUE_AMBIENCE.filter((p) => !p.id.endsWith(':area1')).map((p) => p.id);
+    expect(before).toEqual([
+      'wind:skylight',
+      'wind:door',
+      'wind:edge',
+      'fire:furnace',
+      'chimes:door',
+      'chimes:town',
+      'drops:skylight',
+      'drops:tub',
+      'drops:lamp',
+    ]);
+    expect(PROLOGUE_AMBIENCE.slice(0, before.length).map((p) => p.id)).toEqual(before);
+  });
+
+  it('the footsteps there are 石畳 (stone), by the floor’s name', () => {
+    expect(floorAt(AREA1_PLAZA.center[0], AREA1_PLAZA.center[2])).toEqual({
+      zone: 'area1-plaza',
+      material: 'stone',
+    });
+    expect(floorAt(AREA1_STREET.toX - 2, AREA1_STREET.z)).toEqual({
+      zone: 'area1-street',
+      material: 'stone',
+    });
+    expect(floorAt(ROOM1_PEDESTAL.base[0] - 1, ROOM1_PEDESTAL.base[2] + 1)).toEqual({
+      zone: 'area1-alley',
+      material: 'stone',
+    });
   });
 });

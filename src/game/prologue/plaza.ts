@@ -22,6 +22,7 @@ import * as THREE from 'three/webgpu';
 import { createBrassMaterial, createGlass, type HazeSpec } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
+import { AREA1_KEEP_OUT } from '../area1/layout';
 import {
   AREA1_CHIMNEY,
   CANAL,
@@ -114,11 +115,174 @@ export const LIGHTHOUSE_RAIL = { radius: LIGHTHOUSE_BASE.radius + 1.4, height: 0
 
 /** The road past the east gate as a box on x and z (its slab runs a little in under the rim). */
 export const EAST_ROAD_BOX = eastRoadBox(0.6);
-/** The east road's railings (仮): along both sides and across its end, `inset` inside the stone's edges. */
+/** The east road's railings (仮): along both sides, `inset` inside the stone's edges. */
 export const EAST_ROAD_RAIL = { inset: 0.08, height: EAST_ROAD.railing, thickness: 0.06 } as const;
-/** x of the railing across the east road's end, and of where its side railings start, just outside the plaza's rim. */
-export const EAST_ROAD_END_RAIL_X = EAST_ROAD_END_X - COMPASS.east[0] * EAST_ROAD_RAIL.inset;
+/**
+ * x where the side railings end (S-36: on into エリア1's entrance plaza a little, where its rim's balustrade takes over: no gap
+ * for the body between the two) and where they start, just outside the central plaza's rim.
+ */
+export const EAST_ROAD_END_RAIL_X = EAST_ROAD_END_X + COMPASS.east[0] * 0.3;
 export const EAST_ROAD_RIM_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + 0.25);
+/** S-36: 街灯 along the road, alternating sides (+1: the north side), metres out from the central plaza's rim. */
+export const EAST_ROAD_LAMPS: readonly { along: number; side: 1 | -1 }[] = [12, 24, 36, 48].map(
+  (along, i) => ({
+    along,
+    side: i % 2 === 0 ? 1 : -1,
+  }),
+);
+
+/* ---------- the far town (S-35; S-36: out of エリア1's way) ---------- */
+
+/**
+ * エリア1's hill (仮, S-35; S-36: its summit where the workshop street's chimney stands, AREA1_CHIMNEY): no ground of its own is
+ * drawn — the street's houses, bubbles piled up it (泡が連なる住居群と坂道), make its shape over the mist. Half axes on x, up, z.
+ */
+const HILL = { rx: 50, ry: 14, rz: 42 } as const;
+/** The hill's ground height at (x, z) (its top is the chimney's foot; under the mist off it). */
+export function hillY(x: number, z: number): number {
+  const [hx, hy, hz] = AREA1_CHIMNEY.foot;
+  const u = (x - hx) / HILL.rx;
+  const w = (z - hz) / HILL.rz;
+  return hy - HILL.ry + HILL.ry * Math.sqrt(Math.max(0, 1 - u * u - w * w));
+}
+
+/** Does a circle (x, z, r) on the ground stand clear of エリア1's way (its keep-out boxes)? */
+function clearOfArea1(x: number, z: number, r: number): boolean {
+  return AREA1_KEEP_OUT.every((b) => {
+    const nx = Math.min(Math.max(x, b.minX), b.maxX);
+    const nz = Math.min(Math.max(z, b.minZ), b.maxZ);
+    return Math.hypot(x - nx, z - nz) >= r;
+  });
+}
+
+/** One bubble of the town: its centre, radius, and which part of the town (each its own instanced mesh). */
+export interface TownBubble {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  zone: 'plaza' | 'slope' | 'hill' | 'far';
+}
+
+let bubbles: TownBubble[] | null = null;
+
+/**
+ * The town of glass bubbles fused in clusters (形のルール: 建物は泡の集合): round the plaza, below the slope, on エリア1's hill
+ * and far off — each the same every call. On the hill none stands on エリア1's way (S-36: AREA1_KEEP_OUT): the road's end,
+ * the entrance plaza, the street and the alley with their grey houses, the slope up to the summit.
+ */
+export function townBubbles(): readonly TownBubble[] {
+  if (bubbles) return bubbles;
+  const out: TownBubble[] = [];
+  const rand = rng(20261023);
+  const [cx, , cz] = PLAZA.center;
+  const W = COMPASS.west[0];
+  let zone: TownBubble['zone'] = 'plaza';
+  /**
+   * A cluster of bubbles round (x, z) on `base`; with `maxTop`, sunk so that none of it rises above that height. With
+   * `clear`, the cluster is left out when any of it would stand on エリア1's way.
+   */
+  const cluster = (
+    x: number,
+    base: number,
+    z: number,
+    main: number,
+    maxTop?: number,
+    clear = false,
+  ): void => {
+    const parts: { x: number; y: number; z: number; r: number }[] = [];
+    const c = { x, y: base + main * (0.4 + rand() * 0.3), z };
+    parts.push({ ...c, r: main });
+    const n = 1 + Math.floor(rand() * 3);
+    for (let i = 0; i < n; i++) {
+      const r = main * (0.35 + rand() * 0.45);
+      const ox = rand() - 0.5;
+      const oz = rand() - 0.5;
+      const l = Math.hypot(ox, oz) || 1;
+      const k = main * (0.55 + rand() * 0.4);
+      parts.push({
+        x: c.x + (ox / l) * k,
+        y: base + r * (0.3 + rand() * 0.9) + (rand() < 0.3 ? main * 0.8 : 0),
+        z: c.z + (oz / l) * k,
+        r,
+      });
+    }
+    if (clear && !parts.every((b) => clearOfArea1(b.x, b.z, b.r))) return;
+    const top = Math.max(...parts.map((b) => b.y + b.r));
+    const sink = maxTop !== undefined ? Math.max(0, top - maxTop) : 0;
+    for (const b of parts) out.push({ x: b.x, y: b.y - sink, z: b.z, r: b.r, zone });
+  };
+  // round the plaza, leaving the slope and the gates their views. On the slope's side they stand lower than the plaza
+  // (the plaza is a terrace): from the slope's brow they do not hide it (ルール6: 次に行く場所が先に見えている)
+  const corridors = rimOpenings();
+  const north = Math.atan2(COMPASS.north[1], COMPASS.north[0]);
+  for (let k = 0; k < 34; k++) {
+    const a = (k / 34) * Math.PI * 2 + rand() * 0.15;
+    const off = corridors.some((o) => Math.abs(Math.atan2(Math.sin(a - o), Math.cos(a - o))) < 0.26);
+    if (off) continue;
+    const rad = PLAZA.radius + 7 + rand() * 26;
+    const slopeSide = Math.abs(Math.atan2(Math.sin(a - north), Math.cos(a - north))) < 1.3;
+    cluster(
+      cx + Math.cos(a) * rad,
+      PLAZA_Y - 1.5 - rand() * 1.5,
+      cz + Math.sin(a) * rad,
+      2.6 + rand() * 3.2,
+      slopeSide ? PLAZA_Y - 0.4 : undefined,
+    );
+  }
+  // below the slope on both sides as it comes down into the town: glass roofs under its railings, out of the mist
+  zone = 'slope';
+  for (let k = 0; k < 14; k++) {
+    const z = -48 - k * 3.6 - rand() * 2;
+    const side = k % 2 === 0 ? 1 : -1;
+    const x = side * (5.5 + rand() * 14);
+    cluster(x, slopeHeight(z) - 6, z, 2.2 + rand() * 2.4, slopeHeight(z) - 0.3);
+  }
+  // エリア1's hill: the workshop street's houses on its flanks and round its summit, each on bigger ones below it down into
+  // the mist (the hill is the houses), out of エリア1's way (S-36)
+  zone = 'hill';
+  const [hx, , hz] = AREA1_CHIMNEY.foot;
+  for (let k = 0; k < 44; k++) {
+    const a = (k / 44) * Math.PI * 2 + rand() * 0.4;
+    const reach = 0.18 + rand() * 0.8;
+    const x = hx + Math.cos(a) * reach * HILL.rx;
+    const z = hz + Math.sin(a) * reach * HILL.rz;
+    const ground = hillY(x, z);
+    const main = 2.4 + rand() * 2.4;
+    if (!clearOfArea1(x, z, main * 2)) continue;
+    cluster(x, ground - main * 0.6, z, main, undefined, true);
+    // what it stands on: wider bubbles stepping down to the mist
+    for (let y = ground - main * 1.4; y > PLAZA_Y - 3; y -= 4.5)
+      cluster(x + (rand() - 0.5) * 3, y - 3, z + (rand() - 0.5) * 3, 3.2 + rand() * 1.8, undefined, true);
+  }
+  // far to the south and the west, round the canal and the greenhouse: silhouettes in the haze
+  zone = 'far';
+  for (let k = 0; k < 8; k++) {
+    const south = k < 4;
+    const x = south ? cx + (rand() - 0.5) * 60 : cx + W * (70 + rand() * 30);
+    const z = south ? cz - 70 - rand() * 40 : cz + (rand() - 0.5) * 70;
+    if (south && Math.abs(x - cx) < 6) continue;
+    cluster(x, PLAZA_Y - 3, z, 3 + rand() * 3);
+  }
+  bubbles = out;
+  return out;
+}
+
+/**
+ * 工房街の煙突 (ルール5): the landmark on エリア1's summit (AREA1_CHIMNEY) first, then the street's lower chimneys round the hill,
+ * out of エリア1's way (S-36). Where each stands (x, z), its height and radius.
+ */
+export function streetChimneys(): { x: number; z: number; h: number; r: number }[] {
+  const [hx, hy, hz] = AREA1_CHIMNEY.foot;
+  return [
+    { x: hx, z: hz, h: AREA1_CHIMNEY.top - (hy - PLAZA_Y) + 3, r: 1.3 },
+    { x: hx + 13, z: hz + 9, h: 13, r: 0.75 },
+    { x: hx + 18, z: hz - 9, h: 12, r: 0.7 },
+    { x: hx - 7, z: hz - 13, h: 14, r: 0.8 },
+    { x: hx + 6, z: hz - 22, h: 11, r: 0.7 },
+    { x: hx + 26, z: hz + 4, h: 12, r: 0.7 },
+  ];
+}
 
 /**
  * 光の粒の流れ (ルール7): the curve the plaza's motes drift along, as (x, z) control points of a quadratic — from the slope's
@@ -303,9 +467,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   const keystones: THREE.BufferGeometry[] = [];
   const embers: THREE.BufferGeometry[] = [];
   const [cx, , cz] = PLAZA.center;
-  // east and west along x (S-39: the compass turned round; layout.ts COMPASS)
+  // east along x (S-39: the compass turned round; layout.ts COMPASS)
   const E = COMPASS.east[0];
-  const W = COMPASS.west[0];
 
   // ---- the floor: a round terrace of stone, its sides going down into the mist; the roads past the gates -----------
   {
@@ -473,70 +636,57 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
   }
 
-  // ---- the road past the east gate: railings along its sides and across its end, a lamp at each end ---------------
+  // ---- the road past the east gate (S-36: on to エリア1's entrance plaza): railings along its sides, lamps along it -----
   {
     const { inset, height } = EAST_ROAD_RAIL;
-    // x0: the railing across the road's end; x1: where the side railings start, by the rim
+    // x0: where the railings end, a little into the entrance plaza (its balustrade takes over); x1: by the central plaza's rim
     const x0 = EAST_ROAD_END_RAIL_X;
     const x1 = EAST_ROAD_RIM_X;
+    const length = Math.abs(x1 - x0);
+    const bays = Math.round(length / 2.4);
     for (const zSide of [EAST_ROAD_BOX.minZ + inset, EAST_ROAD_BOX.maxZ - inset]) {
+      const side = zSide > cz ? 1 : -1;
       for (const [y, r] of [
         [height, 0.026],
         [0.55, 0.013],
         [0.12, 0.013],
       ] as const)
         brassParts.push(
-          new THREE.CylinderGeometry(r, r, Math.abs(x1 - x0), 8)
+          new THREE.CylinderGeometry(r, r, length, 8)
             .rotateZ(Math.PI / 2)
             .translate((x0 + x1) / 2, PLAZA_Y + y, zSide),
         );
-      for (let i = 0; i <= 3; i++) {
-        const x = x0 + ((x1 - x0) * i) / 3;
-        brassParts.push(
-          new THREE.CylinderGeometry(0.02, 0.026, height, 8).translate(x, PLAZA_Y + height / 2, zSide),
-        );
+      // posts every 2.4 m or so, a ring in every other bay between the rails (the slope's railing's motif)
+      for (let i = 0; i <= bays; i++) {
+        const x = x1 + ((x0 - x1) * i) / bays;
+        const lampHere = EAST_ROAD_LAMPS.some((l) => l.side === side && Math.abs(x1 + E * l.along - x) < 1.2);
+        if (!lampHere)
+          brassParts.push(
+            new THREE.CylinderGeometry(0.02, 0.026, height, 8).translate(x, PLAZA_Y + height / 2, zSide),
+          );
+        if (i < bays && i % 2 === 0) {
+          const mid = x + (x0 - x1) / bays / 2;
+          brassParts.push(
+            new THREE.TorusGeometry(0.15, 0.01, 6, 28).translate(mid, PLAZA_Y + (height + 0.55) / 2, zSide),
+          );
+        }
       }
     }
-    // across the end: the railing with its rings (S-34's lookout, moved here: 仮の行き止まり until S-36)
-    const zA = EAST_ROAD_BOX.minZ + inset;
-    const zB = EAST_ROAD_BOX.maxZ - inset;
-    const posts = 7;
-    for (let i = 0; i < posts; i++) {
-      const z = zA + ((zB - zA) * i) / (posts - 1);
-      brassParts.push(
-        new THREE.CylinderGeometry(0.02, 0.026, height, 8).translate(x0, PLAZA_Y + height / 2, z),
-      );
-      if (i < posts - 1) {
-        const mid = z + (zB - zA) / (posts - 1) / 2;
-        brassParts.push(
-          new THREE.TorusGeometry(0.15, 0.01, 8, 36)
-            .rotateY(Math.PI / 2)
-            .translate(x0, PLAZA_Y + (height + 0.55) / 2, mid),
-        );
-      }
-    }
-    for (const [y, r] of [
-      [height, 0.03],
-      [0.55, 0.014],
-      [0.1, 0.014],
-    ] as const)
-      brassParts.push(
-        new THREE.CylinderGeometry(r, r, zB - zA + 0.06, 8)
-          .rotateX(Math.PI / 2)
-          .translate(x0, PLAZA_Y + y, (zA + zB) / 2),
-      );
-    for (const z of [zA, zB]) {
+    // 街灯: a lamp's post in the railing's line, its milky globe over the stone
+    for (const l of EAST_ROAD_LAMPS) {
+      const x = x1 + E * l.along;
+      const z = l.side > 0 ? EAST_ROAD_BOX.maxZ - inset : EAST_ROAD_BOX.minZ + inset;
       brassParts.push(
         new THREE.CylinderGeometry(LAMP_POST_RADIUS, LAMP_POST_RADIUS * 1.5, 2.25, 8).translate(
-          x0,
+          x,
           PLAZA_Y + 1.125,
           z,
         ),
       );
       brassParts.push(
-        new THREE.TorusGeometry(0.11, 0.012, 6, 24).rotateX(Math.PI / 2).translate(x0, PLAZA_Y + 2.19, z),
+        new THREE.TorusGeometry(0.11, 0.012, 6, 24).rotateX(Math.PI / 2).translate(x, PLAZA_Y + 2.19, z),
       );
-      globes.push(new THREE.SphereGeometry(0.12, 24, 12).translate(x0, PLAZA_Y + 2.29, z));
+      globes.push(new THREE.SphereGeometry(0.12, 24, 12).translate(x, PLAZA_Y + 2.29, z));
     }
   }
 
@@ -678,102 +828,12 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
   }
 
-  // ---- エリア1's hill (東, the dawn's side), east of the plaza a little to the south: no ground of its own is drawn — the
-  // workshop street's houses, bubbles piled up it (泡が連なる住居群と坂道), make its shape over the mist, the chimneys standing
-  // among them
-  const [hx, hy, hz] = AREA1_CHIMNEY.foot;
-  const HILL = { rx: 58, ry: 14, rz: 46 } as const;
-  /** The hill's ground height at (x, z) (its top is the chimney's foot). */
-  const hillY = (x: number, z: number): number => {
-    const u = (x - hx) / HILL.rx;
-    const w = (z - hz) / HILL.rz;
-    return hy - HILL.ry + HILL.ry * Math.sqrt(Math.max(0, 1 - u * u - w * w));
-  };
-
-  // ---- the town round the plaza, below the slope and on エリア1's hill: bubbles of glass fused in clusters ------------
+  // ---- the town round the plaza, below the slope, on エリア1's hill and far off: bubbles of glass fused in clusters --------
   {
-    const rand = rng(20261023);
     // each part of the town is its own instanced mesh, so what is out of the view is left out (the bubbles round the plaza,
     // below the slope, on エリア1's hill, and far off); the hill's and the far ones, seen only from afar, have fewer facets
     // (空間の可読性と導線 8: 遠景のガラスは単純な表現に)
-    type Zone = 'plaza' | 'slope' | 'hill' | 'far';
-    let zone: Zone = 'plaza';
-    const spheres: { p: THREE.Vector3; r: number; zone: Zone }[] = [];
-    /** A cluster of bubbles round (x, z) on `base`; with `maxTop`, sunk so that none of it rises above that height. */
-    const cluster = (x: number, base: number, z: number, main: number, maxTop?: number): void => {
-      const parts: { p: THREE.Vector3; r: number }[] = [];
-      const c = new THREE.Vector3(x, base + main * (0.4 + rand() * 0.3), z);
-      parts.push({ p: c, r: main });
-      const n = 1 + Math.floor(rand() * 3);
-      for (let i = 0; i < n; i++) {
-        const r = main * (0.35 + rand() * 0.45);
-        const o = new THREE.Vector3(rand() - 0.5, 0, rand() - 0.5)
-          .normalize()
-          .multiplyScalar(main * (0.55 + rand() * 0.4));
-        parts.push({
-          p: c
-            .clone()
-            .add(o)
-            .setY(base + r * (0.3 + rand() * 0.9) + (rand() < 0.3 ? main * 0.8 : 0)),
-          r,
-        });
-      }
-      const top = Math.max(...parts.map((b) => b.p.y + b.r));
-      const sink = maxTop !== undefined ? Math.max(0, top - maxTop) : 0;
-      for (const b of parts) spheres.push({ p: b.p.setY(b.p.y - sink), r: b.r, zone });
-    };
-    // round the plaza, leaving the slope and the gates their views. On the slope's side they stand lower than the plaza
-    // (the plaza is a terrace): from the slope's brow they do not hide it (ルール6: 次に行く場所が先に見えている)
-    const corridors = rimOpenings();
-    const north = Math.atan2(COMPASS.north[1], COMPASS.north[0]);
-    for (let k = 0; k < 34; k++) {
-      const a = (k / 34) * Math.PI * 2 + rand() * 0.15;
-      const off = corridors.some((o) => Math.abs(Math.atan2(Math.sin(a - o), Math.cos(a - o))) < 0.26);
-      if (off) continue;
-      const rad = PLAZA.radius + 7 + rand() * 26;
-      const slopeSide = Math.abs(Math.atan2(Math.sin(a - north), Math.cos(a - north))) < 1.3;
-      cluster(
-        cx + Math.cos(a) * rad,
-        PLAZA_Y - 1.5 - rand() * 1.5,
-        cz + Math.sin(a) * rad,
-        2.6 + rand() * 3.2,
-        slopeSide ? PLAZA_Y - 0.4 : undefined,
-      );
-    }
-    // below the slope on both sides as it comes down into the town: glass roofs under its railings, out of the mist
-    zone = 'slope';
-    for (let k = 0; k < 14; k++) {
-      const z = -48 - k * 3.6 - rand() * 2;
-      const side = k % 2 === 0 ? 1 : -1;
-      const x = side * (5.5 + rand() * 14);
-      cluster(x, slopeHeight(z) - 6, z, 2.2 + rand() * 2.4, slopeHeight(z) - 0.3);
-    }
-    // エリア1's hill: the workshop street's houses climbing it toward the chimney, each on bigger ones below it down into
-    // the mist (the hill is the houses)
-    zone = 'hill';
-    // from 30 m out past the rim up to just short of the chimney (on its plaza's side)
-    const fromX = cx + E * (PLAZA.radius + 30);
-    const toX = hx - E * 14;
-    for (let k = 0; k < 22; k++) {
-      const u = k / 21;
-      const x = fromX + (toX - fromX) * u + (rand() - 0.5) * 12;
-      const z = cz - 2 + (hz - cz + 2) * u + (rand() - 0.5) * 30;
-      const ground = hillY(x, z);
-      const main = 2.4 + rand() * 2.4;
-      cluster(x, ground - main * 0.6, z, main);
-      // what it stands on: wider bubbles stepping down to the mist
-      for (let y = ground - main * 1.4; y > PLAZA_Y - 3; y -= 4.5)
-        cluster(x + (rand() - 0.5) * 3, y - 3, z + (rand() - 0.5) * 3, 3.2 + rand() * 1.8);
-    }
-    // far to the south and the west, round the canal and the greenhouse: silhouettes in the haze
-    zone = 'far';
-    for (let k = 0; k < 8; k++) {
-      const south = k < 4;
-      const x = south ? cx + (rand() - 0.5) * 60 : cx + W * (70 + rand() * 30);
-      const z = south ? cz - 70 - rand() * 40 : cz + (rand() - 0.5) * 70;
-      if (south && Math.abs(x - cx) < 6) continue;
-      cluster(x, PLAZA_Y - 3, z, 3 + rand() * 3);
-    }
+    const spheres = townBubbles().map((b) => ({ p: new THREE.Vector3(b.x, b.y, b.z), r: b.r, zone: b.zone }));
     // far → near from the slope's middle, so the bubbles blend in order from where the town is first seen
     const from = new THREE.Vector3(0, -4, -60);
     spheres.sort((a, b) => b.p.distanceToSquared(from) - a.p.distanceToSquared(from));
@@ -801,19 +861,9 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   {
     const stacks: THREE.BufferGeometry[] = [];
     const tops: THREE.BufferGeometry[] = [];
-    // [x offset toward the plaza (west), z offset from the landmark, height, radius]: the landmark first, then the street's
-    // lower chimneys down the hill
-    const chimneys: [number, number, number, number][] = [
-      [0, 0, AREA1_CHIMNEY.top - (hy - PLAZA_Y) + 3, 1.3],
-      [20, 10, 13, 0.75],
-      [34, -8, 12, 0.7],
-      [48, 14, 11, 0.7],
-      [12, -18, 14, 0.8],
-      [-14, 12, 12, 0.7],
-    ];
-    for (const [dx, dz, h, r] of chimneys) {
-      const x = hx + W * dx;
-      const z = hz + dz;
+    // the landmark on the summit first, then the street's lower chimneys round the hill (streetChimneys)
+    const chimneys = streetChimneys();
+    chimneys.forEach(({ x, z, h, r }, i) => {
       // the stack goes down among the houses it stands on
       const y0 = hillY(x, z) - 3;
       stacks.push(
@@ -837,9 +887,9 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
             .translate(x, y0 + h * f, z),
         );
       // the workshop street is waking: a warm glow in the landmark's mouth (まだそこで暮らしている気配)
-      if (dx === 0 && dz === 0)
+      if (i === 0)
         tops.push(new THREE.SphereGeometry(r * 0.85, 24, 12).scale(1, 0.45, 1).translate(x, y0 + h * 1.0, z));
-    }
+    });
     put(new THREE.Mesh(merged(stacks), frosted));
     put(new THREE.Mesh(merged(tops), chimneyMilk));
   }

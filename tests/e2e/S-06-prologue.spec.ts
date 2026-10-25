@@ -8,6 +8,8 @@ import { expect, type Page, test } from '@playwright/test';
  * Also with real input: 置いている間は覗けない, 橋の上では拾えない.
  * S-34 carries the play-through on to the close: 雫 → 橋を戻る → 玉を拾う (on the settled bridge) → 門をくぐる.
  * S-35 carries it on down the slope to the central plaza, to the front of its open east gate (real input and autoplay).
+ * S-36 carries it on along the road into the morning, to エリア1's entrance plaza and its first room's drop (real input and
+ * autoplay): the wall cut by the placed vidro, the drop behind it, the vidro taken back out of the wall.
  * Screens → artifacts/screens/S-06/<backend>/, the event log → artifacts/S-06/run-<backend>.json.
  */
 test.use({ locale: 'ja-JP' });
@@ -59,6 +61,10 @@ interface RoomProbe {
   } | null;
   /** S-34: the close (the bridge settled by the drop's light, the gate open). */
   finale: { settle: number; gate: number; settledSegments: number; gateOpen: boolean };
+  /** S-36: エリア1 (built behind the scenes), the sky's morning (0..1), the drops taken by area. */
+  area1: { state: string; wall: { segments: number; off: number }; next: number };
+  daylight: number;
+  areas: Record<string, { drops: number; taken: number }>;
   layout: {
     edgeZ: number;
     farZ: number;
@@ -70,6 +76,16 @@ interface RoomProbe {
     plaza: { center: [number, number, number]; radius: number };
     lighthouseTop: [number, number, number];
     eastGate: [number, number, number];
+    /** S-36: エリア1's way in and its first room. */
+    area1: {
+      plaza: { center: [number, number, number]; radius: number };
+      roadToX: number;
+      pedestalOrb: [number, number, number];
+      drop: [number, number, number];
+      wall: { min: [number, number, number]; max: [number, number, number] };
+      alley: { minX: number; maxX: number; minZ: number; maxZ: number };
+      chimneyTop: [number, number, number];
+    };
   };
 }
 
@@ -227,10 +243,10 @@ for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-06', backend);
 
-  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop → back → pick up → gate → slope → plaza [${backend}]`, async ({
+  test(`S-06 prologue: dive → walk → dead end → peek → place → cross → drop → back → pick up → gate → slope → plaza → road → エリア1 部屋1 [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(330_000);
+    test.setTimeout(480_000);
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(join(root, 'artifacts/S-06'), { recursive: true });
     const errors = collectErrors(page);
@@ -471,11 +487,44 @@ for (const backend of backends) {
     await lookAt(page, [eastGate[0], eastGate[1] + 2, eastGate[2]]);
     await page.waitForTimeout(200);
     await snap('east-gate');
+    // S-36: エリア1 was built behind the scenes while in the plaza; on along the road into the morning (早歩き) to its
+    // entrance plaza, the workshop street's chimney up the hill
+    const built = await waitRoom(page, "r.area1.state === 'ready'", 30_000);
+    const a1 = built.layout.area1;
+    const inPlaza = await walkTo(page, a1.plaza.center[0] - 3, a1.plaza.center[2], 0.5, 90_000, true);
+    expect(inPlaza.daylight).toBe(1);
+    expect(inPlaza.grounded).toBe(true);
+    await lookAt(page, a1.chimneyTop);
+    await page.waitForTimeout(200);
+    await snap('area1-plaza');
+    // 部屋1: before the alley, place the vidro, through the crumbled wall to the drop, back out, the vidro taken back
+    const ax = (a1.alley.minX + a1.alley.maxX) / 2 - 0.4;
+    await walkTo(page, ax, a1.alley.minZ - 0.7, 0.35, 60_000);
+    await walkTo(page, ax, a1.wall.min[2] - 0.8, 0.3);
+    await lookAt(page, a1.pedestalOrb);
+    await waitRoom(page, "r.target === 'pedestal'", 5_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, 'r.sphereRadius > 3.99 && r.area1.wall.off === r.area1.wall.segments', 5_000);
+    await walkTo(page, a1.drop[0] + 0.2, a1.wall.max[2] + 0.6, 0.3);
+    await lookAt(page, a1.drop);
+    await waitRoom(page, "r.target === 'drop'", 5_000);
+    await page.keyboard.press('KeyE');
+    const room1 = await waitRoom(page, 'r.areas.area1.taken === 1', 6_000);
+    expect(room1.areas.prologue?.taken).toBe(1);
+    await walkTo(page, ax, a1.wall.min[2] - 1.0, 0.3);
+    await lookAt(page, a1.pedestalOrb);
+    await waitRoom(page, "r.target === 'pedestal'", 5_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, "r.orb === 'hand' && r.area1.wall.off === 0", 3_000);
+    await lookAt(page, [ax, a1.wall.max[1] - 0.6, a1.wall.max[2]]);
+    await page.waitForTimeout(200);
+    await snap('area1-room1');
     const end = await room(page);
     expect(end.events).toEqual(
       expect.arrayContaining(['pickup:bench', 'place', 'dropTaken', 'pickup:pedestal']),
     );
     expect(end.dropTaken).toBe(true);
+    expect(end.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 1, taken: 1 } });
 
     writeFileSync(
       join(root, `artifacts/S-06/run-${backend}.json`),
@@ -563,14 +612,18 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate → down to the plaza's east gate by script [${backend}]`, async ({
+  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate → down to the plaza → the road → エリア1 部屋1's drop by script [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(300_000);
+    test.setTimeout(420_000);
     const errors = collectErrors(page);
     await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
     await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
-    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.dropTaken', 200_000);
+    const done = await waitRoom(
+      page,
+      'r.autoplay && r.autoplay.done && r.dropTaken && r.areas.area1.taken === 1',
+      320_000,
+    );
     expect(done.events).toEqual(
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
     );
@@ -582,9 +635,15 @@ for (const backend of backends) {
     expect(done.finale.gateOpen).toBe(true);
     expect(done.bridgeColliders).toBe(done.bridgeSegments);
     expect(done.position.z).toBeLessThan(done.layout.gateZ - 1);
-    // S-35: on down the slope and across the plaza, to the front of its open east gate
-    const { eastGate, plaza } = done.layout;
-    expect(Math.hypot(done.position.x - eastGate[0], done.position.z - eastGate[2])).toBeLessThan(3.6);
+    // S-35: on down the slope and across the plaza; S-36: along the road into the morning, to エリア1's first room: its drop
+    // taken, the vidro back in hand, standing at the alley's mouth in the street
+    const { plaza, area1 } = done.layout;
+    expect(done.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 1, taken: 1 } });
+    expect(done.daylight).toBe(1);
+    expect(done.area1.next).toBeGreaterThan(0);
+    expect(done.position.x).toBeGreaterThan(area1.alley.minX - 1);
+    expect(done.position.x).toBeLessThan(area1.alley.maxX + 1);
+    expect(done.position.z).toBeLessThan(area1.wall.min[2]);
     expect(done.position.y).toBeCloseTo(plaza.center[1], 1);
     expect(done.grounded).toBe(true);
     expect(done.fallRescues, 'the fall guard never had to act').toBe(0);

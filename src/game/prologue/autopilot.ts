@@ -1,4 +1,17 @@
 import type { Vec3 } from '../../layers/footing';
+import {
+  AREA1_CHIMNEY,
+  AREA1_GATE,
+  AREA1_PLAZA,
+  AREA1_SLOPE,
+  AREA1_STREET,
+  area1SlopeHeight,
+  ROOM1_ALLEY,
+  ROOM1_DROP,
+  ROOM1_PEDESTAL,
+  ROOM1_WALL,
+  TOWN,
+} from '../area1/layout';
 import type { PlayerIntent } from '../player/player';
 import {
   BENCH_ORB,
@@ -21,7 +34,10 @@ import type { DropState, OrbPlace } from './session';
  * ?autoplay=1: plays the prologue the way a player would, through the same intents (move, look, peek,
  * 置く・拾う・調べる): take the vidro → the one way → the dead end → peek → place → cross → touch the drop
  * → (S-34) watch the light settle the bridge → back over it → pick the vidro up on it → through the open gate
- * → (S-35) the view from the slope's brow → down the slope → across the plaza to its open east gate.
+ * → (S-35) the view from the slope's brow → down the slope → across the plaza to its open east gate
+ * → (S-36) along the road into the morning → エリア1's entrance plaza, up at the chimney → down the street to 部屋1: peek at the
+ * crumbled wall (the drop behind it), place the vidro, through the wall, the drop, back out, the vidro picked up, a look
+ * toward the next room (its lamps lighting).
  * Presentation timing only (seconds below are not design values).
  */
 export interface PilotState {
@@ -33,6 +49,8 @@ export interface PilotState {
   orb: OrbPlace;
   sphereRadius: number;
   drop: DropState;
+  /** S-36: drops taken, all areas together. */
+  taken: number;
 }
 
 export interface PilotOrder {
@@ -86,7 +104,57 @@ const SCRIPT: Step[] = [
     })(),
     seconds: 1.2,
   },
+  ...area1Script(),
 ];
+
+/** S-36: エリア1, from the central plaza's east gate to 部屋1's drop and back out of the alley. */
+function area1Script(): Step[] {
+  const x = (ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2 - 0.4;
+  const wall = ROOM1_WALL.box;
+  return [
+    {
+      kind: 'walk',
+      name: 'walk-road',
+      to: [AREA1_PLAZA.center[0] - 4, AREA1_PLAZA.center[2]],
+      within: 0.6,
+      sprint: true,
+    },
+    {
+      kind: 'look',
+      name: 'look-area1',
+      at: [AREA1_CHIMNEY.foot[0], TOWN.center[1] + AREA1_CHIMNEY.top - 6, AREA1_CHIMNEY.foot[2]],
+      seconds: 1.5,
+    },
+    { kind: 'walk', name: 'walk-street', to: [x, AREA1_STREET.z + 0.6], within: 0.4 },
+    { kind: 'walk', name: 'walk-alley', to: [x, wall.min[2] - 0.9], within: 0.3 },
+    { kind: 'peek', name: 'peek-wall', at: ROOM1_DROP.at, seconds: 2.0 },
+    { kind: 'look', name: 'look-wall-pedestal', at: ROOM1_PEDESTAL.orb, seconds: 0.8 },
+    {
+      kind: 'use',
+      name: 'place-wall',
+      at: ROOM1_PEDESTAL.orb,
+      until: (s) => s.sphereRadius > 3.99,
+      linger: 0.6,
+    },
+    { kind: 'walk', name: 'walk-through', to: [ROOM1_DROP.at[0] + 0.2, wall.max[2] + 0.6], within: 0.3 },
+    { kind: 'use', name: 'touch-drop1', at: ROOM1_DROP.at, until: (s) => s.taken >= 2, linger: 1.0 },
+    { kind: 'walk', name: 'walk-out', to: [x, wall.min[2] - 1.0], within: 0.3 },
+    {
+      kind: 'use',
+      name: 'pick-up-wall',
+      at: ROOM1_PEDESTAL.orb,
+      until: (s) => s.orb === 'hand',
+      linger: 0.6,
+    },
+    { kind: 'walk', name: 'walk-next', to: [x + 0.4, ROOM1_ALLEY.minZ - 0.9], within: 0.3 },
+    {
+      kind: 'look',
+      name: 'look-next',
+      at: [AREA1_SLOPE.x, area1SlopeHeight(AREA1_GATE.z) + 2, AREA1_GATE.z],
+      seconds: 1.5,
+    },
+  ];
+}
 
 const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { QUALITY_PRESETS } from '../../core/quality';
 import { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
+import { AREA1_CHIMNEY, AREA1_KEEP_OUT } from '../area1/layout';
 import { BODY_RADIUS } from '../player/constants';
 import {
   COMPASS,
@@ -27,6 +28,8 @@ import {
   plazaGatePosts,
   rimArcs,
   rimOpenings,
+  streetChimneys,
+  townBubbles,
 } from './plaza';
 
 /** S-35: the plaza's rim, gates and haze as numbers (what the drawing and the colliders are made from). */
@@ -187,5 +190,36 @@ describe('S-35 光の粒の流れ (ルール7): the plaza’s motes lead from th
     expect(across(motePathAt(0.5))).toBeGreaterThan(0);
     // and on to the east: further along it the further along the curve
     expect(east(motePathAt(0.75))).toBeGreaterThan(east(motePathAt(0.25)));
+  });
+});
+
+describe('S-36: the far town round エリア1 keeps out of its way (the road, the entrance plaza, the street, the slope)', () => {
+  /** Does a circle (x, z, r) on the ground overlap a box on x and z? */
+  const overlaps = (x: number, z: number, r: number, b: (typeof AREA1_KEEP_OUT)[number]): boolean => {
+    const nx = Math.min(Math.max(x, b.minX), b.maxX);
+    const nz = Math.min(Math.max(z, b.minZ), b.maxZ);
+    return Math.hypot(x - nx, z - nz) < r;
+  };
+
+  it('no bubble of the town stands on エリア1’s way: every one keeps out of it with its whole width', () => {
+    const bubbles = townBubbles();
+    expect(bubbles.length).toBeGreaterThan(60);
+    expect(bubbles.filter((b) => b.zone === 'hill').length).toBeGreaterThan(20);
+    for (const b of bubbles)
+      for (const box of AREA1_KEEP_OUT)
+        expect(
+          overlaps(b.x, b.z, b.r, box),
+          `${b.zone} bubble at (${b.x.toFixed(1)}, ${b.z.toFixed(1)})`,
+        ).toBe(false);
+  });
+
+  it('the street’s chimneys stand on the hill, out of the way; the landmark on the summit (AREA1_CHIMNEY)', () => {
+    const chimneys = streetChimneys();
+    expect(chimneys[0]?.x).toBeCloseTo(AREA1_CHIMNEY.foot[0], 9);
+    expect(chimneys[0]?.z).toBeCloseTo(AREA1_CHIMNEY.foot[2], 9);
+    expect(chimneys.length).toBeGreaterThan(3);
+    for (const c of chimneys)
+      for (const box of AREA1_KEEP_OUT)
+        expect(overlaps(c.x, c.z, c.r * 1.4, box), `chimney at (${c.x}, ${c.z})`).toBe(false);
   });
 });

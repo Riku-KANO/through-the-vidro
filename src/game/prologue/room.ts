@@ -5,8 +5,34 @@ import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
 import { segmentsUnder, type Vec3 } from '../../layers/footing';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
-import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 import { glassEase } from '../../layers/tween';
+import {
+  type AreaCount,
+  type AreaDecl,
+  type DropState,
+  footingOf,
+  type SurfaceDecl,
+  surfaceSegments,
+} from '../area';
+import { type Area1Art, buildArea1 } from '../area1/art';
+import {
+  AREA1,
+  AREA1_BOUNDS,
+  AREA1_CHIMNEY,
+  AREA1_GATE,
+  AREA1_PLAZA,
+  AREA1_ROAD,
+  area1Ground,
+  daylightAt,
+  NEXT_LAMPS,
+  NEXT_LIGHTS,
+  ROOM1_ALLEY,
+  ROOM1_DROP,
+  ROOM1_PEDESTAL,
+  ROOM1_WALL,
+  TOWN,
+} from '../area1/layout';
+import { type Area1Colliders, addArea1Colliders } from '../area1/physics';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
 import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
@@ -24,7 +50,6 @@ import {
   BENCH_ORB,
   BRIDGE,
   BRIDGE_SETTLE,
-  bridgeFooting,
   COMPASS,
   DROP,
   DROP_REACH,
@@ -42,6 +67,7 @@ import {
   PEDESTAL_ID,
   PEDESTAL_ORB,
   PLAZA,
+  PROLOGUE_AREA,
   plazaGateAt,
   REACH,
   ROAD,
@@ -98,6 +124,29 @@ export interface RoomOptions {
 
 export type TargetKind = 'bench' | 'pedestal' | 'drop';
 
+/**
+ * S-36: エリア1 as the room builds it behind the scenes — waiting (not yet in the central plaza), building (a part a frame),
+ * built (waiting to be added while it is out of view), warming (its pipelines, one entry a frame, before it is seen), ready.
+ */
+export interface Area1Probe {
+  state: 'waiting' | 'building' | 'built' | 'warming' | 'ready';
+  /** The room's clock (s) when it started building, when it was added to the scene, when it was ready. */
+  startedAt: number | null;
+  addedAt: number | null;
+  readyAt: number | null;
+  /** Whether its box was in the camera's view when it was added (it waits until it is not, unless you are on the road). */
+  addedInView: boolean;
+  /** Frames from building to ready, and the longest of them (ms, between two updates of the room). */
+  frames: number;
+  worstMs: number;
+  /** Entries warmed (its meshes, one a frame, drawn uncut by the view). */
+  warmed: number;
+  /** 部屋1's crumbled wall: its segments, and how many of their colliders a placed vidro's sphere cuts now (S-28). */
+  wall: { segments: number; off: number };
+  /** 0..1: the lamps toward the next room, lit once 部屋1's drop is taken (次の部屋の方向が見える). */
+  next: number;
+}
+
 /** What the room publishes on window.__vidro.sceneProbe.room (tests/e2e/S-06-*.spec.ts). */
 export interface RoomProbe {
   ready: boolean;
@@ -130,9 +179,22 @@ export interface RoomProbe {
   onBackFooting: boolean;
   shaking: boolean;
   target: TargetKind | null;
+  /** S-36: the pedestal or the drop targeted (its id), null for none or the bench. */
+  targetId: string | null;
+  /** The prologue's drop (the first room's). */
   drop: 'waiting' | 'flying' | 'taken';
   dropTaken: boolean;
   dropMaterialized: boolean;
+  /** S-36: every drop of the areas (game/area) and its state; how many each area has and has taken. */
+  drops: { id: string; area: string; state: DropState }[];
+  areas: Record<string, AreaCount>;
+  /** S-36: 0 (夜明け前) … 1 (朝), where the body stands (area1/layout.ts daylightAt). */
+  daylight: number;
+  /** S-36: エリア1, built behind the scenes. */
+  area1: Area1Probe;
+  /** S-36: where the vidro stands on its pedestal now (the sound's 'orb'), and the drop last touched (its 'drop'). */
+  orbAt: Vec3;
+  dropAt: Vec3;
   /** The last events, e.g. 'pickup:bench', 'peekStart', 'shake:peek', 'dropTaken'. */
   events: string[];
   lastAction: string | null;
@@ -180,6 +242,18 @@ export interface RoomProbe {
     lighthouseTop: Vec3;
     eastGate: Vec3;
     eastRoadEndX: number;
+    /** S-36: エリア1's way in and its first room. */
+    area1: {
+      plaza: { center: Vec3; radius: number };
+      roadFromX: number;
+      roadToX: number;
+      pedestalOrb: Vec3;
+      drop: Vec3;
+      wall: { min: Vec3; max: Vec3 };
+      alley: { minX: number; maxX: number; minZ: number; maxZ: number };
+      chimneyTop: Vec3;
+      gateZ: number;
+    };
   };
   /** The workshop's interior from its glb (S-24), once the room is built. */
   workshop: WorkshopProbe | null;
@@ -350,13 +424,31 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     handPresence: 0,
     sphereRadius: 0,
     bridgeColliders: 0,
-    bridgeSegments: bridgeFooting().length,
+    bridgeSegments: footingOf([PROLOGUE_AREA]).length,
     onBackFooting: false,
     shaking: false,
     target: null,
+    targetId: null,
     drop: 'waiting',
     dropTaken: false,
     dropMaterialized: false,
+    drops: [],
+    areas: {},
+    daylight: daylightAt(s.feet[0]),
+    area1: {
+      state: 'waiting',
+      startedAt: null,
+      addedAt: null,
+      readyAt: null,
+      addedInView: false,
+      frames: 0,
+      worstMs: 0,
+      warmed: 0,
+      wall: { segments: surfaceSegments(ROOM1_WALL).length, off: 0 },
+      next: 0,
+    },
+    orbAt: PEDESTAL_ORB,
+    dropAt: DROP,
     events: [],
     lastAction: null,
     backPassFrames: 0,
@@ -393,6 +485,17 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
         return [x, PLAZA.center[1], z] as Vec3;
       })(),
       eastRoadEndX: EAST_ROAD_END_X,
+      area1: {
+        plaza: { center: AREA1_PLAZA.center, radius: AREA1_PLAZA.radius },
+        roadFromX: AREA1_ROAD.fromX,
+        roadToX: AREA1_ROAD.toX,
+        pedestalOrb: ROOM1_PEDESTAL.orb,
+        drop: ROOM1_DROP.at,
+        wall: { min: ROOM1_WALL.box.min, max: ROOM1_WALL.box.max },
+        alley: { ...ROOM1_ALLEY },
+        chimneyTop: [AREA1_CHIMNEY.foot[0], TOWN.center[1] + AREA1_CHIMNEY.top, AREA1_CHIMNEY.foot[2]],
+        gateZ: AREA1_GATE.z,
+      },
     },
     workshop: null,
     trial: null,
@@ -464,15 +567,19 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   ]);
   const world = createWorld();
   addRoomColliders(R, world);
-  const footing = new BackFooting(R, world, bridgeFooting(), deckSegmentShape);
-  const furniture = addAssetColliders(R, world, workshop.assembled.colliders);
   // A surface-only wall on the dead end's lip (?trial=surface-wall; S-24's trial wall, not in the prologue's design): its
   // segments lose their collider while wholly inside a placed orb's sphere, and picking the orb up while standing in
-  // one is refused (S-28, process/slices/S-28.md).
+  // one is refused (S-28, process/slices/S-28.md). S-36: declared in the prologue's room (game/area), like エリア1's wall.
   const trialWall = ctx.params.get('trial') === 'surface-wall';
-  const trial = trialWall
-    ? new SurfaceColliders(R, world, splitSurface('trial-wall', TRIAL_SURFACE_WALL, SURFACE_SEGMENT))
-    : null;
+  const trialDecl: SurfaceDecl | null = trialWall ? { id: 'trial-wall', box: TRIAL_SURFACE_WALL } : null;
+  const prologueArea: AreaDecl = trialDecl
+    ? { ...PROLOGUE_AREA, rooms: PROLOGUE_AREA.rooms.map((r) => ({ ...r, surface: [trialDecl] })) }
+    : PROLOGUE_AREA;
+  // S-36 エリアの仕組み: the prologue's workshop and エリア1, played by one session (game/area)
+  const areas: readonly AreaDecl[] = [prologueArea, AREA1];
+  const footing = new BackFooting(R, world, footingOf([prologueArea]), deckSegmentShape);
+  const furniture = addAssetColliders(R, world, workshop.assembled.colliders);
+  const trial = trialDecl ? new SurfaceColliders(R, world, surfaceSegments(trialDecl)) : null;
   // S-34: the gate's leaves, shut until the drop is taken
   const gateLeaves = new GateLeaves(R, world);
   world.step();
@@ -534,16 +641,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
   });
 
-  const pedestals: Record<string, Vec3> = { [PEDESTAL_ID]: PEDESTAL_ORB };
-  const session = new PrologueSession({
-    orbStart: opts.orbStart,
-    pedestals,
-    footing: footing.segments,
-    surface: trial?.segments ?? [],
-    drop: DROP,
-    settle: BRIDGE_SETTLE,
-    membrane: MEMBRANE,
-  });
+  const session = new PrologueSession({ orbStart: opts.orbStart, areas, membrane: MEMBRANE });
+  const { pedestals } = session;
+  // the morning where the body starts (0 in the workshop and the central plaza: the sky as it was)
+  art.setDaylight(daylightAt(SPAWNS[opts.spawn].feet[0]));
   const spawn = SPAWNS[opts.spawn];
   /** Where the feet stood when last read (the film asks which side of it the body is on). */
   let feetZ = spawn.feet[2];
@@ -609,11 +710,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   let prewarm = false;
   let arrivalGlow = 0;
   let target: TargetKind | null = null;
+  /** S-36: the id of the pedestal or the drop targeted (null for none or the bench). */
+  let targetId: string | null = null;
   let promptText = '';
   let mainRadius = 0;
   let onBackFooting = false;
-  // the guard's floor a metre under the ground, down the slope too (S-35)
-  const guard = new FallGuard((x, z) => groundHeight(x, z) - 1);
+  // the guard's floor a metre under the ground, down the slope too (S-35), up エリア1's slope too (S-36)
+  const guard = new FallGuard((x, z) => Math.max(groundHeight(x, z), area1Ground(x, z) ?? -Infinity) - 1);
   const idle: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
   const live: PlayerIntent = { move: { x: 0, y: 0 }, sprint: false, lookYaw: 0, lookPitch: 0 };
   // the session's input each frame, reused: the peek asked for, and (S-35) where the feet stand (feetNow)
@@ -624,7 +727,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   let hintFor = 0;
   let wasLocked = false;
   /** Eased focus (0..1) of the things that can be acted on: their rims glow while targeted. */
-  const focusNow = { orb: 0, pedestal: 0, drop: 0 };
+  const focusNow = { orb: 0, pedestal: 0, drop: 0, area1Pedestal: 0, area1Drop: 0 };
   const eye: [number, number, number] = [0, 0, 0];
   const fieldSpheres: FieldSphere[] = Array.from({ length: 3 }, () => ({
     center: PEDESTAL_ORB,
@@ -640,14 +743,30 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     visible: false,
     sunDirection: art.sunDirection,
   };
-  const candidates: TargetCandidate<TargetKind>[] = [];
-  const benchTarget: TargetCandidate<TargetKind> = { target: 'bench', point: BENCH_ORB, reach: REACH };
-  const pedestalTarget: TargetCandidate<TargetKind> = {
-    target: 'pedestal',
-    point: PEDESTAL_ORB,
+  /** S-36: what can be acted on, by key ('bench', 'pedestal:<id>', 'drop:<id>'): every pedestal and drop of the areas. */
+  type Target = { kind: TargetKind; id: string | null };
+  const candidates: TargetCandidate<Target>[] = [];
+  const benchTarget: TargetCandidate<Target> = {
+    target: { kind: 'bench', id: null },
+    point: BENCH_ORB,
     reach: REACH,
   };
-  const dropTarget: TargetCandidate<TargetKind> = { target: 'drop', point: DROP, reach: DROP_REACH };
+  const pedestalTargets = new Map<string, TargetCandidate<Target>>(
+    Object.entries(pedestals).map(([id, point]) => [
+      id,
+      { target: { kind: 'pedestal', id }, point, reach: REACH },
+    ]),
+  );
+  const dropTargets = new Map<string, TargetCandidate<Target>>(
+    session.dropList.map((d) => [
+      d.id,
+      { target: { kind: 'drop', id: d.id }, point: d.at, reach: DROP_REACH },
+    ]),
+  );
+  /** Whether a room's things are there to act on: the prologue's always, エリア1's once it is in the scene. */
+  const roomOf = new Map<string, string>(session.dropList.map((d) => [d.id, d.area]));
+  for (const a of areas) for (const r of a.rooms) for (const p of r.pedestals) roomOf.set(p.id, a.id);
+  const present = (id: string): boolean => roomOf.get(id) !== AREA1.id || area1Here();
   /** The body as read once per frame (S-03's getters return new objects each time). */
   const body = { fx: spawn.feet[0], fy: spawn.feet[1], fz: spawn.feet[2], ey: 0, vx: 0, vy: 0, vz: 0 };
   const readBody = (): void => {
@@ -692,17 +811,28 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   /** Moves an eased 0..1 toward 0 or 1 by at most `k`. */
   const ease = (now: number, on: boolean, k: number): number =>
     on ? Math.min(1, now + k) : Math.max(0, now - k);
-  const dropFrom = new THREE.Vector3(...DROP);
+  const dropFrom = new THREE.Vector3();
   const feetAt: [number, number, number] = [0, 0, 0];
   const dropTo = new THREE.Vector3();
 
   const interactTarget = (): InteractTarget | null =>
-    target === 'pedestal' ? { kind: 'pedestal', id: PEDESTAL_ID } : target ? { kind: target } : null;
+    target === 'pedestal'
+      ? { kind: 'pedestal', id: targetId ?? PEDESTAL_ID }
+      : target === 'drop'
+        ? { kind: 'drop', id: targetId ?? undefined }
+        : target
+          ? { kind: target }
+          : null;
 
   const handle = (type: InputEvent['type']): void => {
     feetAt[0] = body.fx;
     feetAt[1] = body.fy;
     feetAt[2] = body.fz;
+    // S-36: the sound of a drop touched comes from that drop (sound.ts reads it as the event is answered)
+    if (type === 'interact' && target === 'drop' && targetId) {
+      const d = dropTargets.get(targetId);
+      if (d) probe.dropAt = d.point;
+    }
     if (type === 'interact') probe.lastAction = session.interact(interactTarget(), feetAt);
     else if (type === 'peekDenied') {
       session.refusePeek();
@@ -737,18 +867,25 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     finaleArt.setKeystone(glassEase(Math.min(1, close.gate / KEYSTONE_LIGHTS)));
   };
 
-  /** The drop is real where it is drawn (the same as the session's rule, but also under the dev holds). */
-  const dropDrawn = (): boolean => insideAnySphere(DROP[0], DROP[1], DROP[2], fieldList);
+  /** A drop is real where it is drawn (the same as the session's rule, but also under the dev holds). */
+  const dropDrawn = (at: Vec3 = DROP): boolean => insideAnySphere(at[0], at[1], at[2], fieldList);
 
   const chooseTarget = (): void => {
     candidates.length = 0;
     const place = session.orbPlace;
-    candidates.push(place === 'bench' ? benchTarget : pedestalTarget);
-    if (session.dropState === 'waiting' && dropDrawn()) candidates.push(dropTarget);
+    if (place === 'bench') candidates.push(benchTarget);
+    else if (place === 'pedestal') {
+      const t = pedestalTargets.get(session.pedestal ?? '');
+      if (t) candidates.push(t);
+    } else for (const [id, t] of pedestalTargets) if (present(id)) candidates.push(t);
+    for (const [id, t] of dropTargets)
+      if (present(id) && session.dropStateOf(id) === 'waiting' && dropDrawn(t.point)) candidates.push(t);
     eye[0] = body.fx;
     eye[1] = body.ey;
     eye[2] = body.fz;
-    target = pickTarget(eye, lookDirection(player.yaw, player.pitch, forward), candidates, FACING_DEG);
+    const picked = pickTarget(eye, lookDirection(player.yaw, player.pitch, forward), candidates, FACING_DEG);
+    target = picked?.kind ?? null;
+    targetId = picked?.id ?? null;
   };
 
   const updatePrompt = (): void => {
@@ -766,6 +903,145 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       prompt.style.opacity = next ? '1' : '0';
       promptText = next;
     }
+  };
+
+  /** A drop as the session says: hovering at `home`, flying into the vidro at `to`, or gone. */
+  const poseDrop = (obj: THREE.Object3D, id: string | undefined, home: Vec3, to: Vec3): void => {
+    const d = session.dropStateOf(id);
+    obj.visible = d !== 'taken';
+    if (d === 'waiting') {
+      obj.position.set(home[0], home[1] + 0.03 * Math.sin(time * 1.6), home[2]);
+      obj.rotation.y = time * 0.5;
+      obj.scale.setScalar(1);
+    } else if (d === 'flying') {
+      const u = glassEase(session.dropProgressOf(id));
+      dropFrom.set(home[0], home[1], home[2]);
+      dropTo.set(to[0], to[1], to[2]);
+      obj.position.lerpVectors(dropFrom, dropTo, u);
+      obj.position.y += Math.sin(Math.PI * u) * 0.9;
+      obj.scale.setScalar(1 - 0.75 * u);
+      obj.rotation.y = time * 2;
+    }
+  };
+
+  /*
+   * S-36 エリア1, built behind the scenes (発案者 2026-10-25: エリアは広場にいる間に裏で組み立てる; 遷移のルール2: 待ち時間を演出の中に
+   * 隠す). Once the body is in the central plaza it is built a part a frame (area1/art.ts buildArea1), then added to the scene
+   * (with its colliders and 部屋1's surface-only wall) at a frame its box is out of the camera's view — or at once when you are
+   * already on the road to it — then its meshes are drawn uncut by the view one a frame, in the scene pass and the peek image
+   * alike (a hair of peek: the composite shows nothing of it), so their pipelines are made before it is seen (S-38).
+   */
+  const a1 = {
+    gen: null as Generator<void, Area1Art> | null,
+    art: null as Area1Art | null,
+    colliders: null as Area1Colliders | null,
+    wall: null as SurfaceColliders | null,
+    warmAt: 0,
+    lastFrame: null as number | null,
+    nextSince: null as number | null,
+    toNext: 0,
+  };
+  const area1Here = (): boolean => a1.colliders !== null;
+  const dropShell = art.drop.children[1] as THREE.Mesh | undefined;
+  const dropCore = art.drop.children[0] as THREE.Mesh | undefined;
+  const area1Box = new THREE.Box3(
+    new THREE.Vector3(...AREA1_BOUNDS.min),
+    new THREE.Vector3(...AREA1_BOUNDS.max),
+  );
+  const startArea1 = (): void => {
+    if (a1.gen || a1.art || !dropShell || !dropCore) return;
+    a1.gen = buildArea1(quality, field, {
+      coreGeometry: dropCore.geometry,
+      shellGeometry: dropShell.geometry,
+      shellMaterial: dropShell.material as THREE.Material,
+    });
+    probe.area1.state = 'building';
+    probe.area1.startedAt = time;
+  };
+  /** Adds the built エリア1 to the scene and the world. */
+  const addArea1 = (inView: boolean): void => {
+    const built = a1.art;
+    if (!built || a1.colliders) return;
+    art.scene.add(built.root);
+    a1.colliders = addArea1Colliders(R, world);
+    a1.wall = new SurfaceColliders(R, world, surfaceSegments(ROOM1_WALL));
+    a1.wall.sync(session.spheres());
+    probe.area1.state = 'warming';
+    probe.area1.addedAt = time;
+    probe.area1.addedInView = inView;
+  };
+  /** Builds a part (one a frame) and adds it once out of view; times the frames meanwhile (update, every frame). */
+  const stepArea1 = (): void => {
+    const st = probe.area1.state;
+    if (st === 'waiting' || st === 'ready') {
+      a1.lastFrame = null;
+      return;
+    }
+    const now = performance.now();
+    if (a1.lastFrame !== null) {
+      probe.area1.frames++;
+      probe.area1.worstMs = Math.max(probe.area1.worstMs, now - a1.lastFrame);
+    }
+    a1.lastFrame = now;
+    if (st === 'building' && a1.gen) {
+      const r = a1.gen.next();
+      if (r.done) {
+        a1.art = r.value;
+        a1.gen = null;
+        probe.area1.state = 'built';
+      }
+      return;
+    }
+    if (st === 'built') {
+      camera.updateMatrixWorld();
+      frustum.setFromProjectionMatrix(
+        viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
+      );
+      const inView = frustum.intersectsBox(area1Box);
+      // on the road to it, it is added whatever the view (its floor must be there to walk onto)
+      if (!inView || body.fx > AREA1_ROAD.fromX + 4) addArea1(inView);
+    }
+  };
+  /** 部屋1's wall, the lamps toward the next room and the motes (stage, every frame). */
+  const stageArea1 = (): void => {
+    const built = a1.art;
+    if (!built) return;
+    if (a1.wall) {
+      a1.wall.sync(opts.growHold === null ? session.spheres() : fieldList);
+      probe.area1.wall.off = a1.wall.cutCount;
+    }
+    // 次の部屋の方向が見える: once 部屋1's drop is taken, the lamps toward the gate light one after the other, the motes turn
+    if (a1.nextSince === null && session.dropStateOf(ROOM1_DROP.id) === 'taken') a1.nextSince = time;
+    const since = a1.nextSince === null ? -1 : time - a1.nextSince;
+    const lit = since < NEXT_LIGHTS.first ? 0 : (since - NEXT_LIGHTS.first) / NEXT_LIGHTS.each + 1;
+    built.setNext(lit);
+    probe.area1.next = Math.min(1, lit / NEXT_LAMPS.length);
+    a1.toNext = a1.nextSince === null ? 0 : Math.min(1, since / 2.5);
+    built.focus.pedestal.value = focusNow.area1Pedestal;
+    built.focus.drop.value = focusNow.area1Drop;
+  };
+  /** Draws the next of エリア1's warm entries uncut by the view this frame (render). Returns the undo, or null. */
+  const warmArea1 = (): (() => void) | null => {
+    const built = a1.art;
+    if (!built || probe.area1.state !== 'warming') return null;
+    const entry = built.warm[a1.warmAt];
+    if (!entry) {
+      probe.area1.state = 'ready';
+      probe.area1.readyAt = time;
+      return null;
+    }
+    a1.warmAt++;
+    probe.area1.warmed = a1.warmAt;
+    const unculled: THREE.Object3D[] = [];
+    for (const root of entry)
+      root.traverse((o) => {
+        if (!o.frustumCulled) return;
+        o.frustumCulled = false;
+        unculled.push(o);
+      });
+    return () => {
+      for (const o of unculled) o.frustumCulled = true;
+    };
   };
 
   /** Spheres, the placed orb, its light and the drop as the session says (plus the dev holds). */
@@ -815,31 +1091,24 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     if (trial?.sync(footingSpheres) && probe.trial) probe.trial.off = trial.cutCount;
 
     const place = session.orbPlace;
-    const at = place === 'bench' ? BENCH_ORB : PEDESTAL_ORB;
+    // S-36: on whichever pedestal it stands (the prologue's, or エリア1's)
+    const standing = (session.pedestal !== null ? pedestals[session.pedestal] : undefined) ?? PEDESTAL_ORB;
+    const at = place === 'bench' ? BENCH_ORB : standing;
+    if (place === 'pedestal') probe.orbAt = standing;
     const jitter = shake > 0 ? Math.sin(time * 70) * SHAKE_AMPLITUDE * shake : 0;
     art.orb.visible = place !== 'hand' || prewarm;
     art.orb.position.set(at[0] + jitter, at[1] + jitter * 0.3, at[2] - jitter * 0.6);
+    art.orbLight.position.set(standing[0], standing[1] + 0.1, standing[2]);
     art.orbGlow.value = (place === 'pedestal' ? mainGlow * 1.2 : 0) + flash * (place === 'pedestal' ? 0 : 1);
     art.orbLight.intensity = place === 'pedestal' ? mainGlow * 2.2 + call * CALL_LIGHT : 0;
     slopeArt.setFilm(session.film);
     slopeArt.setPress(call);
 
-    // the light drop hovers; once touched it rises and flies into the vidro, then is gone
-    const d = session.dropState;
-    art.drop.visible = d !== 'taken';
-    if (d === 'waiting') {
-      art.drop.position.set(DROP[0], DROP[1] + 0.03 * Math.sin(time * 1.6), DROP[2]);
-      art.drop.rotation.y = time * 0.5;
-      art.drop.scale.setScalar(1);
-    } else if (d === 'flying') {
-      const u = glassEase(session.dropProgress);
-      dropTo.set(at[0], at[1], at[2]);
-      art.drop.position.lerpVectors(dropFrom, dropTo, u);
-      art.drop.position.y += Math.sin(Math.PI * u) * 0.9;
-      art.drop.scale.setScalar(1 - 0.75 * u);
-      art.drop.rotation.y = time * 2;
-    }
+    // the light drops hover; once touched each rises and flies into the vidro, then is gone
+    poseDrop(art.drop, session.dropList[0]?.id, DROP, at);
+    if (a1.art) poseDrop(a1.art.drop, ROOM1_DROP.id, ROOM1_DROP.at, at);
     stageFinale();
+    stageArea1();
   };
 
   const publish = (): void => {
@@ -868,9 +1137,16 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     probe.onBackFooting = onBackFooting;
     probe.shaking = session.shake > 0;
     probe.target = target;
+    probe.targetId = targetId;
     probe.drop = session.dropState;
     probe.dropTaken = session.dropState === 'taken';
     probe.dropMaterialized = dropDrawn();
+    // S-36: every drop and the count by area
+    const list = session.dropList;
+    if (probe.drops.length !== list.length)
+      probe.drops = list.map((d) => ({ id: d.id, area: d.area, state: session.dropStateOf(d.id) }));
+    for (const d of probe.drops) d.state = session.dropStateOf(d.id);
+    probe.areas = session.areaCounts();
     probe.backPassFrames = pipeline.backPassFrames;
     const f = probe.finale;
     f.settle = close.settle;
@@ -890,6 +1166,17 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       probe.autoplay.done = opts.autopilot.done;
     }
   };
+
+  // S-36: straight into the town (a dev spawn: ?spawn=east, area1-…), エリア1 is there from the first frame — built before it,
+  // its pipelines made in the first frames (through the home the body comes down the slope, and it is built behind the scenes)
+  if (spawn.feet[2] < SLOPE.toZ) {
+    startArea1();
+    const gen = a1.gen as Generator<void, Area1Art> | null;
+    for (let r = gen?.next(); gen && r; r = r.done ? undefined : gen.next()) if (r.done) a1.art = r.value;
+    a1.gen = null;
+    probe.area1.state = 'built';
+    addArea1(false);
+  }
 
   return {
     scene: art.scene,
@@ -925,6 +1212,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       art.animate(t);
       slopeArt.animate(t);
       plazaArt.animate(t);
+      a1.art?.animate(t, a1.toNext);
       let intent = idle;
       let wantPeek = false;
       if (playing) {
@@ -947,6 +1235,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
             orb: session.orbPlace,
             sphereRadius: session.spheres().find((s) => s.kind === 'main')?.radius ?? 0,
             drop: session.dropState,
+            taken: Object.values(session.areaCounts()).reduce((n, c) => n + c.taken, 0),
           });
           intent = order.intent;
           wantPeek = order.peek;
@@ -1008,6 +1297,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         art.fogRange.near.value = fog.near;
         art.fogRange.far.value = fog.far;
       } else readBody();
+      // S-36: エリア1 is built once the body is in the central plaza (or past it); the sky moves toward its morning
+      if (probe.area1.state === 'waiting' && body.fz < SLOPE.toZ) startArea1();
+      stepArea1();
+      probe.daylight = daylightAt(body.fx);
+      art.setDaylight(probe.daylight);
       chooseTarget();
       updatePrompt();
       // 調べられる物に近づくと縁が淡く光る: 0.2 s in and out, like the prompt
@@ -1018,8 +1312,15 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         playing && (target === 'bench' || (target === 'pedestal' && onPedestal)),
         k,
       );
-      focusNow.pedestal = ease(focusNow.pedestal, playing && target === 'pedestal', k);
-      focusNow.drop = ease(focusNow.drop, playing && target === 'drop', k);
+      const area1Target = targetId !== null && roomOf.get(targetId) === AREA1.id;
+      focusNow.pedestal = ease(focusNow.pedestal, playing && target === 'pedestal' && !area1Target, k);
+      focusNow.drop = ease(focusNow.drop, playing && target === 'drop' && !area1Target, k);
+      focusNow.area1Pedestal = ease(
+        focusNow.area1Pedestal,
+        playing && target === 'pedestal' && area1Target,
+        k,
+      );
+      focusNow.area1Drop = ease(focusNow.area1Drop, playing && target === 'drop' && area1Target, k);
       art.focus.orb.value = focusNow.orb;
       art.focus.pedestal.value = Math.max(focusNow.pedestal, session.call * CALL_CUP);
       art.focus.drop.value = focusNow.drop;
@@ -1029,7 +1330,18 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       publish();
     },
     render() {
-      pipeline.render(frame);
+      // S-36: one of エリア1's meshes drawn uncut by the view, also in the peek image (a hair of peek the composite does not show)
+      const undo = warmArea1();
+      if (undo) {
+        const peekWas = frame.peek;
+        frame.peek = Math.max(peekWas, 1e-4);
+        try {
+          pipeline.render(frame);
+        } finally {
+          frame.peek = peekWas;
+          undo();
+        }
+      } else pipeline.render(frame);
       frames++;
       if (frames >= 3) probe.ready = true;
       probe.backPassFrames = pipeline.backPassFrames;
@@ -1054,6 +1366,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       footing.dispose();
       furniture.dispose();
       trial?.dispose();
+      a1.wall?.dispose();
+      a1.colliders?.dispose();
+      a1.art?.dispose();
       gateLeaves.dispose();
       world.free();
       slopeArt.dispose();
