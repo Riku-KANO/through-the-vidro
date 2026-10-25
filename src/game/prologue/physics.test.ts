@@ -834,13 +834,15 @@ describe('S-35: down the slope to the central plaza (落下なし, やわらか�
     const s = walk(r, p, forward, 12);
     expect(s.every((q) => q.grounded && Math.abs(q.y - PLAZA_Y) < 0.03)).toBe(true);
     expect(fromCenter(p.feet)).toBeGreaterThan(PLAZA.radius + 2);
-    expect(p.feet.x).toBeGreaterThan(EAST_ROAD_END_X);
-    expect(p.feet.x).toBeLessThan(EAST_ROAD_END_X + 0.9);
+    // short of the road's end, within the railing's reach (measured along the east, whichever way it points: S-39)
+    const shortOfEnd = (EAST_ROAD_END_X - p.feet.x) * dx;
+    expect(shortOfEnd).toBeGreaterThan(0);
+    expect(shortOfEnd).toBeLessThan(0.9);
     expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
     // and its sides hold the body too
     for (const intent of [strafeLeft, strafeRight]) {
       const q = body(r, {
-        feet: [PLAZA.center[0] - PLAZA.radius - 3, PLAZA_Y, PLAZA.center[2]],
+        feet: [PLAZA.center[0] + dx * (PLAZA.radius + 3), PLAZA_Y, PLAZA.center[2] + dz * (PLAZA.radius + 3)],
         yaw: Math.atan2(-dx, -dz),
       });
       walk(r, q, intent, 3);

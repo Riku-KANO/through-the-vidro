@@ -26,7 +26,7 @@ import {
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import type { FinaleEvent } from './session';
+import type { FinaleEvent, HintEvent } from './session';
 import {
   answer,
   CueLog,
@@ -365,6 +365,7 @@ type FakeRoomProbe = SoundRoom['probe'];
 function fakeRoom(): SoundRoom & {
   events: EventBus<PrologueEvent>;
   finale: EventBus<FinaleEvent>;
+  hints: EventBus<HintEvent>;
   probe: FakeRoomProbe;
 } {
   const camera = new THREE.PerspectiveCamera();
@@ -373,6 +374,7 @@ function fakeRoom(): SoundRoom & {
   return {
     events: new EventBus<PrologueEvent>(),
     finale: new EventBus<FinaleEvent>(),
+    hints: new EventBus<HintEvent>(),
     camera,
     probe: {
       orb: 'hand',
@@ -1158,5 +1160,74 @@ describe('S-35: the far chimes hang in the town past the plaza (遠くの風鈴�
     // and they come closer as you come down into the plaza (louder there than at the workshop)
     const plaza = at(PLAZA.center[0], PLAZA.center[2], PLAZA_Y);
     expect(heard(level, TOWN_CHIMES, plaza)).toBeGreaterThan(tuned * 1.5);
+  });
+});
+
+describe('S-39: the vidro’s whisper (玉のささやき: 台座の玉がかすかに光り、小さく鳴って知らせる)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const withWhisper = (): SoundBanks => ({ ...fakeBanks(), whisper: fakeBuffer('whisper', 1.8) });
+
+  it('sounds once per whisper, from the vidro where it stands (the pedestal), on its own emitter', async () => {
+    const r = soundscapeRig(false, withWhisper);
+    await r.begin();
+    r.room.probe.orb = 'pedestal';
+    r.room.probe.position = { x: 0.2, y: 0, z: GATE.z + 0.3 };
+    r.frame();
+    const before = r.engine.started.length;
+    r.room.hints.emit({ type: 'whisper' });
+    expect(r.engine.started.length).toBe(before + 1);
+    const emitter = r.engine.voiceEmitters.at(-1);
+    expect(tagOf(r.engine.ctx.sources.at(-1))).toBe('whisper');
+    expect(emitter?.bus).toBe('sfx');
+    expect(emitter?.position.x).toBeCloseTo(PEDESTAL_ORB[0], 6);
+    expect(emitter?.position.y).toBeCloseTo(PEDESTAL_ORB[1], 6);
+    expect(emitter?.position.z).toBeCloseTo(PEDESTAL_ORB[2], 6);
+    const w = r.sound.probe.whisper;
+    expect(w.ready).toBe(true);
+    expect(w.played).toHaveLength(1);
+    expect(w.played[0]?.at).toEqual([...PEDESTAL_ORB]);
+    expect(w.refused).toEqual([]);
+    r.sound.dispose();
+  });
+
+  it('is counted on its own: the cues stay the S-16 table’s, the engine’s whole count takes it in', async () => {
+    const r = soundscapeRig(false, withWhisper);
+    await r.begin();
+    r.room.probe.orb = 'pedestal';
+    r.frame();
+    r.room.events.emit({ type: 'shake', reason: 'peek' });
+    r.room.hints.emit({ type: 'whisper' });
+    r.room.hints.emit({ type: 'whisper' });
+    const p = r.sound.probe;
+    expect(p.playedCount).toBe(1);
+    expect(p.voicesStarted).toBe(1);
+    expect(p.whisper.voicesStarted).toBe(2);
+    expect(p.engineVoices).toBe(
+      p.voicesStarted + p.footsteps.voicesStarted + p.finale.voicesStarted + p.whisper.voicesStarted,
+    );
+    r.sound.dispose();
+  });
+
+  it('before the audio (or its sound) is there, a whisper is refused and never played later', async () => {
+    const r = soundscapeRig(false, withWhisper);
+    r.room.hints.emit({ type: 'whisper' });
+    expect(r.sound.probe.whisper.refused).toEqual(['whisper']);
+    await r.begin();
+    for (let i = 0; i < 30; i++) r.frame();
+    expect(r.sound.probe.whisper.played).toEqual([]);
+    expect(r.sound.probe.whisper.voicesStarted).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('with no whisper loaded (a failed render), it stays silent and says so', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    r.room.hints.emit({ type: 'whisper' });
+    expect(r.sound.probe.whisper.ready).toBe(false);
+    expect(r.sound.probe.whisper.refused).toEqual(['whisper']);
+    r.sound.dispose();
   });
 });
