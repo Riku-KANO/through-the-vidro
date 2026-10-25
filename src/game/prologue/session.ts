@@ -87,10 +87,25 @@ export function vidroCalls(
 }
 
 /**
- * 仮 (S-39 玉のささやき): seconds between two whispers of the vidro left behind, while it keeps calling (繰り返すときは間を置く).
- * Longer than the call takes to fade (CALL_FALL_SECONDS), so a step back and straight in again is not a new call.
+ * 仮 (S-39 玉のささやき): seconds between the first two whispers of the vidro left behind, while it keeps calling (繰り返すときは
+ * 間を置く). Longer than the call takes to fade (CALL_FALL_SECONDS), so a step back and straight in again is not a new call.
  */
 export const WHISPER_GAP_SECONDS = 3.2;
+
+/**
+ * 仮 (S-39; 発案者の判断 2026-10-25: だんだん間を広げる): the gaps while it calls on — the first, then wider, the last one from
+ * then on — so standing at the film it is heard again but does not nag.
+ */
+export const WHISPER_GAPS_SECONDS: readonly number[] = [WHISPER_GAP_SECONDS, 6, 12];
+
+/** 仮 (S-39): once the vidro has stopped calling this long (you stepped away from the film), the gaps start again from the first. */
+export const WHISPER_RESET_SECONDS = WHISPER_GAP_SECONDS;
+
+/** S-39: the gap after the `count`-th whisper of this call (1: after the first; 0, none yet: the first gap). */
+export function whisperGap(count: number): number {
+  const last = WHISPER_GAPS_SECONDS.length - 1;
+  return WHISPER_GAPS_SECONDS[Math.min(Math.max(count - 1, 0), last)] ?? WHISPER_GAP_SECONDS;
+}
 
 /**
  * S-39 玉のささやき (ヒント設計 2; 設計書 rev 49: 台座の玉がかすかに光り、小さく鳴って知らせる): is a whisper due now? The vidro
@@ -215,6 +230,9 @@ export class PrologueSession {
   private pushing = false;
   /** S-39: seconds since the vidro last whispered (null: not yet). */
   private sinceWhisper: number | null = null;
+  /** S-39: whispers in this call (the gaps widen with it), and seconds since it stopped calling (back to the first gap). */
+  private whispers = 0;
+  private quietFor = 0;
 
   constructor(readonly options: SessionOptions) {
     this.onBench = options.orbStart === 'bench';
@@ -430,10 +448,14 @@ export class PrologueSession {
     this.callValue = this.calling
       ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)
       : Math.max(0, this.callValue - dt / CALL_FALL_SECONDS);
-    // S-39: and whispers as it starts calling, again the gap apart while it calls on
+    // S-39: and whispers as it starts calling, again the gaps apart (widening) while it calls on; stepped away a while, the
+    // gaps start again from the first
     if (this.sinceWhisper !== null) this.sinceWhisper += dt;
-    if (whisperDue(this.calling, this.sinceWhisper)) {
+    this.quietFor = this.calling ? 0 : this.quietFor + dt;
+    if (this.quietFor >= WHISPER_RESET_SECONDS) this.whispers = 0;
+    if (whisperDue(this.calling, this.sinceWhisper, whisperGap(this.whispers))) {
       this.sinceWhisper = 0;
+      this.whispers += 1;
       this.hintEvents.emit({ type: 'whisper' });
     }
   }

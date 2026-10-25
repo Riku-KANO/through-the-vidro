@@ -24,7 +24,9 @@ import {
   SHAKE_SECONDS,
   vidroCalls,
   WHISPER_GAP_SECONDS,
+  WHISPER_RESET_SECONDS,
   whisperDue,
+  whisperGap,
 } from './session';
 
 const PEDESTAL = 'p';
@@ -513,6 +515,15 @@ describe('S-39: when it whispers (判定は純粋関数: the call and the time s
     // longer than the call takes to fade (a step back and straight in again is not a new call to whisper about)
     expect(WHISPER_GAP_SECONDS).toBeGreaterThan(CALL_FALL_SECONDS);
   });
+
+  it('the gaps widen while it calls on, so it does not nag (発案者の判断: だんだん間を広げる), and stop widening', () => {
+    expect(whisperGap(1)).toBe(WHISPER_GAP_SECONDS);
+    expect(whisperGap(2)).toBeGreaterThan(whisperGap(1));
+    expect(whisperGap(3)).toBeGreaterThan(whisperGap(2));
+    expect(whisperGap(10)).toBe(whisperGap(3));
+    // before any whisper (a new call) the first gap holds
+    expect(whisperGap(0)).toBe(WHISPER_GAP_SECONDS);
+  });
 });
 
 describe('S-39: the session’s whisper, on its own bus (not the room’s event log: S-16’s table of sounds)', () => {
@@ -548,13 +559,34 @@ describe('S-39: the session’s whisper, on its own bus (not the room’s event 
     expect(hints).toHaveLength(1);
   });
 
-  it('while it keeps calling (you let go and turn round to look for it) it whispers again, the gap apart', () => {
+  it('while it keeps calling (you let go and turn round to look for it) it whispers again, the gaps widening', () => {
     const { s, hints } = gateOpen();
     s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
     stepFor(s, WHISPER_GAP_SECONDS + 0.05, { feet: AT_FILM });
     expect(hints).toHaveLength(2);
-    stepFor(s, 2 * WHISPER_GAP_SECONDS, { feet: AT_FILM });
+    // the next one a wider gap later, and wider again after it
+    stepFor(s, whisperGap(2) - 0.1, { feet: AT_FILM });
+    expect(hints).toHaveLength(2);
+    stepFor(s, 0.1, { feet: AT_FILM });
+    expect(hints).toHaveLength(3);
+    stepFor(s, whisperGap(3) - 0.1, { feet: AT_FILM });
+    expect(hints).toHaveLength(3);
+    stepFor(s, 0.1, { feet: AT_FILM });
     expect(hints).toHaveLength(4);
+  });
+
+  it('stepping away from the film for a while, the gaps start again from the first', () => {
+    const { s, hints } = gateOpen();
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    stepFor(s, WHISPER_GAP_SECONDS + whisperGap(2) + 0.1, { feet: AT_FILM });
+    expect(hints).toHaveLength(3);
+    // away until the call has gone and the reset has passed, then in again pushing: at once, then the first gap again
+    stepFor(s, CALL_FALL_SECONDS + WHISPER_RESET_SECONDS + 0.1, { feet: SHORE });
+    expect(hints).toHaveLength(3);
+    s.step(DT, { wantPeek: false, feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(4);
+    stepFor(s, WHISPER_GAP_SECONDS + 0.05, { feet: AT_FILM, pushing: true });
+    expect(hints).toHaveLength(5);
   });
 
   it('a step back and straight in again does not shorten the gap', () => {
