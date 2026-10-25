@@ -436,8 +436,13 @@ const SHOTS = 8;
 const SHOT_GAP_MS = 300;
 /** Where S-37 brings back what S-26 lost: more than halfway from S-26 to S-31. */
 const RESTORES: readonly string[] = ['furnace', 'door'];
-/** Draw calls of the four fixed views in S-26 (S37_PHASE=s26, the same on both paths): one more lightmap adds none. */
-const DRAWS: Record<string, number> = { wake: 67, furnace: 43, shelf: 38, door: 72 };
+/**
+ * Draw calls of the four fixed views with S-26's glb (S37_PHASE=s26, the same on both paths): one more lightmap adds none.
+ * Measured again in S-35's world at its integration (2026-10-25: the slope, the plaza and the town seen from the workshop;
+ * S-26's were wake 67, furnace 43). When the world seen from these views grows, measure them again on the branch before it
+ * meets S-37's glb (S37_PHASE=s26).
+ */
+const DRAWS: Record<string, number> = { wake: 90, furnace: 59, shelf: 38, door: 72 };
 
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
