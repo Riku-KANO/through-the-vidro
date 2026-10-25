@@ -120,6 +120,34 @@ export const EAST_ROAD_RAIL = { inset: 0.08, height: EAST_ROAD.railing, thicknes
 export const EAST_ROAD_END_RAIL_X = EAST_ROAD_END_X - COMPASS.east[0] * EAST_ROAD_RAIL.inset;
 export const EAST_ROAD_RIM_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + 0.25);
 
+/**
+ * 光の粒の流れ (ルール7): the curve the plaza's motes drift along, as (x, z) control points of a quadratic — from the slope's
+ * foot, round the lighthouse's north side, to the open east gate and a little beyond it (they fade at both ends), so they
+ * lead on through the gate. Laid along COMPASS (S-39).
+ */
+export const MOTE_PATH: readonly [
+  readonly [number, number],
+  readonly [number, number],
+  readonly [number, number],
+] = (() => {
+  const [cx, , cz] = PLAZA.center;
+  const E = COMPASS.east[0];
+  const W = COMPASS.west[0];
+  const [ex, ez] = plazaGateAt(COMPASS.east);
+  return [
+    [cx + W * 2, cz + PLAZA.radius - 2],
+    [cx + E * 12, cz + 12],
+    [ex + E * 3, ez],
+  ] as const;
+})();
+
+/** A point (x, z) of the motes' curve, `u` 0..1 along it. */
+export function motePathAt(u: number): [number, number] {
+  const [a, b, c] = MOTE_PATH;
+  const v = 1 - u;
+  return [v * v * a[0] + 2 * v * u * b[0] + u * u * c[0], v * v * a[1] + 2 * v * u * b[1] + u * u * c[1]];
+}
+
 /* ---------- the fog as you go down into the town ---------- */
 
 /** room-art.ts's fog distances, set for the workshop and the way (奥ほど霞ませる). */
@@ -897,11 +925,12 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   motes.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6), PLAZA.radius);
   instanced.push(motes);
   put(motes);
-  const [ex, ez] = plazaGateAt(COMPASS.east);
   // each mote runs a gentle curve from the slope's foot round the lighthouse's north side to the gate and a little beyond
-  const a0 = new THREE.Vector3(cx + W * 2, 0, cz + PLAZA.radius - 2);
-  const a1 = new THREE.Vector3(cx + E * 12, 0, cz + 12);
-  const a2 = new THREE.Vector3(ex - E * 3, 0, ez);
+  const [a0, a1, a2] = MOTE_PATH.map(([x, z]) => new THREE.Vector3(x, 0, z)) as [
+    THREE.Vector3,
+    THREE.Vector3,
+    THREE.Vector3,
+  ];
   const seeds = Array.from({ length: MOTES }, (_, i) => {
     const r = rng(900 + i);
     return {

@@ -450,10 +450,19 @@ export type SoundLabSpec =
       only?: readonly string[];
     }
   /**
-   * S-39: the room's ambience heard from a spawn as above, and (`whisper`) the vidro's whisper from its pedestal `when`
-   * seconds in, at its level on the effects bus (as the room plays it): is it heard where you stand?
+   * S-39: the room's ambience heard from a spawn as above (facing `yaw` instead of the spawn's, when given), and
+   * (`whisper`) the vidro's whisper from its pedestal `when` seconds in, at its level on the effects bus (as the room plays
+   * it): is it heard where you stand?
    */
-  | { kind: 'whisper'; seconds: number; seed: number; at: SpawnName; when: number; whisper: boolean };
+  | {
+      kind: 'whisper';
+      seconds: number;
+      seed: number;
+      at: SpawnName;
+      yaw?: number;
+      when: number;
+      whisper: boolean;
+    };
 
 export interface SoundLabResult {
   sampleRate: number;
@@ -517,7 +526,8 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
         }
       } else {
         const spawn = SPAWNS[spec.at];
-        const [fx, fy, fz] = lookDirection(spawn.yaw, 0);
+        const yaw = spec.kind === 'whisper' && spec.yaw !== undefined ? spec.yaw : spawn.yaw;
+        const [fx, fy, fz] = lookDirection(yaw, 0);
         engine.setListener(
           { x: spawn.feet[0], y: spawn.feet[1] + EYE_HEIGHT, z: spawn.feet[2] },
           { x: fx, y: fy, z: fz },

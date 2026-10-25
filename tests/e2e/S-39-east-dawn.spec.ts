@@ -414,10 +414,11 @@ for (const backend of backends) {
     const s = await sound(page);
 
     // heard where you stand (小さく、でも聞こえる): rendered offline through the game's engine (HRTF, the workshop's reverb),
-    // the room's sounds at the film, with and without a whisper from the pedestal (the same seed: the same room). In the
+    // the room's sounds at the film, facing the slope as you push on at it (yaw 0: the pedestal behind you), with and without
+    // a whisper from the pedestal (the same seed: the same room). In the
     // whisper's band (the vidro's D5 and A5) over its first half second, it stands above the room's own sounds by S-22's
     // measure of a sound heard over the room (the far chimes over the wind: 1.4 times, in their band)
-    const base = { kind: 'whisper', seconds: 4, seed: 7, at: 'film', when: 2 };
+    const base = { kind: 'whisper', seconds: 4, seed: 7, at: 'film', yaw: 0, when: 2 };
     const withIt = await lab(page, { ...base, whisper: true });
     const without = await lab(page, { ...base, whisper: false });
     const sr = withIt.sampleRate;

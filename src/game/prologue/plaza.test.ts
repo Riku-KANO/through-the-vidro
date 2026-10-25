@@ -4,13 +4,26 @@ import { QUALITY_PRESETS } from '../../core/quality';
 import { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
 import { BODY_RADIUS } from '../player/constants';
-import { COMPASS, GATE, PLAZA, PLAZA_GATE, PLAZA_GATES, PLAZA_RIM, plazaGateAt, SLOPE } from './layout';
+import {
+  COMPASS,
+  EAST_ROAD,
+  GATE,
+  PLAZA,
+  PLAZA_GATE,
+  PLAZA_GATES,
+  PLAZA_RIM,
+  plazaGateAt,
+  SLOPE,
+} from './layout';
 import {
   buildPlaza,
   FOG_TOWN,
   FOG_WAY,
   fogRangeAt,
   gateTangent,
+  LIGHTHOUSE_RAIL,
+  MOTE_PATH,
+  motePathAt,
   plazaGatePosts,
   rimArcs,
   rimOpenings,
@@ -142,5 +155,37 @@ describe('S-35: the plaza as drawn (plaza.ts buildPlaza)', () => {
     });
     expect(drawn).toEqual([]);
     art.dispose();
+  });
+});
+
+describe('S-35 光の粒の流れ (ルール7): the plaza’s motes lead from the slope’s foot on through the open east gate', () => {
+  const [cx, , cz] = PLAZA.center;
+  /** Metres along the east from the plaza's centre, and across it, of a point (x, z) — whichever way east points (S-39). */
+  const east = ([x, z]: readonly [number, number]): number =>
+    (x - cx) * COMPASS.east[0] + (z - cz) * COMPASS.east[1];
+  const across = ([x, z]: readonly [number, number]): number =>
+    (x - cx) * COMPASS.north[0] + (z - cz) * COMPASS.north[1];
+
+  it('start at the slope’s foot, by where it comes in, and end past the east gate over its road', () => {
+    const [start, , end] = MOTE_PATH;
+    const north = plazaGateAt(COMPASS.north);
+    expect(Math.hypot(start[0] - north[0], start[1] - north[1])).toBeLessThan(4);
+    // through the gate and a little beyond it: out past the rim, on the road (S-39 review: the end had been turned round
+    // with the compass to 3 m inside the rim, and the motes faded out before the gate)
+    expect(east(end)).toBeGreaterThan(PLAZA.radius + 1);
+    expect(east(end)).toBeLessThan(PLAZA.radius + EAST_ROAD.length);
+    expect(Math.abs(across(end))).toBeLessThan(EAST_ROAD.halfWidth);
+  });
+
+  it('go round the lighthouse on its north side (the slope’s), never through its railing', () => {
+    for (let u = 0; u <= 1; u += 0.02) {
+      const p = motePathAt(u);
+      expect(Math.hypot(p[0] - cx, p[1] - cz), `u ${u.toFixed(2)}`).toBeGreaterThan(
+        LIGHTHOUSE_RAIL.radius + 1,
+      );
+    }
+    expect(across(motePathAt(0.5))).toBeGreaterThan(0);
+    // and on to the east: further along it the further along the curve
+    expect(east(motePathAt(0.75))).toBeGreaterThan(east(motePathAt(0.25)));
   });
 });
