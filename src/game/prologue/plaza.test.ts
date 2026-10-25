@@ -3,11 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { QUALITY_PRESETS } from '../../core/quality';
 import { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
-import { AREA1_CHIMNEY, AREA1_KEEP_OUT } from '../area1/layout';
+import { AREA1_CHIMNEY, AREA1_KEEP_OUT, AREA1_PLAZA, MOTES_TO_ROOM } from '../area1/layout';
 import { BODY_RADIUS } from '../player/constants';
 import {
   COMPASS,
   EAST_ROAD,
+  EAST_ROAD_END_X,
   GATE,
   PLAZA,
   PLAZA_GATE,
@@ -26,6 +27,8 @@ import {
   MOTE_PATH,
   motePathAt,
   plazaGatePosts,
+  ROAD_MOTE_PATH,
+  ROAD_MOTE_SPREAD,
   rimArcs,
   rimOpenings,
   streetChimneys,
@@ -190,6 +193,24 @@ describe('S-35 光の粒の流れ (ルール7): the plaza’s motes lead from th
     expect(across(motePathAt(0.5))).toBeGreaterThan(0);
     // and on to the east: further along it the further along the curve
     expect(east(motePathAt(0.75))).toBeGreaterThan(east(motePathAt(0.25)));
+  });
+
+  it('S-36: and on down the east road’s 60 m to エリア1’s entrance plaza, where エリア1’s motes take the way on', () => {
+    const [from, to] = ROAD_MOTE_PATH;
+    // from just out of the gate (where the plaza's fade) to a few metres into the entrance plaza
+    expect(east(from)).toBeGreaterThan(PLAZA.radius);
+    expect(east(from)).toBeLessThan(east(MOTE_PATH[2]));
+    const roadEnd = (EAST_ROAD_END_X - PLAZA.center[0]) * COMPASS.east[0];
+    expect(east(to)).toBeGreaterThan(roadEnd);
+    expect(east(to)).toBeLessThan(roadEnd + AREA1_PLAZA.radius);
+    // along the road's middle, drifting within its railings
+    expect(Math.abs(across(from))).toBeLessThan(0.01);
+    expect(Math.abs(across(to))).toBeLessThan(0.01);
+    expect(ROAD_MOTE_SPREAD).toBeGreaterThan(0);
+    expect(ROAD_MOTE_SPREAD).toBeLessThan(EAST_ROAD.halfWidth - 0.2);
+    // handed on: エリア1's motes start within a few metres of where these end
+    const [a1x, a1z] = MOTES_TO_ROOM[0];
+    expect(Math.hypot(a1x - to[0], a1z - to[1])).toBeLessThan(6);
   });
 });
 

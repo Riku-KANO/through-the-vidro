@@ -1438,7 +1438,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         } finally {
           frame.peek = peekWas;
           warming.undo();
-          if (warming.peek) a1.peekWarms++;
+          // counted only when the back pass was drawn for the warming alone (a player peeking draws it anyway)
+          if (warming.peek && peekWas <= 0) a1.peekWarms++;
           probe.area1.warmMs.push(Math.round((performance.now() - t0) * 10) / 10);
         }
       } else pipeline.render(frame);

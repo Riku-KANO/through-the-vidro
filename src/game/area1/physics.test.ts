@@ -262,7 +262,9 @@ describe('S-36: the vidro left on エリア1’s pedestal never shuts you out of
       membrane: MEMBRANE,
     });
     session.holdFinale(FINALE_SECONDS + 1);
-    expect(session.interact({ kind: 'pedestal', id: ROOM1_PEDESTAL.id }, [114, AREA1_Y, -124])).toBe('place');
+    expect(session.interact({ kind: 'pedestal', id: ROOM1_PEDESTAL.id }, [eastX(114), AREA1_Y, -124])).toBe(
+      'place',
+    );
     let feetZ = MEMBRANE.z - 3;
     const p = new PlayerController(w, {
       feet: { x: 0.2, y: slopeHeight(feetZ), z: feetZ },

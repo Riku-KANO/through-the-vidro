@@ -1290,7 +1290,7 @@ describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in 
     ]);
   });
 
-  it('plays only once エリア1 is built (技術設計 > エリアごとに分けて読み込む): the workshop sounds as it did, then the morning joins', async () => {
+  it('plays only once エリア1 is in the scene and the body in the town (技術設計 > エリアごとに分けて読み込む): the workshop sounds as it did, then the morning joins', async () => {
     const r = soundscapeRig();
     await r.begin();
     r.frame();
@@ -1302,8 +1302,19 @@ describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in 
     expect(
       r.sound.probe.ambience.sources.filter((q) => q.id.endsWith(':area1')).every((q) => q.plays === 0),
     ).toBe(true);
-    // エリア1 built (the body has come down into the town): its wind joins, its chimes come in time
-    (r.room.probe as { area1?: { state: string } }).area1 = { state: 'ready' };
+    // being built from the slope's brow, then in the scene, while the body is still up the slope: not yet
+    const probe = r.room.probe as {
+      area1?: { state: string };
+      position: { x: number; y: number; z: number };
+    };
+    probe.position.z = SLOPE.fromZ - 2;
+    probe.area1 = { state: 'building' };
+    r.frame();
+    probe.area1 = { state: 'ready' };
+    r.frame();
+    expect(looping()).toBe(workshopBeds);
+    // down in the town: its wind joins, its chimes come in time
+    probe.position.z = PLAZA.center[2];
     r.frame();
     expect(looping()).toBe(workshopBeds + 1);
     for (let i = 0; i < 60 * 40; i++) r.frame();

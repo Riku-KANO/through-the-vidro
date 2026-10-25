@@ -65,6 +65,7 @@ import {
   PEDESTAL_ORB,
   PLAZA,
   PLAZA_Y,
+  SLOPE,
   SPAWNS,
   type SpawnName,
   TUB_DRIP,
@@ -234,7 +235,7 @@ export interface SoundRoom {
     /** S-36: where the vidro stands on its pedestal, and the drop last touched (the prologue's when absent). */
     orbAt?: Vec3;
     dropAt?: Vec3;
-    /** S-36: エリア1 as the room builds it ('waiting' until the body comes over the slope's brow): its ambience starts after. */
+    /** S-36: エリア1 as the room builds it: its ambience starts once it is in the scene and the body is in the town. */
     area1?: { readonly state: string };
   };
 }
@@ -1101,9 +1102,11 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       ambience.update(e.ctx.currentTime);
     }
     if (area1Ambience) {
-      // S-36: エリア1's morning once it is built (the body has come down into the town), as the workshop's once played
-      const built = (roomProbe.area1?.state ?? 'waiting') !== 'waiting';
-      if (!area1Ambience.playing && built && roomProbe.playing && e.ctx.state === 'running')
+      // S-36: エリア1's morning once it is in the scene and the body has come down into the town (past the slope's foot: not
+      // from the slope's brow, where it starts being built), then on, as the workshop's once it played
+      const st = roomProbe.area1?.state ?? 'waiting';
+      const there = (st === 'warming' || st === 'ready') && roomProbe.position.z < SLOPE.toZ;
+      if (!area1Ambience.playing && there && roomProbe.playing && e.ctx.state === 'running')
         area1Ambience.start(e.now());
       area1Ambience.update(e.ctx.currentTime);
     }

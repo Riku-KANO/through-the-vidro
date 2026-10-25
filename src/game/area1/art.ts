@@ -101,14 +101,18 @@ const GLIMMERS = 26;
 /**
  * 仮 (S-36): the halo of 部屋1's drop — a ball of warm light (linear) round its core, so that its light reads through the
  * vidro against the morning's grey (the core and the shell are the prologue's). Its middle crosses the bloom's threshold a
- * little (光の雫は滲む: 画面の仕上げ).
+ * little (光の雫は滲む: 画面の仕上げ). Gathered to its core (S-36 review: a wide even halo read like a lamp's milk globe).
  */
-const DROP_HALO = { radius: 0.34, color: [1.0, 0.78, 0.5] as const, strength: 0.95 };
+const DROP_HALO = { radius: 0.28, falloff: 3, color: [1.0, 0.78, 0.5] as const, strength: 1.1 };
 /**
- * 仮 (S-36): a dark doorway in the house that closes the alley, right behind where the drop hovers: the drop's light is seen
- * against shade (コントラスト), through the vidro as well (the house is on both layers). Its width and height.
+ * 仮 (S-36): a dark window, barred in brass, in the house that closes the alley, right behind where the drop hovers: the
+ * drop's light is seen against shade (コントラスト), through the vidro as well (the house is on both layers). A window with
+ * bars, not a door (S-36 review: a dark doorway read as a way on, ルール9 — the alley ends at the house). Its width, its sill
+ * and top above the floor, its bars.
  */
-const DOORWAY = { width: 1.5, height: 2.3, shade: new THREE.Color(0.045, 0.05, 0.06) };
+const WINDOW = { width: 1.3, sill: 0.6, top: 2.2, bars: 5, shade: new THREE.Color(0.045, 0.05, 0.06) };
+/** Metres the boxes the room tests against the view (`bounds`) reach past what they hold. */
+const BOUNDS_MARGIN = 0.5;
 /** How far up the slope past the shut gate its stone is drawn (z): it is seen climbing on through the bars (ルール6・9). */
 const BEYOND_GATE_Z = -156;
 
@@ -353,27 +357,56 @@ export function* buildArea1(
   houseMesh('slope');
   yield;
 
-  // ---- 部屋1: a dark doorway in the house at the alley's end (behind the drop), framed in brass ---------------------------
+  // ---- 部屋1: a dark window, barred in brass, in the house at the alley's end (behind the drop) -------------------------
   {
     const shade = keep(
-      new THREE.MeshStandardNodeMaterial({ color: DOORWAY.shade, roughness: 1, metalness: 0 }),
+      new THREE.MeshStandardNodeMaterial({ color: WINDOW.shade, roughness: 1, metalness: 0 }),
     );
     const x = ROOM1_DROP.at[0];
     const face = ROOM1_ALLEY.maxZ;
-    const g = bare(new RoundedBoxGeometry(DOORWAY.width, DOORWAY.height, 0.06, 2, 0.02));
-    g.translate(x, AREA1_Y + DOORWAY.height / 2, face - 0.02);
-    put(new THREE.Mesh(keep(g), shade), 'area1-doorway');
-    const arch = new THREE.TorusGeometry(DOORWAY.width / 2 + 0.05, 0.035, 8, 32, Math.PI);
-    arch.translate(x, AREA1_Y + DOORWAY.height - DOORWAY.width / 2, face - 0.05);
+    const half = WINDOW.width / 2;
+    // round-topped: the arch's centre is half a width under the top
+    const archY = AREA1_Y + WINDOW.top - half;
+    const pane = new THREE.Shape();
+    pane.moveTo(-half, WINDOW.sill);
+    pane.lineTo(half, WINDOW.sill);
+    pane.lineTo(half, WINDOW.top - half);
+    pane.absarc(0, WINDOW.top - half, half, 0, Math.PI, false);
+    pane.lineTo(-half, WINDOW.sill);
+    const g = bare(new THREE.ShapeGeometry(pane, 16));
+    g.rotateY(Math.PI); // facing the alley, which lies south of the house's face (−Z)
+    g.translate(x, AREA1_Y, face - 0.02);
+    put(new THREE.Mesh(keep(g), shade), 'area1-window');
+    const frame = 0.035;
+    const arch = new THREE.TorusGeometry(half + 0.05, frame, 8, 32, Math.PI);
+    arch.translate(x, archY, face - 0.05);
     brassParts.push(arch);
     for (const side of [-1, 1])
       brassParts.push(
-        new THREE.CylinderGeometry(0.035, 0.035, DOORWAY.height - DOORWAY.width / 2, 8).translate(
-          x + side * (DOORWAY.width / 2 + 0.05),
-          AREA1_Y + (DOORWAY.height - DOORWAY.width / 2) / 2,
+        new THREE.CylinderGeometry(frame, frame, WINDOW.top - half - WINDOW.sill, 8).translate(
+          x + side * (half + 0.05),
+          AREA1_Y + (WINDOW.sill + WINDOW.top - half) / 2,
           face - 0.05,
         ),
       );
+    // the sill, and the bars from it up to the arch
+    brassParts.push(
+      new THREE.CylinderGeometry(frame * 1.4, frame * 1.4, WINDOW.width + 0.24, 8)
+        .rotateZ(Math.PI / 2)
+        .translate(x, AREA1_Y + WINDOW.sill, face - 0.07),
+    );
+    for (let i = 0; i < WINDOW.bars; i++) {
+      const dx = -half + ((i + 1) * WINDOW.width) / (WINDOW.bars + 1);
+      const top = archY + Math.sqrt(half * half - dx * dx);
+      const bottom = AREA1_Y + WINDOW.sill;
+      brassParts.push(
+        new THREE.CylinderGeometry(0.018, 0.018, top - bottom, 6).translate(
+          x + dx,
+          (top + bottom) / 2,
+          face - 0.06,
+        ),
+      );
+    }
   }
   yield;
 
@@ -540,7 +573,9 @@ export function* buildArea1(
     haloMat.fog = false;
     const facing = abs(dot(normalView, positionViewDirection));
     haloMat.colorNode = vec4(
-      vec3(...DROP_HALO.color).mul(pow(facing, 2.2).mul(DROP_HALO.strength).mul(focus.drop.mul(0.3).add(1))),
+      vec3(...DROP_HALO.color).mul(
+        pow(facing, DROP_HALO.falloff).mul(DROP_HALO.strength).mul(focus.drop.mul(0.3).add(1)),
+      ),
       1,
     );
     haloMat.opacityNode = smoothstep(0.4, 1.2, positionView.length());
@@ -625,8 +660,13 @@ export function* buildArea1(
 
   // what is drawn, as boxes (for the room's test of the view before it adds エリア1)
   const bounds: THREE.Box3[] = [];
+  // with a margin for what is drawn at their faces (the eaves' brass, the rims' stones: area1/art.test.ts)
   const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): void => {
-    bounds.push(new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)));
+    bounds.push(
+      new THREE.Box3(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1)).expandByScalar(
+        BOUNDS_MARGIN,
+      ),
+    );
   };
   {
     const [cx, , cz] = AREA1_PLAZA.center;
@@ -640,7 +680,8 @@ export function* buildArea1(
       AREA1_Y - 6,
       BEYOND_GATE_Z,
       AREA1_SLOPE.x + hw,
-      area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height + 3,
+      // up to where its drawn stone ends past the gate, and the glimmers over it
+      Math.max(area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height, area1SlopeHeight(BEYOND_GATE_Z)) + 3,
       AREA1_SLOPE.fromZ,
     );
     for (const h of AREA1_HOUSES)

@@ -306,6 +306,22 @@ export const MOTE_PATH: readonly [
   ] as const;
 })();
 
+/**
+ * 光の粒の流れ on the east road (S-36, ルール7): a thinner stream down the road's length, from just out of the gate to a few
+ * metres into エリア1's entrance plaza, where エリア1's own motes take the way on (area1/layout.ts MOTES_TO_ROOM). The
+ * plaza's stream (MOTE_PATH) fades 12 m out; this one carries it the 60 m. Two (x, z) points, along COMPASS.east.
+ */
+export const ROAD_MOTE_PATH: readonly [readonly [number, number], readonly [number, number]] = (() => {
+  const E = COMPASS.east[0];
+  const [ex, ez] = plazaGateAt(COMPASS.east);
+  return [
+    [ex + E * 4, ez],
+    [EAST_ROAD_END_X + E * 4, ez],
+  ] as const;
+})();
+/** How far across the road (either side of its middle) the road's motes drift: within its railings. */
+export const ROAD_MOTE_SPREAD = EAST_ROAD.halfWidth - 0.5;
+
 /** A point (x, z) of the motes' curve, `u` 0..1 along it. */
 export function motePathAt(u: number): [number, number] {
   const [a, b, c] = MOTE_PATH;
@@ -355,6 +371,8 @@ const KEYSTONE_OPEN = { color: 0xffc58a, intensity: 2.4 } as const;
 const KEYSTONE_SHUT = { color: 0xffc58a, intensity: 0.3 } as const;
 /** Motes of light drifting from the slope's foot across the plaza to the open east gate (ルール7). */
 const MOTES = 48;
+/** And on down the east road to エリア1 (S-36). */
+const ROAD_MOTES = 24;
 
 export interface PlazaArt {
   /** Ambient motion: the motes' drift (scene clock, seconds). */
@@ -971,12 +989,29 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
   moteMat.colorNode = vec4(1.1, 0.78, 0.42, 1);
   moteMat.opacityNode = smoothstep(0.8, 3.0, positionView.length());
   moteMat.fog = false;
-  const motes = new THREE.InstancedMesh(keep(new THREE.IcosahedronGeometry(0.022, 0)), moteMat, MOTES);
-  // they drift over the plaza: left out of the view's work wherever the plaza is not in it
-  motes.boundingSphere = new THREE.Sphere(
-    new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6),
-    PLAZA.radius + 9,
+  // S-36: the plaza's motes and, after them in the same mesh, the east road's (ROAD_MOTE_PATH). One mesh, not one more
+  // InstancedMesh for the road: three r186 compiles each InstancedMesh's shader anew (its matrices' buffer is named
+  // after its node), and the loading frame on WebGL2 grew by half a second with a second one (S-36)
+  const [r0, r1] = ROAD_MOTE_PATH;
+  const motes = new THREE.InstancedMesh(
+    keep(new THREE.IcosahedronGeometry(0.022, 0)),
+    moteMat,
+    MOTES + ROAD_MOTES,
   );
+  // they drift over the plaza and down the road: left out of the view's work wherever neither is in it
+  motes.boundingSphere = new THREE.Box3()
+    .union(
+      new THREE.Sphere(new THREE.Vector3(cx + E * 6, PLAZA_Y + 2, cz + 6), PLAZA.radius + 9).getBoundingBox(
+        new THREE.Box3(),
+      ),
+    )
+    .union(
+      new THREE.Box3(
+        new THREE.Vector3(Math.min(r0[0], r1[0]) - 3, PLAZA_Y - 1, Math.min(r0[1], r1[1]) - 3),
+        new THREE.Vector3(Math.max(r0[0], r1[0]) + 3, PLAZA_Y + 4, Math.max(r0[1], r1[1]) + 3),
+      ),
+    )
+    .getBoundingSphere(new THREE.Sphere());
   instanced.push(motes);
   put(motes);
   // each mote runs a gentle curve from the slope's foot round the lighthouse's north side to the gate and a little beyond
@@ -992,6 +1027,21 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       y: 0.4 + r() * 2.4,
       phase: r(),
       speed: 0.006 + r() * 0.006,
+      wobble: r() * 6,
+    };
+  });
+  // S-36: and on down the east road
+  const roadLength = Math.hypot(r1[0] - r0[0], r1[1] - r0[1]);
+  // along the road, and across it (a quarter turn)
+  const roadX = (r1[0] - r0[0]) / roadLength;
+  const roadZ = (r1[1] - r0[1]) / roadLength;
+  const roadSeeds = Array.from({ length: ROAD_MOTES }, (_, i) => {
+    const r = rng(1900 + i);
+    return {
+      side: (r() - 0.5) * 2 * ROAD_MOTE_SPREAD,
+      y: 0.5 + r() * 1.8,
+      phase: r(),
+      speed: 0.006 + r() * 0.005,
       wobble: r() * 6,
     };
   });
@@ -1029,6 +1079,25 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
         );
         moteScale.setScalar(0.3 + 0.9 * fade);
         motes.setMatrixAt(i, moteMatrix.compose(motePos, moteRot, moteScale));
+      }
+      // the road's: straight along it (east), drifting a little across, fading in and out at its ends
+      for (let i = 0; i < ROAD_MOTES; i++) {
+        const s = roadSeeds[i];
+        if (!s) continue;
+        const u = (s.phase + t * s.speed) % 1;
+        const fade = Math.sin(Math.PI * u);
+        const off = Math.max(
+          -ROAD_MOTE_SPREAD,
+          Math.min(ROAD_MOTE_SPREAD, s.side + 0.2 * Math.sin(t * 0.6 + s.wobble)),
+        );
+        const on = 0.3 * Math.sin(t * 0.5 + s.wobble * 3);
+        motePos.set(
+          r0[0] + roadX * (u * roadLength + on) - roadZ * off,
+          PLAZA_Y + s.y + 0.2 * Math.sin(t * 0.8 + s.wobble * 2),
+          r0[1] + roadZ * (u * roadLength + on) + roadX * off,
+        );
+        moteScale.setScalar(0.3 + 0.9 * fade);
+        motes.setMatrixAt(MOTES + i, moteMatrix.compose(motePos, moteRot, moteScale));
       }
       motes.instanceMatrix.needsUpdate = true;
     },
