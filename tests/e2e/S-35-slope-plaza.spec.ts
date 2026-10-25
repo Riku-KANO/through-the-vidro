@@ -330,7 +330,7 @@ for (const backend of backends) {
         },
       ],
       [
-        // 広場から東の門を見る: the open gate, its few metres of road and railing, the chimney's hill beyond
+        // 広場から東の門を見る: the open gate, its road on to エリア1 (S-36: no railing across it any more), the chimney's hill beyond
         'plaza-east',
         `spawn=east&${after}`,
         (r) => {

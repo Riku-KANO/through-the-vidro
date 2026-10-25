@@ -297,6 +297,12 @@ describe('S-36: the slope’s foot and its shut gate (仮の行き止まり unti
     const lastLamp = NEXT_LAMPS.at(-1) as Vec3;
     expect(lastLamp[2]).toBeCloseTo(AREA1_GATE.z, 9);
     expect(lastLamp[0]).toBeCloseTo(AREA1_SLOPE.x, 9);
+    // each hangs out in the open, not inside a house (it is seen)
+    for (const p of NEXT_LAMPS)
+      for (const h of AREA1_HOUSES) {
+        const inside = p[0] > h.minX && p[0] < h.maxX && p[2] > h.minZ && p[2] < h.maxZ;
+        expect(inside, `lamp at (${p[0]}, ${p[2]}) in the house at x ${h.minX}`).toBe(false);
+      }
   });
 });
 

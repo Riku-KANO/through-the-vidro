@@ -144,7 +144,11 @@ export interface Area1Probe {
   worstMs: number;
   /** Entries warmed (its meshes, one a frame, drawn uncut by the view). */
   warmed: number;
-  /** ms of each build step (inside the room's update), and of each warm frame's drawing (inside its render). */
+  /**
+   * ms of each frame from building to ready (between two updates of the room), of each build step (inside the room's
+   * update), and of each warm frame's drawing (inside its render).
+   */
+  frameMs: number[];
   buildMs: number[];
   warmMs: number[];
   /** 部屋1's crumbled wall: its segments, and how many of their colliders a placed vidro's sphere cuts now (S-28). */
@@ -451,6 +455,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       frames: 0,
       worstMs: 0,
       warmed: 0,
+      frameMs: [],
       buildMs: [],
       warmMs: [],
       wall: { segments: surfaceSegments(ROOM1_WALL).length, off: 0 },
@@ -986,8 +991,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     if (a1.lastFrame !== null) {
       probe.area1.frames++;
       probe.area1.worstMs = Math.max(probe.area1.worstMs, now - a1.lastFrame);
-      (probe.area1 as unknown as { frameMs: number[] }).frameMs ??= [];
-      (probe.area1 as unknown as { frameMs: number[] }).frameMs.push(Math.round(now - a1.lastFrame));
+      probe.area1.frameMs.push(Math.round(now - a1.lastFrame));
     }
     a1.lastFrame = now;
     if (st === 'building' && a1.gen) {

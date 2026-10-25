@@ -226,9 +226,13 @@ export const AREA1_HOUSES: readonly House[] = [
 
 /** The street lamps that light, one after the other, toward the next room once 部屋1's drop is taken (次の部屋の方向が見える). */
 export const NEXT_LAMPS: readonly Vec3[] = [
-  [ROOM1_ALLEY.maxX + 0.25, AREA1_Y + 2.3, STREET_NORTH_Z - 0.25],
-  [AREA1_SLOPE.x - AREA1_SLOPE.halfWidth - 0.2, AREA1_Y + 2.3, STREET_SOUTH_Z - 0.4],
-  [AREA1_SLOPE.x + AREA1_SLOPE.halfWidth + 0.2, area1SlopeHeight(-131) + 2.3, -131],
+  // on the house at the alley's mouth, hung out over the street
+  [ROOM1_ALLEY.maxX + 0.3, AREA1_Y + 2.3, STREET_NORTH_Z - 0.25],
+  // on the corner where the slope turns off the street, over the street
+  [AREA1_SLOPE.x - AREA1_SLOPE.halfWidth - 0.3, AREA1_Y + 2.3, STREET_SOUTH_Z + 0.25],
+  // up the slope, on the house along its east side
+  [AREA1_SLOPE.x + AREA1_SLOPE.halfWidth - 0.25, area1SlopeHeight(-131) + 2.3, -131],
+  // the shut gate's keystone
   [AREA1_SLOPE.x, area1SlopeHeight(AREA1_GATE.z) + AREA1_GATE.height + 0.17, AREA1_GATE.z],
 ];
 /** 仮: seconds after the drop is taken that the first of them lights, and between one and the next. */
