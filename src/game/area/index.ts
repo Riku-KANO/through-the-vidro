@@ -16,8 +16,10 @@ export {
   pedestalsOf,
   type RoomDecl,
   roomOfDrop,
+  type ShortcutDecl,
   type SurfaceDecl,
   surfaceOf,
   surfaceSegments,
+  surfaceWallsOf,
 } from './area';
 export { type AreaCount, type DropState, DropTally } from './drops';

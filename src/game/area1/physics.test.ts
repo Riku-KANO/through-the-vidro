@@ -2,7 +2,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
-import { surfaceSegments } from '../area';
+import { footingOf, surfaceOf, surfaceSegments } from '../area';
 import { COMPASS } from '../area/compass';
 import { BODY_RADIUS } from '../player/constants';
 import { createWorld, initPhysics } from '../player/physics';
@@ -24,10 +24,14 @@ import {
   SurfaceColliders,
   withMembrane,
 } from '../prologue/physics';
-import { FINALE_SECONDS, PrologueSession } from '../prologue/session';
+import {
+  DROP_FLIGHT_SECONDS,
+  FINALE_SECONDS,
+  PrologueSession,
+  type ShortcutEvent,
+} from '../prologue/session';
 import {
   AREA1,
-  AREA1_GATE,
   AREA1_PLAZA,
   AREA1_RIM,
   AREA1_ROAD,
@@ -35,13 +39,37 @@ import {
   AREA1_STREET,
   AREA1_Y,
   area1SlopeHeight,
+  COURT_Y,
   eastOf,
   eastX,
   ROOM1_ALLEY,
   ROOM1_PEDESTAL,
   ROOM1_WALL,
+  ROOM2_BALCONY,
+  ROOM2_COURT,
+  ROOM2_DROP,
+  ROOM2_PEDESTAL_A,
+  ROOM2_PEDESTAL_B,
+  ROOM2_STAIRS,
+  ROOM2_STAIRS_FOOT_Z,
+  ROOM2_WALL,
+  ROOM3_BRIDGE_N,
+  ROOM3_BRIDGE_S,
+  ROOM3_DROP,
+  ROOM3_PEDESTAL_N,
+  ROOM3_PEDESTAL_S,
+  ROOM3_ROOF_N,
+  ROOM3_ROOF_S,
+  ROOM3_TERRACE,
+  ROOM1_DROP,
+  SHORTCUT_GATE,
+  SHORTCUT_SECONDS,
+  SHORTCUT_STAIRS,
+  SUMMIT_Y,
+  shortcutHeight,
+  shortcutSegments,
 } from './layout';
-import { addArea1Colliders } from './physics';
+import { addArea1Colliders, area1Footing } from './physics';
 
 /**
  * S-36: エリア1's way in and its first room in a real Rapier world (Node): the prologue's colliders (the town, its road), エリア1's
@@ -67,15 +95,19 @@ function world(area1 = true) {
   addRoomColliders(R, w);
   const footing = new BackFooting(R, w, bridgeFooting(), deckSegmentShape);
   const built = area1 ? addArea1Colliders(R, w) : null;
-  const wall = area1 ? new SurfaceColliders(R, w, surfaceSegments(ROOM1_WALL)) : null;
-  return { world: w, footing, built, wall };
+  // S-40: エリア1's back-layer footing (the courtyard's stair, the bridges, the shortcut) and every surface-only wall of it
+  const a1 = area1 ? area1Footing(R, w) : null;
+  const wall = area1 ? new SurfaceColliders(R, w, surfaceOf([AREA1])) : null;
+  const allowGround = (x: number, y: number, z: number, c: RAPIER.Collider): boolean =>
+    footing.allowGround(x, y, z, c) && (a1?.allowGround(x, y, z, c) ?? true);
+  return { world: w, footing, a1, built, wall, allowGround };
 }
 
 function body(r: ReturnType<typeof world>, feet: Vec3, yaw: number): PlayerController {
   return new PlayerController(r.world, {
     feet: { x: feet[0], y: feet[1], z: feet[2] },
     yaw,
-    allowGround: r.footing.allowGround,
+    allowGround: r.allowGround,
     settings: { headBob: 0 },
   });
 }
@@ -216,26 +248,300 @@ describe('S-36: 部屋1 — the crumbled wall across the alley (表だけの壁,
   });
 });
 
-describe('S-36: the slope’s foot and its shut gate', () => {
-  it('turns south off the street and climbs; the shut gate stops the body before it (仮の行き止まり), no fall', () => {
+const SOUTH_YAW = yawToward(0, -1);
+const NORTH_YAW = yawToward(0, 1);
+const WEST_YAW = yawToward(COMPASS.west[0], COMPASS.west[1]);
+
+/** The session and the world stepped together, as the room does (S-40: エリア1's footing and walls, what the light fixed). */
+function played(r: ReturnType<typeof world>, session: PrologueSession) {
+  const tick = () => {
+    session.step(DT, { wantPeek: false });
+    const spheres = session.spheres();
+    r.footing.sync(spheres);
+    r.a1?.sync(spheres);
+    r.wall?.sync(spheres);
+    r.a1?.settle(session.settledFooting());
+    r.wall?.settle(session.settledSurface());
+  };
+  const run = (seconds: number) => {
+    for (let t = 0; t < seconds - 1e-9; t += DT) tick();
+  };
+  /** Walks the body with `intent` for `seconds`, the session stepping with it. */
+  const go = (p: PlayerController, intent: PlayerIntent, seconds: number) => {
+    const out: { x: number; y: number; z: number; grounded: boolean }[] = [];
+    for (let t = 0; t < seconds - 1e-9; t += DT) {
+      tick();
+      r.world.step();
+      p.update(DT, intent);
+      const f = p.feet;
+      out.push({ x: f.x, y: f.y, z: f.z, grounded: p.grounded });
+    }
+    return out;
+  };
+  const feet = (p: PlayerController): Vec3 => [p.feet.x, p.feet.y, p.feet.z];
+  return { tick, run, go, feet };
+}
+
+/** Turns the body to look along (dx, dz), standing. */
+function face(r: ReturnType<typeof world>, p: PlayerController, yaw: number): void {
+  const d = Math.atan2(Math.sin(yaw - p.yaw), Math.cos(yaw - p.yaw));
+  r.world.step();
+  p.update(DT, { move: { x: 0, y: 0 }, sprint: false, lookYaw: d, lookPitch: 0 });
+}
+
+describe('S-40: the slope from the street up to the summit (two flights, the landing between)', () => {
+  it('takes the body from the street up to the summit’s terrace, following the slope, never falling', () => {
     const r = world();
-    const p = body(r, [AREA1_SLOPE.x, AREA1_Y, AREA1_STREET.z], yawToward(0, -1));
-    const s = walk(r, p, forward, 12);
-    expect(s.every((q) => q.grounded && Math.abs(q.y - area1SlopeHeight(q.z)) < 0.06)).toBe(true);
-    expect(p.feet.z).toBeGreaterThan(AREA1_GATE.z);
-    expect(p.feet.z).toBeLessThan(AREA1_GATE.z + BODY_RADIUS + 0.4);
-    expect(p.feet.y).toBeGreaterThan(AREA1_Y + 0.5);
+    const p = body(r, [AREA1_SLOPE.x, AREA1_Y, AREA1_STREET.z], SOUTH_YAW);
+    const s = walk(r, p, sprint, 22);
+    expect(s.every((q) => q.grounded)).toBe(true);
+    for (const q of s)
+      if (q.z < AREA1_SLOPE.fromZ && q.z > AREA1_SLOPE.toZ)
+        expect(Math.abs(q.y - area1SlopeHeight(q.z)), `at z ${q.z}`).toBeLessThan(0.08);
+    // at the summit, stopped by the house south of its terrace
+    expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+    expect(p.feet.z).toBeLessThan(AREA1_SLOPE.toZ - 2);
+    expect(p.feet.z).toBeGreaterThan(ROOM3_TERRACE.minZ);
   });
 
-  it('the houses along it hold the body on both sides', () => {
-    for (const intent of [strafeLeft, strafeRight]) {
-      const r = world();
-      const z = (AREA1_SLOPE.fromZ + AREA1_GATE.z) / 2;
-      const p = body(r, [AREA1_SLOPE.x, area1SlopeHeight(z), z], yawToward(0, -1));
-      const s = walk(r, p, intent, 3);
-      expect(s.every((q) => q.grounded)).toBe(true);
-      expect(Math.abs(p.feet.x - AREA1_SLOPE.x)).toBeLessThan(AREA1_SLOPE.halfWidth - BODY_RADIUS + 0.02);
+  it('the houses hold the body on both sides of both flights; on the landing the courtyard opens east', () => {
+    for (const z of [-134, -148, -155]) {
+      for (const intent of [strafeLeft, strafeRight]) {
+        const r = world();
+        const p = body(r, [AREA1_SLOPE.x, area1SlopeHeight(z), z], SOUTH_YAW);
+        const s = walk(r, p, intent, 3);
+        expect(
+          s.every((q) => q.grounded),
+          `at z ${z}`,
+        ).toBe(true);
+        expect(Math.abs(p.feet.x - AREA1_SLOPE.x), `at z ${z}`).toBeLessThan(
+          AREA1_SLOPE.halfWidth - BODY_RADIUS + 0.02,
+        );
+      }
     }
+    // facing south, the right hand is east (COMPASS): into the courtyard off the landing
+    const r = world();
+    const p = body(r, [AREA1_SLOPE.x, COURT_Y, -143.2], SOUTH_YAW);
+    const s = walk(r, p, strafeRight, 4);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - COURT_Y) < 0.05)).toBe(true);
+    expect(eastOf(p.feet.x)).toBeGreaterThan(eastOf(ROOM2_COURT.minX) + 2);
+  });
+});
+
+describe('S-40: 部屋2「二つの台座の中庭」 in a Rapier world, played with the session', () => {
+  const stairX = (ROOM2_STAIRS.minX + ROOM2_STAIRS.maxX) / 2;
+  const below: Vec3 = [stairX, COURT_Y, ROOM2_STAIRS_FOOT_Z - 1.0];
+  const wall = ROOM2_WALL.box;
+
+  it('with nothing placed, the stair is not there: the balcony’s face stops the body below it', () => {
+    const r = world();
+    const p = body(r, below, NORTH_YAW);
+    const s = walk(r, p, forward, 5);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - COURT_Y) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeLessThan(ROOM2_BALCONY.minZ - BODY_RADIUS + 0.05);
+  });
+
+  it('on A: up the stair to the balcony, but the wall stands (A’s sphere does not reach it); down again, A comes from the floor', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_A.id }, below)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    expect(r.wall?.cutCount).toBe(0);
+    const p = body(r, below, NORTH_YAW);
+    g.go(p, forward, 4.5);
+    expect(p.feet.y).toBeCloseTo(ROOM2_BALCONY.y, 1);
+    // on the stair the vidro would not come (it holds the stair): try from the stair's middle
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_A.id }, [
+        stairX,
+        COURT_Y + 0.8,
+        ROOM2_STAIRS_FOOT_Z + 1.4,
+      ]),
+    ).toBe('pickup-denied');
+    // west along the balcony: the wall stops the body on its east side
+    face(r, p, WEST_YAW);
+    const s = g.go(p, forward, 5);
+    expect(s.every((q) => q.grounded)).toBe(true);
+    expect(eastOf(p.feet.x)).toBeGreaterThan(eastOf(wall.max[0]) + BODY_RADIUS - 0.05);
+    // the drop is not there for the touching (outside A's sphere)
+    expect(session.dropMaterialized(ROOM2_DROP.id)).toBe(false);
+    // back down the stair: A comes from the floor
+    const back = body(r, [stairX, ROOM2_BALCONY.y, ROOM2_BALCONY.minZ + 0.6], SOUTH_YAW);
+    g.go(back, forward, 4);
+    expect(back.feet.y).toBeCloseTo(COURT_Y, 1);
+    expect(session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_A.id }, g.feet(back))).toBe('pickup');
+  });
+
+  it('on B: up the stair, through the wall (cut), the drop taken; back through and down, B comes from the floor', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_B.id }, below)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    expect(r.wall?.cutCount).toBe(surfaceSegments(ROOM2_WALL).length);
+    const p = body(r, below, NORTH_YAW);
+    g.go(p, forward, 4.5);
+    expect(p.feet.y).toBeCloseTo(ROOM2_BALCONY.y, 1);
+    face(r, p, WEST_YAW);
+    const s = g.go(p, forward, 3.2);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - ROOM2_BALCONY.y) < 0.05)).toBe(true);
+    expect(eastOf(p.feet.x)).toBeLessThan(eastOf(wall.min[0]) - 0.3);
+    expect(session.dropMaterialized(ROOM2_DROP.id)).toBe(true);
+    expect(session.interact({ kind: 'drop', id: ROOM2_DROP.id }, g.feet(p))).toBe('touch-drop');
+    g.run(DROP_FLIGHT_SECONDS + 0.1);
+    expect(session.dropStateOf(ROOM2_DROP.id)).toBe('taken');
+    // from the balcony B is out of reach (layout.test), and in the wall it would not come
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_B.id }, [
+        (wall.min[0] + wall.max[0]) / 2,
+        ROOM2_BALCONY.y,
+        (wall.min[2] + wall.max[2]) / 2,
+      ]),
+    ).toBe('pickup-denied');
+    // back east through the wall and down the stair
+    face(r, p, yawToward(COMPASS.east[0], COMPASS.east[1]));
+    g.go(p, forward, 3.4);
+    expect(eastOf(p.feet.x)).toBeGreaterThan(eastOf(wall.max[0]) + 0.3);
+    const down = body(r, [stairX, ROOM2_BALCONY.y, ROOM2_BALCONY.minZ + 0.6], SOUTH_YAW);
+    g.go(down, forward, 4);
+    expect(down.feet.y).toBeCloseTo(COURT_Y, 1);
+    expect(session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_B.id }, g.feet(down))).toBe('pickup');
+    g.tick();
+    expect(r.wall?.cutCount).toBe(0);
+  });
+
+  it('the balcony’s railing holds the body on it (no stepping off its edge), but where the stair arrives', () => {
+    const r = world();
+    const p = body(
+      r,
+      [eastX(125.5), ROOM2_BALCONY.y, (ROOM2_BALCONY.minZ + ROOM2_BALCONY.maxZ) / 2],
+      SOUTH_YAW,
+    );
+    const s = walk(r, p, forward, 3);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - ROOM2_BALCONY.y) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeGreaterThan(ROOM2_BALCONY.minZ);
+  });
+});
+
+describe('S-40: 部屋3「煙突の見晴らし」 in a Rapier world, played with the session', () => {
+  const lipN: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2];
+  const lipS: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_S.min[2] + ROOM3_BRIDGE_S.max[2]) / 2];
+
+  it('with nothing placed, the body stops at the valley’s lip on either bridge’s line (no way across)', () => {
+    for (const at of [lipN, lipS]) {
+      const r = world();
+      const p = body(r, [eastX(115.5), SUMMIT_Y, at[2]], WEST_YAW);
+      const s = walk(r, p, forward, 5);
+      expect(s.every((q) => q.grounded && Math.abs(q.y - SUMMIT_Y) < 0.05)).toBe(true);
+      expect(eastOf(p.feet.x)).toBeGreaterThan(eastOf(ROOM3_TERRACE.minX) - 0.4);
+    }
+  });
+
+  it('on the north pedestal: across the north bridge to the drop’s roof; the south bridge is not there', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, lipN)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    const p = body(r, [eastX(114.6), SUMMIT_Y, lipN[2]], WEST_YAW);
+    const s = g.go(p, forward, 3.4);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - SUMMIT_Y) < 0.05)).toBe(true);
+    expect(eastOf(p.feet.x)).toBeLessThan(eastOf(ROOM3_ROOF_N.maxX) - 0.5);
+    expect(session.dropMaterialized(ROOM3_DROP.id)).toBe(true);
+    const q = body(r, [eastX(115.0), SUMMIT_Y, lipS[2]], WEST_YAW);
+    g.go(q, forward, 5);
+    expect(eastOf(q.feet.x)).toBeGreaterThan(eastOf(ROOM3_TERRACE.minX) - 0.4);
+  });
+
+  it('on the south pedestal: across the south bridge to an empty roof (the drop is not in its sphere); back, and it comes', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, lipS)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    const p = body(r, [eastX(114.6), SUMMIT_Y, lipS[2]], WEST_YAW);
+    g.go(p, forward, 3.4);
+    expect(eastOf(p.feet.x)).toBeLessThan(eastOf(ROOM3_ROOF_S.maxX) - 0.5);
+    expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+    expect(session.dropMaterialized(ROOM3_DROP.id)).toBe(false);
+    // on the bridge it would not come; back on the terrace it does (罰がない)
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, [eastX(112.1), SUMMIT_Y, lipS[2]]),
+    ).toBe('pickup-denied');
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, lipS)).toBe('pickup');
+  });
+});
+
+describe('S-40: 近道 — the stairs from the summit’s ridge to the entrance plaza, fixed by the third drop’s light', () => {
+  const stairsX = (SHORTCUT_STAIRS.minX + SHORTCUT_STAIRS.maxX) / 2;
+
+  it('before: the ridge’s edge stops the body above the stairs, and the gate stops it in the plaza', () => {
+    const r = world();
+    const p = body(r, [stairsX, SUMMIT_Y, SHORTCUT_STAIRS.topZ - 1.2], NORTH_YAW);
+    const s = walk(r, p, forward, 4);
+    expect(s.every((q) => q.grounded && Math.abs(q.y - SUMMIT_Y) < 0.05)).toBe(true);
+    expect(p.feet.z).toBeLessThan(SHORTCUT_STAIRS.topZ + 0.4);
+    const q = body(r, [stairsX, AREA1_Y, AREA1_PLAZA.center[2] - 6], SOUTH_YAW);
+    walk(r, q, forward, 5);
+    expect(q.feet.z).toBeGreaterThan(SHORTCUT_GATE.box.max[2]);
+  });
+
+  it('the third drop (部屋3’s, the others taken): the light runs over the north bridge and down the stairs, the gate goes', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const shortcut: ShortcutEvent[] = [];
+    session.shortcutEvents.on((e) => shortcut.push(e));
+    session.holdDropTaken(ROOM1_DROP.id);
+    session.holdDropTaken(ROOM2_DROP.id);
+    const g = played(r, session);
+    const lip: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2];
+    session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, lip);
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    const p = body(r, [eastX(114.6), SUMMIT_Y, lip[2]], WEST_YAW);
+    g.go(p, forward, 3.0);
+    expect(session.interact({ kind: 'drop', id: ROOM3_DROP.id }, g.feet(p))).toBe('touch-drop');
+    g.run(DROP_FLIGHT_SECONDS + 0.1);
+    expect(shortcut).toEqual([{ type: 'settle', area: 'area1' }]);
+    g.run(SHORTCUT_SECONDS + 0.1);
+    expect(shortcut.map((e) => e.type)).toEqual(['settle', 'settled']);
+    const steps = shortcutSegments();
+    const bridgeN = footingOf([AREA1]).filter((seg) => seg.id.startsWith('area1-bridge-n'));
+    expect(session.settledFooting()).toEqual([...bridgeN, ...steps].map((seg) => seg.id));
+    expect(session.settledSurface()).toEqual(surfaceSegments(SHORTCUT_GATE).map((seg) => seg.id));
+    // back on the settled north bridge the vidro comes (光で定着した足場の上では回収できる); the bridge stays
+    const onBridge: Vec3 = [eastX(112.1), SUMMIT_Y, lip[2]];
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, onBridge)).toBe('pickup');
+    g.run(MATERIALIZE_SECONDS + 0.2);
+    expect(r.a1?.activeIds).toEqual(expect.arrayContaining(bridgeN.map((seg) => seg.id)));
+    // over the bridge again with the vidro in hand, along the ridge, and down the stairs into the plaza
+    const q = body(r, [eastX(114.6), SUMMIT_Y, lip[2]], WEST_YAW);
+    g.go(q, sprint, 9.5);
+    expect(eastOf(q.feet.x)).toBeLessThan(eastOf(SHORTCUT_STAIRS.maxX) + 1);
+    const down = body(r, [stairsX, SUMMIT_Y, SHORTCUT_STAIRS.topZ - 0.6], NORTH_YAW);
+    const s = g.go(down, forward, 19);
+    expect(s.every((v) => v.grounded)).toBe(true);
+    for (const v of s) {
+      const h = shortcutHeight(v.z);
+      if (h !== null && v.z > SHORTCUT_STAIRS.topZ + 0.2 && v.z < SHORTCUT_STAIRS.footZ - 0.2)
+        expect(Math.abs(v.y - h), `at z ${v.z}`).toBeLessThan(0.3);
+    }
+    // through the opening where the gate was, into the plaza
+    expect(down.feet.y).toBeCloseTo(AREA1_Y, 1);
+    expect(down.feet.z).toBeGreaterThan(SHORTCUT_GATE.box.max[2] + 1);
+  });
+
+  it('held fixed (?shortcutHold), the stairs take the body up from the plaza to the summit’s ridge too', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    session.holdShortcut('area1', SHORTCUT_SECONDS + 1);
+    const g = played(r, session);
+    g.tick();
+    const p = body(r, [stairsX, AREA1_Y, AREA1_PLAZA.center[2] - 7], SOUTH_YAW);
+    const s = g.go(p, forward, 28);
+    expect(s.every((v) => v.grounded)).toBe(true);
+    expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+    expect(p.feet.z).toBeLessThan(SHORTCUT_STAIRS.topZ - 0.5);
   });
 });
 

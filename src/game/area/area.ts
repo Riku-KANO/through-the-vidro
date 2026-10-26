@@ -1,5 +1,5 @@
 import type { Box, FootingSegment, Vec3 } from '../../layers/footing';
-import type { SettleSweep } from '../../layers/settle';
+import { type SettleSweep, segmentsCutByBox } from '../../layers/settle';
 import { SURFACE_SEGMENT, splitSurface } from '../../layers/surface';
 
 /**
@@ -49,15 +49,30 @@ export interface RoomDecl {
   readonly surface?: readonly SurfaceDecl[];
   readonly footing?: readonly FootingDecl[];
   /**
-   * 定着 (S-34): what the light of this room's drop fixes onto the surface once it is taken (the prologue's bridge). A
-   * session takes at most one such room for now (S-40 makes the settled regions many: its shortcut).
+   * 定着 (S-34): what the light of this room's drop fixes onto the surface once it is taken (the prologue's bridge). The first
+   * such room of the session also opens its gate (the prologue's close).
    */
   readonly settle?: SettleSweep;
+}
+
+/**
+ * 帰り道の近道 (S-40; エリアの内部構造: 3つ目の雫を得ると、入口の広場への近道が実体化して戻れる): back-layer footing (the stairs) and
+ * surface-only things (the gate shutting them out) that the light fixes onto the surface once every drop of the area is taken —
+ * the same sweep as the prologue's bridge (S-34), run leg after leg along its way (`legs`, in order) over `seconds`.
+ */
+export interface ShortcutDecl {
+  readonly id: string;
+  readonly legs: readonly SettleSweep[];
+  readonly seconds: number;
+  readonly footing?: readonly FootingDecl[];
+  readonly surface?: readonly SurfaceDecl[];
 }
 
 export interface AreaDecl {
   readonly id: string;
   readonly rooms: readonly RoomDecl[];
+  /** S-40: its shortcut home, fixed by the light once its last drop is taken. */
+  readonly shortcut?: ShortcutDecl;
 }
 
 /** A drop with the area and room it belongs to. */
@@ -85,10 +100,13 @@ export function pedestalList(
   return out;
 }
 
-/** Every back-layer footing segment, in declaration order. */
+/** Every back-layer footing segment, in declaration order (each area's rooms', then its shortcut's). */
 export function footingOf(areas: readonly AreaDecl[]): FootingSegment[] {
   const out: FootingSegment[] = [];
-  for (const a of areas) for (const r of a.rooms) for (const f of r.footing ?? []) out.push(...f.segments);
+  for (const a of areas) {
+    for (const r of a.rooms) for (const f of r.footing ?? []) out.push(...f.segments);
+    for (const f of a.shortcut?.footing ?? []) out.push(...f.segments);
+  }
   return out;
 }
 
@@ -103,11 +121,18 @@ export function surfaceSegments(wall: SurfaceDecl): readonly FootingSegment[] {
   return s;
 }
 
+/** Every surface-only wall of an area (its rooms', then its shortcut's), in declaration order. */
+export function surfaceWallsOf(area: AreaDecl): SurfaceDecl[] {
+  const out: SurfaceDecl[] = [];
+  for (const r of area.rooms) out.push(...(r.surface ?? []));
+  out.push(...(area.shortcut?.surface ?? []));
+  return out;
+}
+
 /** Every surface-only segment, in declaration order (the same objects each call). */
 export function surfaceOf(areas: readonly AreaDecl[]): FootingSegment[] {
   const out: FootingSegment[] = [];
-  for (const a of areas)
-    for (const r of a.rooms) for (const w of r.surface ?? []) out.push(...surfaceSegments(w));
+  for (const a of areas) for (const w of surfaceWallsOf(a)) out.push(...surfaceSegments(w));
   return out;
 }
 
@@ -127,8 +152,9 @@ export function roomOfDrop(areas: readonly AreaDecl[], dropId: string): RoomDecl
 
 /**
  * What is wrong with a set of areas, as messages (none: all is well): ids that repeat (areas, rooms, pedestals, drops,
- * walls, footing), more than one settling room (S-40), a drop out of every pedestal's sphere of `reach` (it could never be
- * touched: 光の雫は覗いて見つけ、置いて実体化させてから触れて回収する).
+ * walls, footing), a drop out of every pedestal's sphere of `reach` (it could never be touched: 光の雫は覗いて見つけ、置いて
+ * 実体化させてから触れて回収する), a sweep of settling light (a room's, a shortcut's legs) whose box cuts a footing or surface-only
+ * segment of its area in two (its drawing would settle where its collider never does: S-34 review, layers/settle.ts).
  */
 export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] {
   const problems: string[] = [];
@@ -142,16 +168,29 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
     if (s.has(id)) problems.push(`${kind} "${id}" is declared twice`);
     s.add(id);
   };
-  let settling = 0;
   for (const a of areas) {
     once('area', a.id);
+    const segments = [...footingOf([a]), ...surfaceOf([a])];
+    const sweeps: { name: string; sweep: SettleSweep }[] = [];
+    for (const r of a.rooms) if (r.settle) sweeps.push({ name: `room "${r.id}"`, sweep: r.settle });
+    a.shortcut?.legs.forEach((sweep, i) =>
+      sweeps.push({ name: `shortcut "${a.shortcut?.id}" leg ${i}`, sweep }),
+    );
+    for (const { name, sweep } of sweeps) {
+      const cut = segmentsCutByBox(segments, sweep.box);
+      if (cut.length > 0) problems.push(`the light of ${name} cuts ${cut.join(', ')} in two`);
+    }
+    if (a.shortcut) {
+      once('shortcut', a.shortcut.id);
+      for (const w of a.shortcut.surface ?? []) once('surface', w.id);
+      for (const f of a.shortcut.footing ?? []) once('footing', f.id);
+    }
     for (const r of a.rooms) {
       once('room', r.id);
       for (const p of r.pedestals) once('pedestal', p.id);
       if (r.drop) once('drop', r.drop.id);
       for (const w of r.surface ?? []) once('surface', w.id);
       for (const f of r.footing ?? []) once('footing', f.id);
-      if (r.settle) settling++;
       if (!r.drop) continue;
       const [x, y, z] = r.drop.at;
       const inSome = r.pedestals.some(
@@ -160,6 +199,5 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
       if (!inSome) problems.push(`drop "${r.drop.id}" lies outside every sphere of room "${r.id}"`);
     }
   }
-  if (settling > 1) problems.push(`${settling} rooms settle: one at most (S-40 makes them many)`);
   return problems;
 }

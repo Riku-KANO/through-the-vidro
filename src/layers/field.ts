@@ -9,6 +9,7 @@ import {
   If,
   length,
   materialEmissive,
+  max,
   mix,
   normalView,
   positionView,
@@ -72,6 +73,17 @@ const SETTLE_NEAR = [0.8, 2.6] as const;
 
 type MaskedMaterial = THREE.NodeMaterial & { emissiveNode: unknown };
 
+/** S-34 (S-40: one per slot): a settled region's box, its direction and front (xyz, w), and the band's brightness. */
+function settleSlot() {
+  return {
+    min: uniform(new THREE.Vector3(FAR, FAR, FAR)).setGroup(renderGroup),
+    max: uniform(new THREE.Vector3(-FAR, -FAR, -FAR)).setGroup(renderGroup),
+    front: uniform(new THREE.Vector4(0, 0, -1, -FAR)).setGroup(renderGroup),
+    glow: uniform(0).setGroup(renderGroup),
+  };
+}
+type SettleSlot = ReturnType<typeof settleSlot>;
+
 type Renderable = THREE.Object3D & { material: THREE.Material | THREE.Material[] };
 
 /** Materials of any renderable (mesh, line, points, sprite); empty for groups, lights, cameras. */
@@ -97,10 +109,11 @@ const isTransmissive = (m: THREE.Material): boolean => {
  *
  * While the peek image is rendered, `setPeekPass(true)` lifts the cut so the whole back layer shows.
  *
- * 定着 (S-34): built with `{ settle: true }`, the field also takes one settled region (`setSettled`, settle.ts). Behind its
- * front and inside its box it is as if a placed orb stood there for good, without the film or the seams: back objects are
- * drawn, surface objects are not. A band of warm light runs at the front (光が渡っていく). Without the option no material
- * carries any of it (the other scenes' shaders stay as they were).
+ * 定着 (S-34): built with `{ settle: true }`, the field also takes one settled region (`setSettled`, settle.ts); S-40: with
+ * `{ settle: n }`, n of them at once (the prologue's bridge and エリア1's shortcut, leg after leg), each in its own slot. Behind
+ * a region's front and inside its box it is as if a placed orb stood there for good, without the film or the seams: back
+ * objects are drawn, surface objects are not. A band of warm light runs at each front (光が渡っていく). Without the option no
+ * material carries any of it (the other scenes' shaders stay as they were; with one slot the shader is S-34's).
  */
 export class LayerField {
   readonly membranes: THREE.Mesh[] = [];
@@ -127,11 +140,8 @@ export class LayerField {
   private readonly warned = new Set<string>();
   private readonly owned: THREE.Material[] = [];
   private readonly membraneGeometry = new THREE.SphereGeometry(1, 72, 36);
-  /** S-34: the settled region's box, its direction and front (xyz, w), and the band's brightness. */
-  private readonly settleMin = uniform(new THREE.Vector3(FAR, FAR, FAR)).setGroup(renderGroup);
-  private readonly settleMax = uniform(new THREE.Vector3(-FAR, -FAR, -FAR)).setGroup(renderGroup);
-  private readonly settleFront = uniform(new THREE.Vector4(0, 0, -1, -FAR)).setGroup(renderGroup);
-  private readonly settleGlow = uniform(0).setGroup(renderGroup);
+  /** S-34 (S-40: one per slot): each settled region's box, its direction and front (xyz, w), and the band's brightness. */
+  private readonly settleSlots: SettleSlot[];
   /** vec2(1 where settled else 0, the band's light) at the fragment; null without the option. */
   private readonly settleNode: THREE.Node<'vec2'> | null;
 
@@ -159,23 +169,48 @@ export class LayerField {
       .mul(float(1).sub(this.peekPassUniform));
   })();
 
-  constructor(options: { settle?: boolean } = {}) {
+  /**
+   * @param options.settle S-34: true for one settled region, (S-40) a number for that many (0 or absent: none).
+   */
+  constructor(options: { settle?: boolean | number } = {}) {
     for (let i = 0; i < MAX_SPHERES; i++) this.membranes.push(this.createMembrane(i));
-    this.settleNode = options.settle
-      ? Fn(() => {
-          const p = positionWorld;
-          const inBox = step(this.settleMin, p).mul(step(p, this.settleMax));
-          const box = inBox.x.mul(inBox.y).mul(inBox.z);
-          const s = dot(this.settleFront.xyz, p);
-          const behind = step(s, this.settleFront.w);
-          const line = s.sub(this.settleFront.w).div(SETTLE_LINE);
-          const halo = s.sub(this.settleFront.w).div(SETTLE_HALO);
-          const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
-          // the light fades where it passes close to the eye, like the film and the lanterns (画面をうるさくしない)
-          const near = smoothstep(SETTLE_NEAR[0], SETTLE_NEAR[1], length(positionView));
-          return vec2(box.mul(behind), box.mul(band).mul(this.settleGlow).mul(near));
-        })()
-      : null;
+    const slots =
+      options.settle === true
+        ? 1
+        : typeof options.settle === 'number'
+          ? Math.max(0, Math.floor(options.settle))
+          : 0;
+    this.settleSlots = Array.from({ length: slots }, settleSlot);
+    this.settleNode =
+      slots > 0
+        ? Fn(() => {
+            const p = positionWorld;
+            // the light fades where it passes close to the eye, like the film and the lanterns (画面をうるさくしない)
+            const near = smoothstep(SETTLE_NEAR[0], SETTLE_NEAR[1], length(positionView));
+            let settled: THREE.Node<'float'> | null = null;
+            let light: THREE.Node<'float'> | null = null;
+            for (const slot of this.settleSlots) {
+              const inBox = step(slot.min, p).mul(step(p, slot.max));
+              const box = inBox.x.mul(inBox.y).mul(inBox.z);
+              const s = dot(slot.front.xyz, p);
+              const behind = step(s, slot.front.w);
+              const line = s.sub(slot.front.w).div(SETTLE_LINE);
+              const halo = s.sub(slot.front.w).div(SETTLE_HALO);
+              const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
+              const here = box.mul(behind);
+              const lit = box.mul(band).mul(slot.glow);
+              // one slot: S-34's expression exactly; more: settled where any is, their bands added
+              settled = settled === null ? here : (max(settled, here) as THREE.Node<'float'>);
+              light = light === null ? lit : light.add(lit);
+            }
+            return vec2(settled ?? float(0), (light ?? float(0)).mul(near));
+          })()
+        : null;
+  }
+
+  /** S-40: how many settled regions the field takes at once (0 without the option). */
+  get settleSlotCount(): number {
+    return this.settleSlots.length;
   }
 
   /**
@@ -240,23 +275,24 @@ export class LayerField {
   }
 
   /**
-   * S-34: the settled region now (null: none). Needs `{ settle: true }` at construction; without it this does nothing.
-   * Allocation-free.
+   * S-34: the settled region in a slot now (null: none). Needs `{ settle }` at construction; without it, or for a slot past
+   * the last, this does nothing. S-40: `slot` (0 by default, S-34's one region). Allocation-free.
    */
-  setSettled(view: SettledView | null): void {
-    if (!this.settleNode) return;
+  setSettled(view: SettledView | null, slot = 0): void {
+    const u = this.settleSlots[slot];
+    if (!u) return;
     if (!view) {
-      this.settleMin.value.set(FAR, FAR, FAR);
-      this.settleMax.value.set(-FAR, -FAR, -FAR);
-      this.settleFront.value.set(0, 0, -1, -FAR);
-      this.settleGlow.value = 0;
+      u.min.value.set(FAR, FAR, FAR);
+      u.max.value.set(-FAR, -FAR, -FAR);
+      u.front.value.set(0, 0, -1, -FAR);
+      u.glow.value = 0;
       return;
     }
     const { box, direction } = view.sweep;
-    this.settleMin.value.set(box.min[0], box.min[1], box.min[2]);
-    this.settleMax.value.set(box.max[0], box.max[1], box.max[2]);
-    this.settleFront.value.set(direction[0], direction[1], direction[2], view.front);
-    this.settleGlow.value = view.glow;
+    u.min.value.set(box.min[0], box.min[1], box.min[2]);
+    u.max.value.set(box.max[0], box.max[1], box.max[2]);
+    u.front.value.set(direction[0], direction[1], direction[2], view.front);
+    u.glow.value = view.glow;
   }
 
   /** True while the peek image is drawn: back objects are shown whole and seams are dark. */

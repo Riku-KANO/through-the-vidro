@@ -42,6 +42,12 @@ export interface PickUpContext {
   surface?: { segments: readonly FootingSegment[]; body: BodyExtent };
   /** Player foot position. */
   feet: Vec3;
+  /**
+   * 定着 (S-34; S-40 moved here from the session): ids of the footing and surface-only segments the light has fixed onto the
+   * surface for good. They are no longer any orb's to hold: on settled footing the vidro comes (光で定着した足場の上では回収できる),
+   * and a settled wall stays cut, so neither is asked about.
+   */
+  settled?: { footing?: readonly string[]; surface?: readonly string[] };
 }
 
 /**
@@ -54,7 +60,25 @@ export interface PickUpContext {
 export function canPickUp(orbs: readonly Orb[], id: string, ctx: PickUpContext): boolean {
   const orb = orbById(orbs, id);
   if (!orb || orb.pedestal === null) return false;
-  return !shutsInSurface(orbs, id, ctx) && keepsFooting(orbs, id, ctx);
+  const asked = unsettled(ctx);
+  return !shutsInSurface(orbs, id, asked) && keepsFooting(orbs, id, asked);
+}
+
+/** The context without what the light has fixed (S-34: not the orb's to hold any more). */
+function unsettled(ctx: PickUpContext): PickUpContext {
+  const footingIds = ctx.settled?.footing ?? [];
+  const surfaceIds = ctx.settled?.surface ?? [];
+  if (footingIds.length === 0 && surfaceIds.length === 0) return ctx;
+  const footing = new Set(footingIds);
+  const surface = new Set(surfaceIds);
+  return {
+    ...ctx,
+    footing: footing.size > 0 ? ctx.footing.filter((s) => !footing.has(s.id)) : ctx.footing,
+    surface:
+      ctx.surface && surface.size > 0
+        ? { ...ctx.surface, segments: ctx.surface.segments.filter((s) => !surface.has(s.id)) }
+        : ctx.surface,
+  };
 }
 
 /** Would picking this orb up bring a surface-only segment back around the body? */

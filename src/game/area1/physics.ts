@@ -1,10 +1,11 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { footingOf } from '../area';
 import { COMPASS } from '../area/compass';
 import { arcWallMesh, cylinderMesh } from '../player/walk-lab-field';
-import { slab, trimesh, wall } from '../prologue/physics';
+import { BackFooting, slab, trimesh, wall } from '../prologue/physics';
 import { sweptSlab } from '../prologue/slope';
 import {
-  AREA1_GATE,
+  AREA1,
   AREA1_HOUSES,
   AREA1_PLAZA,
   AREA1_RIM,
@@ -13,19 +14,29 @@ import {
   AREA1_Y,
   area1RimArcs,
   area1SlopeHeight,
+  COURT_Y,
   HOUSE_ROUND,
   ROOM1_ALLEY,
+  ROOM2_BALCONY,
+  ROOM2_COURT,
+  ROOM2_RAIL,
+  ROOM2_STAIRS,
+  ROOM3_ROOF_N,
+  ROOM3_ROOF_S,
+  ROOM3_TERRACE,
   STREET_NORTH_Z,
   STREET_SOUTH_Z,
+  SUMMIT_Y,
 } from './layout';
 
 /**
- * エリア1's colliders (S-36), made from the same numbers and shapes art.ts draws (空間の可読性と導線 4: 当たり判定は見た目に正直に):
- * the entrance plaza's floor and the balustrade of its rim, the street and the alley, the slope's deck up to its shut gate,
- * the houses that bound them (the same rounded boxes), the gate's bars. 部屋1's crumbled wall is surface-only: the room
- * adds it apart (prologue/physics.ts SurfaceColliders), so a placed vidro's sphere can cut it (S-28).
- * Added to the world when エリア1 is built (behind the scenes, while the body is in the central plaza: never where the body
- * stands), taken out again with `dispose`.
+ * エリア1's colliders (S-36, S-40), made from the same numbers and shapes art.ts draws (空間の可読性と導線 4: 当たり判定は見た目に
+ * 正直に): the entrance plaza's floor and the balustrade of its rim, the street and the alley, the slope's deck up its two flights
+ * to the summit, 部屋2's courtyard and its balcony (a solid block, its railing), the summit's terrace and the roofs across the
+ * valley, the houses that bound them (the same rounded boxes). What a placed vidro's sphere changes is apart: the back layer's
+ * footing (the courtyard's stair, the bridges, the shortcut's stairs: `area1Footing`) and the surface-only walls (部屋1's and
+ * 部屋2's crumbled walls, the shortcut's gate: prologue/physics.ts SurfaceColliders over game/area surfaceOf).
+ * Added to the world when エリア1 is built (behind the scenes, never where the body stands), taken out again with `dispose`.
  */
 
 /** Height of a walkable slab under its top (as the prologue's). */
@@ -38,11 +49,11 @@ export interface Area1Colliders {
   dispose(): void;
 }
 
-/** The slope's deck as it collides: from a little into the street to a little past the gate, 1 m deep. */
+/** The slope's deck as it collides: from a little into the street to a little into the summit's terrace, 1 m deep. */
 export function area1SlopeDeckShape(depth = SLAB, lift = 0) {
-  const { x, halfWidth, fromZ } = AREA1_SLOPE;
+  const { x, halfWidth, fromZ, toZ } = AREA1_SLOPE;
   const z0 = fromZ + OVERLAP;
-  const z1 = AREA1_GATE.z - 1.2;
+  const z1 = toZ - OVERLAP;
   return sweptSlab(
     z0,
     z1,
@@ -54,7 +65,30 @@ export function area1SlopeDeckShape(depth = SLAB, lift = 0) {
   );
 }
 
-/** Every static collider of エリア1 (but the surface-only wall). */
+/**
+ * S-40: 部屋2's balcony railing (brass, shared) as thin walls: along the balcony's edge but where the stair arrives, and across
+ * its west end over the slope. Each a centre, a direction along it and a length (art.ts draws the same lines).
+ */
+export function balconyRails(): { at: [number, number]; along: readonly [number, number]; length: number }[] {
+  const z = ROOM2_BALCONY.minZ;
+  const east = COMPASS.east;
+  const span = (x0: number, x1: number) => ({
+    at: [(x0 + x1) / 2, z] as [number, number],
+    along: east,
+    length: Math.abs(x1 - x0),
+  });
+  return [
+    span(ROOM2_BALCONY.minX, ROOM2_STAIRS.minX),
+    span(ROOM2_STAIRS.maxX, ROOM2_BALCONY.maxX),
+    {
+      at: [ROOM2_BALCONY.minX, (ROOM2_BALCONY.minZ + ROOM2_BALCONY.maxZ) / 2],
+      along: COMPASS.north,
+      length: ROOM2_BALCONY.maxZ - ROOM2_BALCONY.minZ,
+    },
+  ];
+}
+
+/** Every static collider of エリア1 (but the back-layer footing and the surface-only walls). */
 export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
   const descs: RAPIER.ColliderDesc[] = [];
   const [cx, , cz] = AREA1_PLAZA.center;
@@ -101,8 +135,30 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
   descs.push(
     slab(R, ROOM1_ALLEY.minX, ROOM1_ALLEY.maxX, ROOM1_ALLEY.minZ - OVERLAP, ROOM1_ALLEY.maxZ, AREA1_Y),
   );
-  // the slope's deck, up to a little past its gate
+  // the slope's deck, up its two flights to the summit
   descs.push(trimesh(R, area1SlopeDeckShape(), [0, 0, 0]));
+  // S-40 部屋2: the courtyard's floor (in under the slope's edge), the balcony as a solid block from the floor up, its railing
+  descs.push(
+    slab(R, ROOM2_COURT.minX - OVERLAP, ROOM2_COURT.maxX, ROOM2_COURT.minZ, ROOM2_COURT.maxZ + OVERLAP, COURT_Y),
+  );
+  {
+    const b = ROOM2_BALCONY;
+    const h = b.y - COURT_Y + SLAB;
+    descs.push(
+      R.ColliderDesc.cuboid((b.maxX - b.minX) / 2, h / 2, (b.maxZ - b.minZ) / 2).setTranslation(
+        (b.minX + b.maxX) / 2,
+        b.y - h / 2,
+        (b.minZ + b.maxZ) / 2,
+      ),
+    );
+    for (const r of balconyRails())
+      descs.push(wall(R, r.at, r.along, r.length, b.y - 0.05, ROOM2_RAIL.height + 0.05, ROOM2_RAIL.thickness));
+  }
+  // S-40 部屋3: the summit's terrace (in under the slope's top) and the two roofs across the valley
+  descs.push(
+    slab(R, ROOM3_TERRACE.minX, ROOM3_TERRACE.maxX, ROOM3_TERRACE.minZ, ROOM3_TERRACE.maxZ + OVERLAP, SUMMIT_Y),
+  );
+  for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
   // the houses that bound them: the same rounded boxes as drawn, from under the floor to their eaves
   for (const h of AREA1_HOUSES) {
     if (!h.collide) continue;
@@ -118,18 +174,6 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
       ).setTranslation((h.minX + h.maxX) / 2, (top + bottom) / 2, (h.minZ + h.maxZ) / 2),
     );
   }
-  // the slope's shut gate (仮の行き止まり): its bars stop you across the whole way (they are 0.2 m apart)
-  descs.push(
-    wall(
-      R,
-      [AREA1_SLOPE.x, AREA1_GATE.z],
-      COMPASS.east,
-      2 * AREA1_GATE.halfWidth,
-      area1SlopeHeight(AREA1_GATE.z) - 0.2,
-      2.6,
-      0.08,
-    ),
-  );
   return descs;
 }
 
@@ -142,4 +186,13 @@ export function addArea1Colliders(R: typeof RAPIER, world: RAPIER.World): Area1C
       for (const c of colliders) world.removeCollider(c, false);
     },
   };
+}
+
+/**
+ * S-40: エリア1's back-layer footing — the courtyard's stair, the two bridges over the valley, the shortcut's stairs — as S-02's
+ * segments (boxes: a stair's treads, a bridge's deck, the shortcut's steps), switched by the placed vidro's sphere and fixed by
+ * the light (BackFooting.settle). Its `allowGround` joins the prologue's (the room asks both).
+ */
+export function area1Footing(R: typeof RAPIER, world: RAPIER.World): BackFooting {
+  return new BackFooting(R, world, footingOf([AREA1]));
 }
