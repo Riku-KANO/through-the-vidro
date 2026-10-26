@@ -196,7 +196,9 @@ export class LayerField {
               const behind = step(s, slot.front.w);
               const line = s.sub(slot.front.w).div(SETTLE_LINE);
               const halo = s.sub(slot.front.w).div(SETTLE_HALO);
-              const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
+              const band = exp(line.mul(line).negate()).add(
+                exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE),
+              );
               const here = box.mul(behind);
               const lit = box.mul(band).mul(slot.glow);
               // one slot: S-34's expression exactly; more: settled where any is, their bands added

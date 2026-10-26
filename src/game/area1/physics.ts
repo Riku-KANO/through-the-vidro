@@ -139,7 +139,14 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
   descs.push(trimesh(R, area1SlopeDeckShape(), [0, 0, 0]));
   // S-40 部屋2: the courtyard's floor (in under the slope's edge), the balcony as a solid block from the floor up, its railing
   descs.push(
-    slab(R, ROOM2_COURT.minX - OVERLAP, ROOM2_COURT.maxX, ROOM2_COURT.minZ, ROOM2_COURT.maxZ + OVERLAP, COURT_Y),
+    slab(
+      R,
+      ROOM2_COURT.minX - OVERLAP,
+      ROOM2_COURT.maxX,
+      ROOM2_COURT.minZ,
+      ROOM2_COURT.maxZ + OVERLAP,
+      COURT_Y,
+    ),
   );
   {
     const b = ROOM2_BALCONY;
@@ -152,11 +159,20 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
       ),
     );
     for (const r of balconyRails())
-      descs.push(wall(R, r.at, r.along, r.length, b.y - 0.05, ROOM2_RAIL.height + 0.05, ROOM2_RAIL.thickness));
+      descs.push(
+        wall(R, r.at, r.along, r.length, b.y - 0.05, ROOM2_RAIL.height + 0.05, ROOM2_RAIL.thickness),
+      );
   }
   // S-40 部屋3: the summit's terrace (in under the slope's top) and the two roofs across the valley
   descs.push(
-    slab(R, ROOM3_TERRACE.minX, ROOM3_TERRACE.maxX, ROOM3_TERRACE.minZ, ROOM3_TERRACE.maxZ + OVERLAP, SUMMIT_Y),
+    slab(
+      R,
+      ROOM3_TERRACE.minX,
+      ROOM3_TERRACE.maxX,
+      ROOM3_TERRACE.minZ,
+      ROOM3_TERRACE.maxZ + OVERLAP,
+      SUMMIT_Y,
+    ),
   );
   for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
   // the houses that bound them: the same rounded boxes as drawn, from under the floor to their eaves

@@ -173,9 +173,9 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
     const segments = [...footingOf([a]), ...surfaceOf([a])];
     const sweeps: { name: string; sweep: SettleSweep }[] = [];
     for (const r of a.rooms) if (r.settle) sweeps.push({ name: `room "${r.id}"`, sweep: r.settle });
-    a.shortcut?.legs.forEach((sweep, i) =>
-      sweeps.push({ name: `shortcut "${a.shortcut?.id}" leg ${i}`, sweep }),
-    );
+    const legs = a.shortcut?.legs ?? [];
+    for (let i = 0; i < legs.length; i++)
+      sweeps.push({ name: `shortcut "${a.shortcut?.id}" leg ${i}`, sweep: legs[i] as SettleSweep });
     for (const { name, sweep } of sweeps) {
       const cut = segmentsCutByBox(segments, sweep.box);
       if (cut.length > 0) problems.push(`the light of ${name} cuts ${cut.join(', ')} in two`);

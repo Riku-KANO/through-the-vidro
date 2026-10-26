@@ -322,7 +322,10 @@ export const ROOM3_PEDESTAL_S: PedestalDecl = {
   orb: [eastX(113.75), SUMMIT_Y + 1.05, -165.9],
 };
 /** 光の雫: on the north roof, just across its bridge. */
-export const ROOM3_DROP = { id: 'area1-room3', at: [eastX(110.45), SUMMIT_Y + 1.25, -159.4] as Vec3 } as const;
+export const ROOM3_DROP = {
+  id: 'area1-room3',
+  at: [eastX(110.45), SUMMIT_Y + 1.25, -159.4] as Vec3,
+} as const;
 /** "端": where to peek from — at the terrace's west side between the bridges, both bridges and the drop's roof ahead. */
 export const ROOM3_EDGE: Vec3 = [eastX(115.5), SUMMIT_Y, -163.4];
 /** 部屋3 as the game's session plays it. */
@@ -550,7 +553,11 @@ export type MotePath = readonly (readonly [number, number])[];
  * the summit's terrace, and (S-40) once the third is taken, along the ridge to the shortcut's top and down it. Each a way
  * through (x, z) points, drifted along at an even pace (motePathAt).
  */
-export const MOTES_TO_ROOM: MotePath = [
+export const MOTES_TO_ROOM: readonly [
+  readonly [number, number],
+  readonly [number, number],
+  readonly [number, number],
+] = [
   [eastX(85 + 11 - 4), AREA1_PLAZA.center[2]],
   [eastX(113.4), AREA1_STREET.z - 0.4],
   [eastX(114), ROOM1_PEDESTAL.base[2] + 0.4],
@@ -647,7 +654,11 @@ export const AREA1_FLOOR_ZONES: readonly FloorZoneDecl[] = [
       maxZ: AREA1_SLOPE.fromZ,
     },
   },
-  { name: 'area1-court-stairs', material: 'frosted', box: rectAt(130.2, 131.6, ROOM2_STAIRS_FOOT_Z, ROOM2_STAIRS.topZ) },
+  {
+    name: 'area1-court-stairs',
+    material: 'frosted',
+    box: rectAt(130.2, 131.6, ROOM2_STAIRS_FOOT_Z, ROOM2_STAIRS.topZ),
+  },
   { name: 'area1-court', material: 'stone', box: ROOM2_COURT },
   { name: 'area1-balcony', material: 'stone', box: ROOM2_BALCONY },
   { name: 'area1-summit', material: 'stone', box: ROOM3_TERRACE },
@@ -749,13 +760,19 @@ export const AREA1_SPAWNS = {
     pitch: 0.2,
   },
   /** 部屋2: on the landing at the courtyard's opening, the balcony, the stair and both pedestals ahead. */
-  'area1-court': viewAt([AREA1_SLOPE.x + 0.6, COURT_Y, -143.6], [eastX(129.5), ROOM2_BALCONY.y + 0.6, -141.2]),
+  'area1-court': viewAt(
+    [AREA1_SLOPE.x + 0.6, COURT_Y, -143.6],
+    [eastX(129.5), ROOM2_BALCONY.y + 0.6, -141.2],
+  ),
   /** Before 台座 A (by the stair), looking at where the drop hovers on the balcony. */
   'area1-court-a': viewAt([eastX(132.0), COURT_Y, -145.6], ROOM2_DROP.at),
   /** Before 台座 B, looking at where the drop hovers behind the wall. */
   'area1-court-b': viewAt([eastX(128.2), COURT_Y, -145.0], ROOM2_DROP.at),
   /** 部屋3: where the slope arrives on the summit, the valley and the roofs across it ahead (west). */
-  'area1-summit': viewAt([AREA1_SLOPE.x, SUMMIT_Y, AREA1_SLOPE.toZ - 1.2], [eastX(108), SUMMIT_Y + 0.6, -163.4]),
+  'area1-summit': viewAt(
+    [AREA1_SLOPE.x, SUMMIT_Y, AREA1_SLOPE.toZ - 1.2],
+    [eastX(108), SUMMIT_Y + 0.6, -163.4],
+  ),
   /** 部屋3's edge (端), between the bridges, looking across the valley (覗いてから置く). */
   'area1-edge': viewAt(ROOM3_EDGE, [eastX(109.5), SUMMIT_Y + 0.4, -163.4]),
   /** The shortcut's top on the north roof, looking down the stairs to the entrance plaza. */

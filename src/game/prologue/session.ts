@@ -1,5 +1,11 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
-import { countSettled, type SettleSweep, settledSegmentIds, sweepFront, sweepSpan } from '../../layers/settle';
+import {
+  countSettled,
+  type SettleSweep,
+  settledSegmentIds,
+  sweepFront,
+  sweepSpan,
+} from '../../layers/settle';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import {
   type AreaCount,
