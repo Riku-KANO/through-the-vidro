@@ -16,7 +16,13 @@ import {
   WIND_SOURCE,
 } from '../../audio/ambience';
 import { createVidroEngine } from '../../audio/engine';
-import { FINALE_LEVELS, type FinaleBanks, finaleSources, loadFinaleBanks, renderSettle } from '../../audio/finale';
+import {
+  FINALE_LEVELS,
+  type FinaleBanks,
+  finaleSources,
+  loadFinaleBanks,
+  renderSettle,
+} from '../../audio/finale';
 import {
   type FloorMaterial,
   FOOTSTEP_SOURCES,
@@ -280,7 +286,9 @@ export interface FinalePlayed {
 /* ---------- S-40: エリア1's shortcut settling ---------- */
 
 /** The shortcut's light's sound: the bridge's (S-34), its run drawn out over the shortcut's seconds, on the light's curve. */
-export const SHORTCUT_SOURCE = synth('shortcut-settle', (sr) => renderSettle(sr, SHORTCUT_SECONDS, glassEase));
+export const SHORTCUT_SOURCE = synth('shortcut-settle', (sr) =>
+  renderSettle(sr, SHORTCUT_SECONDS, glassEase),
+);
 /** Where its light starts: the near face of its first leg, along its way (area1/layout.ts SHORTCUT_LEGS), over the deck. */
 export const SHORTCUT_SOUND_FROM: Vec3 = (() => {
   const leg = SHORTCUT_LEGS[0];
@@ -370,7 +378,11 @@ export const AREA1_AMBIENCE: readonly AmbientSpot[] = [
     id: 'chimes:area1',
     kind: 'chimes',
     // S-40: east of 部屋2's courtyard, high over the houses climbing to the summit (S-36's spot was 4 m over the balcony)
-    position: [eastX(eastOf(AREA1_STREET.endX) + 13.5), AREA1_Y + 20, (ROOM1_ALLEY.minZ + AREA1_SLOPE.toZ) / 2 - 9],
+    position: [
+      eastX(eastOf(AREA1_STREET.endX) + 13.5),
+      AREA1_Y + 20,
+      (ROOM1_ALLEY.minZ + AREA1_SLOPE.toZ) / 2 - 9,
+    ],
     ownStream: true,
     far: true,
   },

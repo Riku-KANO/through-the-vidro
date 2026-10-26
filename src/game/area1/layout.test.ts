@@ -390,7 +390,8 @@ describe('S-40: the slope — east from the plaza, then south up to the summit i
 describe('S-40: 部屋2「二つの台座の中庭」 — two pedestals whose spheres overlap, a back-layer stair, a surface-only wall', () => {
   it('under its stair (there or not) the ground is the courtyard’s floor: the fall guard never pulls at a body standing there', () => {
     for (let x = ROOM2_STAIRS.minX; x <= ROOM2_STAIRS.maxX; x += 0.2)
-      for (let z = ROOM2_STAIRS_FOOT_Z; z < ROOM2_STAIRS.topZ; z += 0.1) expect(area1Ground(x, z)).toBe(COURT_Y);
+      for (let z = ROOM2_STAIRS_FOOT_Z; z < ROOM2_STAIRS.topZ; z += 0.1)
+        expect(area1Ground(x, z)).toBe(COURT_Y);
   });
 
   const a = sphereOf(ROOM2_PEDESTAL_A);
