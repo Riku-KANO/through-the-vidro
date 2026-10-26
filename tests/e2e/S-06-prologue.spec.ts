@@ -62,7 +62,14 @@ interface RoomProbe {
   /** S-34: the close (the bridge settled by the drop's light, the gate open). */
   finale: { settle: number; gate: number; settledSegments: number; gateOpen: boolean };
   /** S-36: エリア1 (built behind the scenes), the sky's morning (0..1), the drops taken by area. */
-  area1: { state: string; wall: { segments: number; off: number }; next: number };
+  area1: {
+    state: string;
+    wall: { segments: number; off: number };
+    next: number;
+    /** S-40: the shortcut home (fixed by the third drop's light), its back-layer footing. */
+    shortcut: { settle: number; events: string[] };
+    footing: { segments: number; settled: number };
+  };
   daylight: number;
   areas: Record<string, { drops: number; taken: number }>;
   layout: {
@@ -524,7 +531,8 @@ for (const backend of backends) {
       expect.arrayContaining(['pickup:bench', 'place', 'dropTaken', 'pickup:pedestal']),
     );
     expect(end.dropTaken).toBe(true);
-    expect(end.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 1, taken: 1 } });
+    // S-40: エリア1 has three rooms now; this run takes 部屋1's (the autoplay below plays all three and the shortcut)
+    expect(end.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 3, taken: 1 } });
 
     writeFileSync(
       join(root, `artifacts/S-06/run-${backend}.json`),
@@ -612,17 +620,17 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate → down to the plaza → the road → エリア1 部屋1's drop by script [${backend}]`, async ({
+  test(`S-06 ?autoplay=1 plays home → dive → the drop → through the gate → down to the plaza → the road → エリア1's three rooms → the shortcut home by script [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(420_000);
+    test.setTimeout(660_000);
     const errors = collectErrors(page);
     await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1${webgl}`);
     await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
     const done = await waitRoom(
       page,
-      'r.autoplay && r.autoplay.done && r.dropTaken && r.areas.area1.taken === 1',
-      320_000,
+      'r.autoplay && r.autoplay.done && r.dropTaken && r.areas.area1.taken === 3',
+      560_000,
     );
     expect(done.events).toEqual(
       expect.arrayContaining(['pickup:bench', 'peekStart', 'peekEnd', 'place', 'dropTouched', 'dropTaken']),
@@ -635,15 +643,18 @@ for (const backend of backends) {
     expect(done.finale.gateOpen).toBe(true);
     expect(done.bridgeColliders).toBe(done.bridgeSegments);
     expect(done.position.z).toBeLessThan(done.layout.gateZ - 1);
-    // S-35: on down the slope and across the plaza; S-36: along the road into the morning, to エリア1's first room: its drop
-    // taken, the vidro back in hand, standing at the alley's mouth in the street
+    // S-35: on down the slope and across the plaza; S-36: along the road into the morning, to エリア1's first room; S-40: on
+    // through 部屋2 and 部屋3 — the third drop fixes the shortcut — and down it, back in the entrance plaza with the vidro
     const { plaza, area1 } = done.layout;
-    expect(done.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 1, taken: 1 } });
+    expect(done.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 3, taken: 3 } });
     expect(done.daylight).toBe(1);
     expect(done.area1.next).toBeGreaterThan(0);
-    expect(done.position.x).toBeGreaterThan(area1.alley.minX - 1);
-    expect(done.position.x).toBeLessThan(area1.alley.maxX + 1);
-    expect(done.position.z).toBeLessThan(area1.wall.min[2]);
+    expect(done.area1.shortcut.settle).toBe(1);
+    expect(done.area1.shortcut.events).toEqual(['settle', 'settled']);
+    expect(done.area1.footing.settled).toBeGreaterThan(50);
+    expect(
+      Math.hypot(done.position.x - area1.plaza.center[0], done.position.z - area1.plaza.center[2]),
+    ).toBeLessThan(area1.plaza.radius);
     expect(done.position.y).toBeCloseTo(plaza.center[1], 1);
     expect(done.grounded).toBe(true);
     expect(done.fallRescues, 'the fall guard never had to act').toBe(0);

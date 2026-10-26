@@ -16,7 +16,7 @@ import {
   WIND_SOURCE,
 } from '../../audio/ambience';
 import { createVidroEngine } from '../../audio/engine';
-import { FINALE_LEVELS, type FinaleBanks, finaleSources, loadFinaleBanks } from '../../audio/finale';
+import { FINALE_LEVELS, type FinaleBanks, finaleSources, loadFinaleBanks, renderSettle } from '../../audio/finale';
 import {
   type FloorMaterial,
   FOOTSTEP_SOURCES,
@@ -31,7 +31,7 @@ import { VIDRO_VOLUMES } from '../../audio/levels';
 import { type PopenKind, playPopen } from '../../audio/popen';
 import { VIDRO_ROOMS } from '../../audio/rooms';
 import { loadWhisperBank, WHISPER_LEVEL, whisperSource } from '../../audio/whisper';
-import { loadBank, scheduleBuffer, startLoop } from '../../core/audio/bank';
+import { loadBank, scheduleBuffer, startLoop, synth } from '../../core/audio/bank';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
 import type { GlassStrength } from '../../core/audio/glass';
 import { renderOffline } from '../../core/audio/offline';
@@ -47,6 +47,8 @@ import {
   eastOf,
   eastX,
   ROOM1_ALLEY,
+  SHORTCUT_LEGS,
+  SHORTCUT_SECONDS,
 } from '../area1/layout';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
 import { EYE_HEIGHT, WALK_SPEED } from '../player/constants';
@@ -74,7 +76,13 @@ import {
   WORKSHOP_TOP,
 } from './layout';
 import type { RoomProbe } from './room';
-import { type FinaleEvent, GATE_OPEN_SECONDS, type HintEvent, SETTLE_SECONDS } from './session';
+import {
+  type FinaleEvent,
+  GATE_OPEN_SECONDS,
+  type HintEvent,
+  SETTLE_SECONDS,
+  type ShortcutEvent,
+} from './session';
 
 /**
  * 序章の音 (S-16): the prologue room's events (room.events, S-06) answered with S-09's sounds.
@@ -100,6 +108,8 @@ import { type FinaleEvent, GATE_OPEN_SECONDS, type HintEvent, SETTLE_SECONDS } f
  *  - S-39: 玉のささやき — the vidro left behind whispers (a small glass ring, src/audio/whisper.ts) from where it stands each
  *    time the room's hints say so (room.hints; session.ts whisperDue: as it starts calling, then the gaps apart, widening). Like the
  *    close's sounds, logged and counted apart from the cues (`probe.whisper`).
+ *  - S-40: エリア1's shortcut settling (room.shortcut): the bridge's settling sound (src/audio/finale.ts renderSettle), drawn out
+ *    over the shortcut's light, from the light's front as it runs along the ridge and down the stairs (`probe.shortcut`).
  * cueFor / sourcePoint / answer are pure; createPrologueSound wires them to the AudioEngine.
  */
 
@@ -224,6 +234,8 @@ export interface SoundRoom {
   readonly finale?: EventBus<FinaleEvent>;
   /** S-39: the hints (the vidro left behind whispering), apart from `events` and the close's. */
   readonly hints?: EventBus<HintEvent>;
+  /** S-40: エリア1's shortcut settling, apart from the others. */
+  readonly shortcut?: EventBus<ShortcutEvent>;
   /** The game camera: the listener, and the frame the hand orb is held in. */
   readonly camera: THREE.Object3D;
   readonly probe: Pick<
@@ -235,8 +247,11 @@ export interface SoundRoom {
     /** S-36: where the vidro stands on its pedestal, and the drop last touched (the prologue's when absent). */
     orbAt?: Vec3;
     dropAt?: Vec3;
-    /** S-36: エリア1 as the room builds it: its ambience starts once it is in the scene and the body is in the town. */
-    area1?: { readonly state: string };
+    /**
+     * S-36: エリア1 as the room builds it: its ambience starts once it is in the scene and the body is in the town. S-40: where
+     * its shortcut's light is now (null while it does not run).
+     */
+    area1?: { readonly state: string; readonly shortcut?: { readonly front: Vec3 | null } };
   };
 }
 
@@ -258,6 +273,29 @@ export const GATE_SOUND: Vec3 = [0, 1.4, GATE.z];
 /** One of the close's sounds that played: which, from where, how far from the listener when it started. */
 export interface FinalePlayed {
   event: 'settle' | 'gateOpen';
+  at: [number, number, number];
+  distance: number;
+}
+
+/* ---------- S-40: エリア1's shortcut settling ---------- */
+
+/** The shortcut's light's sound: the bridge's (S-34), its run drawn out over the shortcut's seconds, on the light's curve. */
+export const SHORTCUT_SOURCE = synth('shortcut-settle', (sr) => renderSettle(sr, SHORTCUT_SECONDS, glassEase));
+/** Where its light starts: the near face of its first leg, along its way (area1/layout.ts SHORTCUT_LEGS), over the deck. */
+export const SHORTCUT_SOUND_FROM: Vec3 = (() => {
+  const leg = SHORTCUT_LEGS[0];
+  if (!leg) return [0, 0, 0];
+  const { min, max } = leg.box;
+  const d = leg.direction;
+  const c: Vec3 = [(min[0] + max[0]) / 2, min[1] + 1.3, (min[2] + max[2]) / 2];
+  const k = sweepSpan(leg)[0] - (d[0] * c[0] + d[1] * c[1] + d[2] * c[2]);
+  return [c[0] + d[0] * k, c[1] + d[1] * k, c[2] + d[2] * k];
+})();
+/** How loud it plays at its source (the bridge's level: FINALE_LEVELS.settle). */
+const SHORTCUT_LEVEL = FINALE_LEVELS.settle;
+
+/** The shortcut's sound that played: from where (the light's front), how far from the listener when it started. */
+export interface ShortcutPlayed {
   at: [number, number, number];
   distance: number;
 }
@@ -331,7 +369,8 @@ export const AREA1_AMBIENCE: readonly AmbientSpot[] = [
   {
     id: 'chimes:area1',
     kind: 'chimes',
-    position: [eastX(eastOf(AREA1_STREET.endX) + 6), AREA1_Y + 12, (ROOM1_ALLEY.minZ + AREA1_SLOPE.toZ) / 2],
+    // S-40: east of 部屋2's courtyard, high over the houses climbing to the summit (S-36's spot was 4 m over the balcony)
+    position: [eastX(eastOf(AREA1_STREET.endX) + 13.5), AREA1_Y + 20, (ROOM1_ALLEY.minZ + AREA1_SLOPE.toZ) / 2 - 9],
     ownStream: true,
     far: true,
   },
@@ -460,6 +499,8 @@ export interface SoundBanks {
   finale?: FinaleBanks;
   /** S-39. Without it the vidro's whisper stays silent (and says so: probe.whisper.refused). */
   whisper?: AudioBuffer | null;
+  /** S-40. Without it エリア1's shortcut settles silent (and says so: probe.shortcut.refused). */
+  shortcut?: AudioBuffer | null;
 }
 
 export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal): Promise<SoundBanks> {
@@ -468,6 +509,7 @@ export async function loadSoundBanks(ctx: BaseAudioContext, signal?: AbortSignal
     ambience: await loadAmbienceBanks(ctx, signal),
     finale: await loadFinaleBanks(ctx, FINALE_SOURCES, signal),
     whisper: await loadWhisperBank(ctx, WHISPER_SOURCE, signal),
+    shortcut: (await loadBank(ctx, [SHORTCUT_SOURCE], { signal }))[0] ?? null,
   };
 }
 
@@ -662,6 +704,8 @@ export interface SoundProbe {
   readonly finale: FinaleSoundProbe;
   /** S-39: the vidro's whisper, counted apart from the cues. */
   readonly whisper: WhisperSoundProbe;
+  /** S-40: エリア1's shortcut settling, counted apart from the cues. */
+  readonly shortcut: ShortcutSoundProbe;
   /** S-22 sensor (not enumerable, so probes copied by the e2e leave it out): renders a sound offline. */
   readonly render: (spec: SoundLabSpec) => Promise<SoundLabResult>;
 }
@@ -687,6 +731,19 @@ export interface WhisperSoundProbe {
   /** Its sound is loaded and its emitter placed. */
   ready: boolean;
   played: WhisperPlayed[];
+  refused: string[];
+  /** Voices the engine started for it (the engine's whole count takes them in: engineVoices). */
+  voicesStarted: number;
+}
+
+/**
+ * S-40: エリア1's shortcut settling. Its light starting is answered once, as it happens: played (from where, how far), or refused
+ * (no audio yet, its sound not loaded, or the engine refused it) and then never played later.
+ */
+export interface ShortcutSoundProbe {
+  /** Its sound is loaded and its emitter placed. */
+  ready: boolean;
+  played: ShortcutPlayed[];
   refused: string[];
   /** Voices the engine started for it (the engine's whole count takes them in: engineVoices). */
   voicesStarted: number;
@@ -998,6 +1055,52 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   };
   const offHints = room.hints?.on(playWhisper) ?? null;
 
+  // S-40: エリア1's shortcut settling, once its buffer is loaded; from the light's front, following it while it runs
+  let shortcutSound: { buffer: AudioBuffer; emitter: Emitter } | null = null;
+  const shortcutLog = { played: [] as ShortcutPlayed[], refused: [] as string[], voices: 0 };
+  const shortcutAt = { x: SHORTCUT_SOUND_FROM[0], y: SHORTCUT_SOUND_FROM[1], z: SHORTCUT_SOUND_FROM[2] };
+  /** Its light is on its way (from 'settle' to 'settled'): only then does its sound move. */
+  let shortcutRunning = false;
+  const followShortcut = (): void => {
+    if (!shortcutSound) return;
+    const front = roomProbe.area1?.shortcut?.front;
+    if (front) {
+      shortcutAt.x = front[0];
+      shortcutAt.y = front[1] + 0.7;
+      shortcutAt.z = front[2];
+    }
+    shortcutSound.emitter.setPosition(shortcutAt);
+  };
+  const playShortcut = (event: ShortcutEvent): void => {
+    if (event.type === 'settled') shortcutRunning = false;
+    if (disposed || event.type !== 'settle') return;
+    shortcutRunning = true;
+    if (!engine || !shortcutSound) {
+      shortcutLog.refused.push(event.type);
+      return;
+    }
+    follow();
+    // it starts where the light does (the room has not moved its front yet: the event comes from the session's step)
+    shortcutAt.x = SHORTCUT_SOUND_FROM[0];
+    shortcutAt.y = SHORTCUT_SOUND_FROM[1];
+    shortcutAt.z = SHORTCUT_SOUND_FROM[2];
+    shortcutSound.emitter.setPosition(shortcutAt);
+    const { buffer } = shortcutSound;
+    const before = engine.snapshot().voicesStarted;
+    const started = engine.startVoice(
+      { level: SHORTCUT_LEVEL, emitter: shortcutSound.emitter },
+      (ctx, destination, when) => scheduleBuffer(ctx, destination, buffer, when, { gain: SHORTCUT_LEVEL }),
+    );
+    shortcutLog.voices += engine.snapshot().voicesStarted - before;
+    if (!started) {
+      shortcutLog.refused.push(event.type);
+      return;
+    }
+    const [x, y, z] = [shortcutAt.x, shortcutAt.y, shortcutAt.z];
+    shortcutLog.played.push({ at: [x, y, z], distance: Math.hypot(x - ear.x, y - ear.y, z - ear.z) });
+  };
+  const offShortcut = room.shortcut?.on(playShortcut) ?? null;
+
   /** The engine is there (its own, or handed over): place the emitters in the room. */
   const attach = (e: AudioEngine): void => {
     engine = e;
@@ -1037,6 +1140,12 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
           const emitter = e.createEmitter('sfx', whisperAt);
           live.push(emitter);
           whisper = { buffer: banks.whisper, emitter };
+        }
+        // S-40: エリア1's shortcut settling, from its light
+        if (banks.shortcut) {
+          const emitter = e.createEmitter('sfx', shortcutAt);
+          live.push(emitter);
+          shortcutSound = { buffer: banks.shortcut, emitter };
         }
       },
       (err) => {
@@ -1112,6 +1221,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     }
     // S-34: the settling light's sound follows its front across the bridge (and stays where the light stopped)
     if (lightRunning) followFront();
+    // S-40: and エリア1's shortcut's along the ridge and down the stairs
+    if (shortcutRunning) followShortcut();
   };
 
   const stopListening = (): void => {
@@ -1227,6 +1338,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         voicesStarted: whisperLog.voices,
       };
     },
+    get shortcut(): ShortcutSoundProbe {
+      return {
+        ready: shortcutSound !== null,
+        played: [...shortcutLog.played],
+        refused: [...shortcutLog.refused],
+        voicesStarted: shortcutLog.voices,
+      };
+    },
     get footsteps(): FootstepsProbe {
       return {
         ready: steps !== null,
@@ -1272,6 +1391,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       offFinale?.();
       finale = null;
       offHints?.();
+      offShortcut?.();
       whisper = null;
       subscribed = false;
       stopListening();

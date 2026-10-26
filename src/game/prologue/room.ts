@@ -421,6 +421,8 @@ const MAX_AREA1_FRAMES = 300;
  * added in view (on the game's one curve, glassEase).
  */
 const APPEAR_SECONDS = 3.5;
+/** 仮 (S-40): how much brighter the band of light at the shortcut's front is than the prologue's (it runs in the morning). */
+const SHORTCUT_GLOW = 3;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -1052,7 +1054,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       const running = leg.front > lo + 1e-9 && leg.front < hi - 1e-9;
       view.sweep = leg.sweep;
       view.front = leg.front;
-      view.glow = running ? settleGlow(leg.progress) : 0;
+      // (the shortcut's in the morning, over 40 m: brighter than the bridge's at dawn, so it reads from the summit)
+      view.glow = running ? settleGlow(leg.progress) * (i >= shortcutFrom ? SHORTCUT_GLOW : 1) : 0;
       field.setSettled(view, i);
       if (running && i >= shortcutFrom) {
         sc.leg = i - shortcutFrom;

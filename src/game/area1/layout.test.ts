@@ -388,6 +388,11 @@ describe('S-40: the slope — east from the plaza, then south up to the summit i
 });
 
 describe('S-40: 部屋2「二つの台座の中庭」 — two pedestals whose spheres overlap, a back-layer stair, a surface-only wall', () => {
+  it('under its stair (there or not) the ground is the courtyard’s floor: the fall guard never pulls at a body standing there', () => {
+    for (let x = ROOM2_STAIRS.minX; x <= ROOM2_STAIRS.maxX; x += 0.2)
+      for (let z = ROOM2_STAIRS_FOOT_Z; z < ROOM2_STAIRS.topZ; z += 0.1) expect(area1Ground(x, z)).toBe(COURT_Y);
+  });
+
   const a = sphereOf(ROOM2_PEDESTAL_A);
   const b = sphereOf(ROOM2_PEDESTAL_B);
   const treads = room2StairSegments();
@@ -679,7 +684,9 @@ describe('S-40: the way on (ルール5・6・7): lamps, the next place in sight 
     }
     const corner = NEXT_LAMPS_BY_ROOM.room1.at(-1) as Vec3;
     expect(Math.abs(corner[0] - ROOM2_COURT.minX)).toBeLessThan(0.6);
-    expect(Math.abs(corner[2] - ROOM2_BALCONY.minZ)).toBeLessThan(0.6);
+    expect(Math.abs(corner[2] - ROOM2_BALCONY.minZ)).toBeLessThan(1);
+    // over the slope, so it is seen up the first flight (S-40: not behind the houses' line)
+    expect(Math.abs(corner[0] - AREA1_SLOPE.x)).toBeLessThan(AREA1_SLOPE.halfWidth);
     expect(NEXT_LAMPS).toBe(NEXT_LAMPS_BY_ROOM.room1);
     // 部屋2's: from the second flight's foot up to the summit, rising
     const r2 = NEXT_LAMPS_BY_ROOM.room2;

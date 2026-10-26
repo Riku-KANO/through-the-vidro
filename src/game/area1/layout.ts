@@ -528,8 +528,8 @@ export const NEXT_LAMPS_BY_ROOM: Readonly<Record<'room1' | 'room2', readonly Vec
     [eastX(SLOPE_W - 0.45), AREA1_Y + 2.3, STREET_SOUTH_Z + 0.3],
     // up the first flight, on the house along its east side
     [eastX(SLOPE_E - 0.3), area1SlopeHeight(-134) + 2.3, -134],
-    // the courtyard's corner on the landing, on the balcony's railing post
-    [eastX(SLOPE_E + 0.25), ROOM2_BALCONY.y + 1.25, ROOM2_BALCONY.minZ - 0.05],
+    // the courtyard's corner on the landing: on the balcony's side, hung out over the landing (seen up the first flight)
+    [eastX(SLOPE_E - 0.3), COURT_Y + 2.6, ROOM2_BALCONY.minZ + 0.6],
   ],
   room2: [
     // the second flight's foot, on the courtyard's south house
@@ -675,9 +675,9 @@ export const AREA1_FLOOR_ZONES: readonly FloorZoneDecl[] = [
 
 /**
  * The height of the walkable ground at (x, z) in エリア1, or null off it (落下死はない: the fall guard's floor follows it). The road
- * is the town's (prologue/layout.ts groundHeight). Where only the back layer is walkable (the courtyard's stair, the bridges over
- * the valley, the shortcut's stairs), the height of that footing: the fall guard then holds the body a metre under it, never
- * many metres down (nobody walks there unless it is there).
+ * is the town's (prologue/layout.ts groundHeight). Under the courtyard's stair (back layer) its floor. Where only the back layer is
+ * walkable over nothing (the bridges over the valley, the shortcut's stairs), the height of that footing: the fall guard then
+ * holds the body a metre under it, never many metres down (nobody walks there unless it is there).
  */
 export function area1Ground(x: number, z: number): number | null {
   const [cx, , cz] = AREA1_PLAZA.center;
@@ -688,10 +688,7 @@ export function area1Ground(x: number, z: number): number | null {
   if (Math.abs(x - AREA1_SLOPE.x) <= AREA1_SLOPE.halfWidth && z <= AREA1_SLOPE.fromZ && z >= AREA1_SLOPE.toZ)
     return area1SlopeHeight(z);
   if (inRect(ROOM2_BALCONY, x, z)) return ROOM2_BALCONY.y;
-  if (x >= ROOM2_STAIRS.minX && x <= ROOM2_STAIRS.maxX && z >= ROOM2_STAIRS_FOOT_Z && z < ROOM2_STAIRS.topZ) {
-    const i = Math.floor((z - ROOM2_STAIRS_FOOT_Z) / ROOM2_STAIRS.tread);
-    return COURT_Y + (i + 1) * ROOM2_STAIRS.rise;
-  }
+  // (the courtyard's stair stands on its floor: the floor is the ground under it, there or not)
   if (inRect(ROOM2_COURT, x, z)) return COURT_Y;
   if (inRect(ROOM3_TERRACE, x, z)) return SUMMIT_Y;
   // the valley: its bridges' height (nothing else is walkable there)
@@ -753,12 +750,11 @@ export const AREA1_SPAWNS = {
   },
   /** 部屋1, before the crumbled wall, the vidro in hand, looking at where the drop hovers behind it (覗けば見える). */
   'area1-wall': viewAt([eastX(113.6), AREA1_Y, ROOM1_WALL.box.min[2] - 1.0], ROOM1_DROP.at),
-  /** At the slope's foot looking up the first flight, toward the courtyard's corner (its lamp). */
-  'area1-slope': {
-    feet: [eastX(121 - 0.3), area1SlopeHeight(-130), -130] as Vec3,
-    yaw: 0,
-    pitch: 0.2,
-  },
+  /** At the slope's foot looking up the first flight, toward the courtyard's corner (the last of 部屋1's lamps). */
+  'area1-slope': (() => {
+    const lamp = NEXT_LAMPS_BY_ROOM.room1.at(-1) as Vec3;
+    return viewAt([eastX(121 - 0.4), area1SlopeHeight(-130), -130], [lamp[0], lamp[1] - 1.2, lamp[2]]);
+  })(),
   /** 部屋2: on the landing at the courtyard's opening, the balcony, the stair and both pedestals ahead. */
   'area1-court': viewAt(
     [AREA1_SLOPE.x + 0.6, COURT_Y, -143.6],
