@@ -512,7 +512,8 @@ for (const backend of backends) {
     await lookAt(page, [(sc.minX + sc.maxX) / 2, r3.summitY + 0.3, zN]);
     const running = await waitRoom(
       page,
-      'r.area1.shortcut.front !== null && r.area1.shortcut.leg === 0',
+      // (once its front is ahead on the ridge, a few metres past the body)
+      'r.area1.shortcut.front !== null && r.area1.shortcut.leg === 0 && r.area1.shortcut.front[0] < r.position.x - 3',
       5_000,
     );
     expect(running.area1.shortcut.events).toEqual(['settle']);
