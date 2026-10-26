@@ -4,9 +4,10 @@ import { expect, type Page, test } from '@playwright/test';
 
 /**
  * S-36: エリア1's way in and its first room, on both render paths.
- *  1. the scripted play (?autoplay=1): home → dive → the prologue → the central plaza, where エリア1 is built and warmed
- *     behind the scenes (out of view), → along the road into the morning → the entrance plaza → 部屋1: peek, place, through
- *     the crumbled wall, the drop, back out, the vidro picked up. A tracer (as S-38's) notes every render pipeline three
+ *  1. the scripted play (?autoplay=1): home → dive → the prologue → the slope's brow, from where エリア1 is built and warmed
+ *     behind the scenes (S-40: added at once out of view, or out of the haze in view) → along the road into the morning →
+ *     the entrance plaza → 部屋1: peek, place, through the crumbled wall, the drop, back out, the vidro picked up (S-40: on
+ *     through 部屋2 and 部屋3 and down the shortcut, tests/e2e/S-40-*.spec.ts). A tracer (as S-38's) notes every render pipeline three
  *     makes: none for glass while playing, none at all once エリア1 is ready (it was all made before it was seen). The
  *     longest frame while エリア1 is built and warmed; the loading's warm-up frame within 300 draw calls and a second
  *  2. along the road with real input: the sky goes from before dawn to morning as you walk east, and back as you walk back
@@ -32,6 +33,10 @@ interface Area1Probe {
   addedAt: number | null;
   readyAt: number | null;
   addedInView: boolean;
+  /** S-40: out of the haze (0..1), its parts shown of all. */
+  appear: number;
+  shown: number;
+  entries: number;
   frames: number;
   worstMs: number;
   warmed: number;
@@ -80,7 +85,6 @@ interface RoomProbe {
       wall: { min: P3; max: P3 };
       alley: { minX: number; maxX: number; minZ: number; maxZ: number };
       chimneyTop: P3;
-      gateZ: number;
     };
   };
 }
@@ -358,15 +362,16 @@ for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-36', backend);
 
-  test(`S-36 autoplay: the plaza builds エリア1 out of view, the road into the morning, 部屋1's drop; nothing compiled once it is seen [${backend}]`, async ({
+  test(`S-36 autoplay: エリア1 built from the brow (added out of view, or out of the haze), the road into the morning, its rooms; nothing compiled once it is seen [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(420_000);
+    test.setTimeout(660_000);
     mkdirSync(join(root, 'artifacts/S-36'), { recursive: true });
     const errors = collectErrors(page);
     await page.addInitScript(installTracer);
     await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1&debug=1${webgl}`);
-    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.areas.area1.taken === 1', 360_000);
+    // S-40: the script plays on through 部屋2 and 部屋3 and down the shortcut
+    const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.areas.area1.taken === 3', 600_000);
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
     const { made, load, phases } = await page.evaluate(() => {
       const p = window.__vidro.sceneProbe as {
@@ -380,23 +385,11 @@ for (const backend of backends) {
     });
     const a = done.area1;
     const warmFrame = load.steps.find((s) => s.name === 'compile game (screen)')?.maxFrameMs ?? 0;
-    // the steps from the road on (autopilot.ts area1Script): エリア1 is ready and seen from there
-    const seenFrom = [
-      'walk-road',
-      'look-area1',
-      'walk-street',
-      'walk-alley',
-      'peek-wall',
-      'look-wall-pedestal',
-      'place-wall',
-      'walk-through',
-      'touch-drop1',
-      'walk-out',
-      'pick-up-wall',
-      'walk-next',
-      'look-next',
-      'done',
-    ];
+    // the steps from the road on (autopilot.ts area1Script, S-40: through 部屋2・3 and the shortcut): エリア1 is ready and seen
+    // from there (the room's record of the steps is in the order they were played)
+    const order = Object.keys(done.autoplay?.steps ?? {});
+    const seenFrom = [...order.slice(Math.max(0, order.indexOf('walk-road'))), 'done'];
+    expect(seenFrom).toContain('walk-shortcut');
     const afterSeen = made.filter((m) => seenFrom.some((s) => m.at === `game:${s}`));
     // and the script played them all (the check above cannot pass by never getting there)
     expect(done.autoplay?.steps?.['touch-drop1'] ?? 0).toBeGreaterThan(0);
@@ -421,14 +414,16 @@ for (const backend of backends) {
     );
 
     // the whole way: the prologue's drop and 部屋1's, counted by area; in the morning at the end, the vidro in hand
-    expect(done.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 1, taken: 1 } });
+    expect(done.areas).toEqual({ prologue: { drops: 1, taken: 1 }, area1: { drops: 3, taken: 3 } });
     expect(done.daylight).toBe(1);
     expect(done.orb).toBe('hand');
     expect(done.events).toContain('dropTaken');
     expect(done.fallRescues).toBe(0);
-    // エリア1 was built and warmed behind the scenes while in the central plaza, and added while out of view
+    // エリア1 was built and warmed behind the scenes from the slope's brow; S-40: added at once out of view, or (in view: the
+    // summit and the shortcut are in the picture down the slope) out of the haze, its parts shown one at a time
     expect(a.state).toBe('ready');
-    expect(a.addedInView).toBe(false);
+    expect(a.appear).toBe(1);
+    expect(a.shown).toBe(a.entries);
     expect(a.warmed).toBeGreaterThan(0);
     expect(a.worstMs, 'the longest frame while エリア1 was built and warmed').toBeLessThan(PLAY_FRAME_MS);
     // no glass compiled in play (S-38), and nothing at all from the road on (it was all made before it was seen)
@@ -650,9 +645,10 @@ for (const backend of backends) {
       ['road', 'area1-road', ''],
       ['plaza-chimney', 'area1-plaza', ''],
       ['alley', 'area1-alley', ''],
-      ['gate', 'area1-gate', ''],
+      // S-40: the slope's foot, looking up the first flight (S-36's shut gate is gone: the slope goes on to the summit)
+      ['slope', 'area1-slope', ''],
       // 部屋1's drop taken (a dev hold): the lamps toward the next room lit up the slope to the shut gate
-      ['gate-next', 'area1-gate', '&area1Drop=taken'],
+      ['slope-next', 'area1-slope', '&area1Drop=taken'],
     ] as const) {
       await page.goto(`/?scene=prologue-proto&spawn=${spawn}${extra}${webgl}`);
       const r = await waitRoom(page, "r.ready === true && r.area1.state === 'ready'", 90_000);
@@ -691,8 +687,8 @@ for (const backend of backends) {
     }
     // the lamps toward the next room read as lights: more warm bright pixels than the same view before the drop (S-36
     // measured 0.0026 of the screen with them lit, 0.00003 before, both ways)
-    expect(shots['gate-next']?.warm ?? 0, 'the lit lamps toward the next room').toBeGreaterThan(
-      (shots.gate?.warm ?? 0) + 0.0015,
+    expect(shots['slope-next']?.warm ?? 0, 'the lit lamps toward the next room').toBeGreaterThan(
+      (shots.slope?.warm ?? 0) + 0.0015,
     );
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
 import type { SettleSweep } from '../../layers/settle';
-import { cutSurfaceIds } from '../../layers/surface';
+import { cutSurfaceIds, splitSurface } from '../../layers/surface';
+import { orbSpheres } from '../orb/orbs';
+import { canPickUp, PICKUP_BODY } from '../orb/rules';
 import {
   BRIDGE_SETTLE,
   bridgeFooting,
@@ -15,8 +17,12 @@ import {
   DROP_FLIGHT_SECONDS,
   FINALE_SECONDS,
   type FinaleEvent,
+  finaleFront,
+  legFronts,
   PrologueSession,
   SETTLE_SECONDS,
+  type ShortcutEvent,
+  steadyEase,
 } from '../prologue/session';
 import {
   type AreaDecl,
@@ -90,13 +96,18 @@ describe('rooms declared as data (S-36 エリアの仕組み)', () => {
     ]);
   });
 
-  it('says what is wrong: ids twice, a drop no sphere reaches, two settling rooms', () => {
+  it('says what is wrong: ids twice, a drop no sphere reaches, a sweep of light that cuts a segment in two', () => {
     expect(checkAreas(AREAS, MAIN_ORB_RADIUS)).toEqual([]);
     const twice: AreaDecl[] = [{ id: 'x', rooms: [ROOM_A, { ...ROOM_A, id: 'room-a2' }] }];
     const problems = checkAreas(twice, MAIN_ORB_RADIUS);
     expect(problems.some((p) => p.includes('pedestal "pa"'))).toBe(true);
     expect(problems.some((p) => p.includes('drop "drop-a"'))).toBe(true);
-    expect(problems.some((p) => p.includes('2 rooms settle'))).toBe(true);
+    // S-40: several settling rooms are allowed (each its own light); a box through the middle of a segment is not
+    expect(problems.some((p) => p.includes('settle'))).toBe(false);
+    const halfway: AreaDecl[] = [
+      { id: 'x', rooms: [{ ...ROOM_A, settle: { ...SETTLE, box: { ...SETTLE.box, max: [1.6, 2, 1] } } }] },
+    ];
+    expect(checkAreas(halfway, MAIN_ORB_RADIUS).some((p) => p.includes('a-bridge:4'))).toBe(true);
     const far: AreaDecl[] = [{ id: 'x', rooms: [{ ...ROOM_B, drop: { id: 'd', at: [26, 1.2, 0] } }] }];
     expect(checkAreas(far, MAIN_ORB_RADIUS)).toEqual(['drop "d" lies outside every sphere of room "room-b"']);
   });
@@ -248,5 +259,231 @@ describe('the drops of two rooms, counted by area', () => {
     expect(finale).toEqual([]);
     expect(s.finaleElapsed).toBeNull();
     expect(s.settledFooting()).toEqual([]);
+  });
+});
+
+/*
+ * S-40: an area with a shortcut home — two rooms side by side (C, D: a pedestal and a drop each), and stairs of the back layer
+ * from x 40 to 44 along z 10 (D's sphere holds their first few segments), with a gate of the surface layer at their end. Once
+ * both drops are taken, light runs the stairs in two legs (x 40→42, 42→45) and fixes them and takes the gate away.
+ */
+const C_ORB: Vec3 = [30, 1.05, 10];
+const D_ORB: Vec3 = [39, 1.05, 10];
+const STAIRS = splitFooting('s-stairs', { min: [40, -0.3, 9.4], max: [44, 0, 10.6] }, 0.4);
+const GATE = { id: 's-gate', box: { min: [44.2, 0, 9.2], max: [44.6, 2.2, 10.8] } as const };
+const LEGS: SettleSweep[] = [
+  { box: { min: [39.9, -1, 9], max: [42, 2.5, 11] }, direction: [1, 0, 0] },
+  { box: { min: [42, -1, 9], max: [45, 2.5, 11] }, direction: [1, 0, 0] },
+];
+const LOOP: AreaDecl = {
+  id: 'loop',
+  rooms: [
+    {
+      id: 'room-c',
+      pedestals: [{ id: 'pc', base: [30, 0, 10], orb: C_ORB }],
+      drop: { id: 'drop-c', at: [31, 1.2, 10] },
+    },
+    {
+      id: 'room-d',
+      pedestals: [{ id: 'pd', base: [39, 0, 10], orb: D_ORB }],
+      drop: { id: 'drop-d', at: [38, 1.2, 10] },
+    },
+  ],
+  shortcut: {
+    id: 'loop-home',
+    legs: LEGS,
+    seconds: 2,
+    footing: [{ id: 's-stairs', segments: STAIRS }],
+    surface: [GATE],
+  },
+};
+const ON_STAIRS: Vec3 = [40.5, 0, 10];
+
+function take(s: PrologueSession, pedestal: string, from: Vec3, drop: string): void {
+  s.interact({ kind: 'pedestal', id: pedestal }, from);
+  run(s, MATERIALIZE_SECONDS + 0.1);
+  expect(s.interact({ kind: 'drop', id: drop }, from)).toBe('touch-drop');
+  run(s, DROP_FLIGHT_SECONDS + 0.05);
+  expect(s.dropStateOf(drop)).toBe('taken');
+  s.interact({ kind: 'pedestal', id: pedestal }, from);
+  run(s, MATERIALIZE_SECONDS + 0.1);
+}
+
+describe('S-40: a shortcut home, fixed by the light once the area’s last drop is taken (エリアの内部構造)', () => {
+  it('is declared with the area: its footing and its gate are the session’s like any room’s; its legs cut nothing in two', () => {
+    expect(footingOf([LOOP]).map((s) => s.id)).toEqual(STAIRS.map((s) => s.id));
+    expect(surfaceOf([LOOP])).toEqual(surfaceSegments(GATE));
+    expect(checkAreas([LOOP], MAIN_ORB_RADIUS)).toEqual([]);
+    const s = new PrologueSession({ orbStart: 'hand', areas: [LOOP] });
+    expect(s.footing.map((q) => q.id)).toEqual(STAIRS.map((q) => q.id));
+    expect(s.settleLegCount).toBe(2);
+  });
+
+  it('nothing before the last drop; then the light runs the legs one after the other, fixing the stairs and the gate', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [LOOP] });
+    const events: ShortcutEvent[] = [];
+    s.shortcutEvents.on((e) => events.push(e));
+    take(s, 'pc', [30.5, 0, 10], 'drop-c');
+    expect(events).toEqual([]);
+    expect(s.settledFooting()).toEqual([]);
+    expect(s.shortcutProgress('loop')).toBe(0);
+    s.interact({ kind: 'pedestal', id: 'pd' }, [38.5, 0, 10]);
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    s.interact({ kind: 'drop', id: 'drop-d' }, [38.5, 0, 10]);
+    run(s, DROP_FLIGHT_SECONDS + 0.02);
+    expect(events).toEqual([{ type: 'settle', area: 'loop' }]);
+    // at first only the first leg's light runs; the second waits for it
+    const legs = s.settleLegs();
+    expect(legs.map((l) => l.sweep)).toEqual(LEGS);
+    expect(legs[0]?.front).not.toBeNull();
+    expect(legs[1]?.front).toBeNull();
+    // fixed in order, as the light passes, never a segment ahead of it
+    let last = 0;
+    for (let t = 0; t < 2.2; t += DT) {
+      s.step(DT, { wantPeek: false });
+      const fixed = s.settledFooting();
+      expect(fixed.length).toBeGreaterThanOrEqual(last);
+      expect(fixed).toEqual(STAIRS.slice(0, fixed.length).map((q) => q.id));
+      last = fixed.length;
+    }
+    expect(s.settledFooting()).toEqual(STAIRS.map((q) => q.id));
+    expect(s.settledSurface()).toEqual(surfaceSegments(GATE).map((q) => q.id));
+    expect(events.map((e) => e.type)).toEqual(['settle', 'settled']);
+    expect(s.shortcutProgress('loop')).toBe(1);
+    const done = s.settleLegs();
+    expect(done.map((l) => l.front)).toEqual(LEGS.map((l) => l.box.max[0]));
+  });
+
+  it('on its stairs, held by the vidro’s sphere, the vidro will not come — once they are fixed, it does (光で定着した足場の上では回収できる)', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [LOOP] });
+    s.holdDropTaken('drop-c');
+    s.interact({ kind: 'pedestal', id: 'pd' }, [38.5, 0, 10]);
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    expect(s.interact({ kind: 'pedestal', id: 'pd' }, ON_STAIRS)).toBe('pickup-denied');
+    s.interact({ kind: 'drop', id: 'drop-d' }, [38.5, 0, 10]);
+    run(s, DROP_FLIGHT_SECONDS + 2.1);
+    expect(s.settledFooting()).toContain(STAIRS[1]?.id);
+    expect(s.interact({ kind: 'pedestal', id: 'pd' }, ON_STAIRS)).toBe('pickup');
+  });
+
+  it('the prologue’s close and an area’s shortcut are two lights: both fixed together, the close’s events as they were', () => {
+    const areas: AreaDecl[] = [{ id: 'one', rooms: [ROOM_A] }, LOOP];
+    const s = new PrologueSession({ orbStart: 'hand', areas });
+    const finale: FinaleEvent[] = [];
+    s.finaleEvents.on((e) => finale.push(e));
+    expect(s.settleLegCount).toBe(3);
+    s.interact({ kind: 'pedestal', id: 'pa' }, BEFORE_A);
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    s.interact({ kind: 'drop', id: 'drop-a' }, [2.4, 0, 0]);
+    run(s, DROP_FLIGHT_SECONDS + FINALE_SECONDS + 0.1);
+    s.interact({ kind: 'pedestal', id: 'pa' }, BEFORE_A);
+    run(s, MATERIALIZE_SECONDS + 0.1);
+    s.holdDropTaken('drop-c');
+    take(s, 'pd', [38.5, 0, 10], 'drop-d');
+    run(s, 2.1);
+    expect(finale.map((e) => e.type)).toEqual(['settle', 'settled', 'gateOpen', 'gateOpened']);
+    expect(s.settledFooting()).toEqual([...bridge, ...STAIRS].map((q) => q.id));
+    expect(s.settleLegs().map((l) => l.front)).toEqual([SETTLE.box.max[0], ...LEGS.map((l) => l.box.max[0])]);
+  });
+
+  it('a dev hold: every drop of the area as if taken, the light held where it is', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [LOOP] });
+    const events: ShortcutEvent[] = [];
+    s.shortcutEvents.on((e) => events.push(e));
+    s.holdShortcut('loop', 0.6);
+    expect(s.areaCounts()).toEqual({ loop: { drops: 2, taken: 2 } });
+    const held = s.settledFooting();
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.length).toBeLessThan(STAIRS.length);
+    run(s, 3);
+    expect(s.settledFooting()).toEqual(held);
+    expect(events).toEqual([]);
+  });
+});
+
+describe('S-40: the light along several legs (legFronts)', () => {
+  it('one leg is the prologue’s curve (finaleFront)', () => {
+    for (const t of [0, 0.3, 0.8, SETTLE_SECONDS, 3])
+      expect(legFronts([SETTLE], SETTLE_SECONDS, t)[0]).toBeCloseTo(finaleFront(SETTLE, t), 9);
+  });
+
+  it('two legs: the second waits until the first is run, then the light goes on at the same pace', () => {
+    expect(legFronts(LEGS, 2, 0)).toEqual([LEGS[0]?.box.min[0], null]);
+    // the first leg is 2.1 m of the 5.1: past it a little after 2.1/5.1 of the way (eased)
+    let firstDone = -1;
+    for (let t = 0; t <= 2; t += 0.01) {
+      const [a, b] = legFronts(LEGS, 2, t);
+      if (b === null) expect(a).toBeLessThan(42 + 1e-9);
+      else {
+        expect(a).toBe(42);
+        if (firstDone < 0) firstDone = t;
+      }
+    }
+    expect(firstDone).toBeGreaterThan(0.5);
+    expect(firstDone).toBeLessThan(1.2);
+    expect(legFronts(LEGS, 2, 2)).toEqual([42, 45]);
+  });
+});
+
+describe('S-40: a shortcut’s light runs at a steady pace (steadyEase), not raced through its middle', () => {
+  it('starts and ends at rest, goes only forward, and keeps one speed between its short start and stop', () => {
+    expect(steadyEase(0)).toBe(0);
+    expect(steadyEase(1)).toBeCloseTo(1, 12);
+    let last = 0;
+    const speeds: number[] = [];
+    for (let u = 0.01; u <= 1 + 1e-9; u += 0.01) {
+      const v = steadyEase(u);
+      expect(v).toBeGreaterThanOrEqual(last);
+      speeds.push((v - last) / 0.01);
+      last = v;
+    }
+    const top = Math.max(...speeds);
+    // its top speed is the steady one (no more than 1 / (1 − ramp) times the mean), where the game's one curve doubles it
+    expect(top).toBeLessThan(1.3);
+    expect(speeds.filter((v) => v > top - 1e-6).length).toBeGreaterThan(50);
+  });
+
+  it('down a way of two legs, its front moves at about one speed from leg to leg', () => {
+    const fronts: number[] = [];
+    for (let t = 0; t <= 2 + 1e-9; t += 0.05) {
+      const [a, b] = legFronts(LEGS, 2, t, [], steadyEase);
+      fronts.push((b ?? 42) - 42 + ((a ?? 39.9) - 39.9));
+    }
+    const steps = fronts.slice(1).map((f, i) => f - (fronts[i] ?? 0));
+    const steady = steps.slice(Math.ceil(steps.length * 0.25), Math.floor(steps.length * 0.75));
+    expect(Math.max(...steady) - Math.min(...steady)).toBeLessThan(1e-6);
+  });
+});
+
+describe('S-40: the pickup’s exception is the rule’s (orb/rules PickUpContext.settled)', () => {
+  const orbs = [
+    {
+      id: 'main',
+      kind: 'main' as const,
+      pedestal: 'pd',
+      lastPedestal: 'pd',
+      materialize: { progress: 1, target: 1 as const },
+    },
+  ];
+  const pedestals = { pd: D_ORB };
+  const wall = splitSurface('w', { min: [40.2, 0, 9.4], max: [40.6, 2, 10.6] }, 0.4);
+
+  it('settled footing and settled walls are not asked about; the rest are, as before', () => {
+    expect(cutSurfaceIds(wall, orbSpheres(orbs, pedestals))).toEqual(wall.map((s) => s.id));
+    const base = { pedestals, footing: STAIRS, feet: ON_STAIRS };
+    expect(canPickUp(orbs, 'main', base)).toBe(false);
+    expect(canPickUp(orbs, 'main', { ...base, settled: { footing: STAIRS.map((s) => s.id) } })).toBe(true);
+    const inWall: Vec3 = [40.4, 0, 10];
+    const surface = { segments: wall, body: PICKUP_BODY };
+    expect(canPickUp(orbs, 'main', { pedestals, footing: [], surface, feet: inWall })).toBe(false);
+    expect(
+      canPickUp(orbs, 'main', {
+        pedestals,
+        footing: [],
+        surface,
+        feet: inWall,
+        settled: { surface: wall.map((s) => s.id) },
+      }),
+    ).toBe(true);
   });
 });

@@ -1,17 +1,27 @@
 import type { Vec3 } from '../../layers/footing';
 import {
   AREA1_CHIMNEY,
-  AREA1_GATE,
   AREA1_PLAZA,
   AREA1_SLOPE,
   AREA1_STREET,
-  area1SlopeHeight,
   eastOf,
   eastX,
+  NEXT_LAMPS_BY_ROOM,
   ROOM1_ALLEY,
   ROOM1_DROP,
   ROOM1_PEDESTAL,
   ROOM1_WALL,
+  ROOM2_BALCONY,
+  ROOM2_DROP,
+  ROOM2_PEDESTAL_B,
+  ROOM2_STAIRS,
+  ROOM2_STAIRS_FOOT_Z,
+  ROOM3_BRIDGE_N,
+  ROOM3_DROP,
+  ROOM3_EDGE,
+  ROOM3_PEDESTAL_N,
+  SHORTCUT_STAIRS,
+  SUMMIT_Y,
   TOWN,
 } from '../area1/layout';
 import type { PlayerIntent } from '../player/player';
@@ -39,7 +49,7 @@ import type { DropState, OrbPlace } from './session';
  * → (S-35) the view from the slope's brow → down the slope → across the plaza to its open east gate
  * → (S-36) along the road into the morning → エリア1's entrance plaza, up at the chimney → down the street to 部屋1: peek at the
  * crumbled wall (the drop behind it), place the vidro, through the wall, the drop, back out, the vidro picked up, a look
- * toward the next room (its lamps lighting).
+ * toward the next room (its lamps lighting) → (S-40) 部屋2, 部屋3, the shortcut home to the entrance plaza (area1Script).
  * Presentation timing only (seconds below are not design values).
  */
 export interface PilotState {
@@ -108,10 +118,18 @@ const SCRIPT: Step[] = [
   },
 ];
 
-/** S-36: エリア1, from the central plaza's east gate to 部屋1's drop and back out of the alley. */
+/**
+ * S-36: エリア1, from the central plaza's east gate to 部屋1's drop and back out of the alley. S-40: on up the slope — 部屋2 (peek
+ * at the balcony, the vidro on B, up the stair, through the wall to the drop, down, the vidro back), up to the summit — 部屋3
+ * (peek from the edge, the vidro on the north pedestal, over its bridge to the drop: the third, the shortcut's light runs),
+ * back over the bridge for the vidro, over it again and along the ridge, down the shortcut into the entrance plaza.
+ */
 function area1Script(): Step[] {
   const x = (ROOM1_ALLEY.minX + ROOM1_ALLEY.maxX) / 2 - 0.4;
   const wall = ROOM1_WALL.box;
+  const stairX = (ROOM2_STAIRS.minX + ROOM2_STAIRS.maxX) / 2;
+  const bridgeZ = (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2;
+  const stairsX = (SHORTCUT_STAIRS.minX + SHORTCUT_STAIRS.maxX) / 2;
   return [
     {
       kind: 'walk',
@@ -152,8 +170,76 @@ function area1Script(): Step[] {
     {
       kind: 'look',
       name: 'look-next',
-      at: [AREA1_SLOPE.x, area1SlopeHeight(AREA1_GATE.z) + 2, AREA1_GATE.z],
+      // S-40: the lamps up the first flight toward the courtyard
+      at: NEXT_LAMPS_BY_ROOM.room1.at(-1) as Vec3,
       seconds: 1.5,
+    },
+    // S-40 部屋2「二つの台座の中庭」: up the first flight to the landing, into the courtyard
+    { kind: 'walk', name: 'walk-corner', to: [AREA1_SLOPE.x, AREA1_STREET.z], within: 0.4 },
+    { kind: 'walk', name: 'walk-flight1', to: [AREA1_SLOPE.x, -143.0], within: 0.4 },
+    { kind: 'walk', name: 'walk-court', to: [eastX(127.6), -144.6], within: 0.3 },
+    { kind: 'peek', name: 'peek-court', at: ROOM2_DROP.at, seconds: 2.0 },
+    { kind: 'look', name: 'look-court-b', at: ROOM2_PEDESTAL_B.orb, seconds: 0.8 },
+    {
+      kind: 'use',
+      name: 'place-court',
+      at: ROOM2_PEDESTAL_B.orb,
+      until: (s) => s.sphereRadius > 3.99,
+      linger: 0.6,
+    },
+    { kind: 'walk', name: 'walk-stair-foot', to: [stairX, ROOM2_STAIRS_FOOT_Z - 0.8], within: 0.3 },
+    { kind: 'walk', name: 'walk-stair', to: [stairX, ROOM2_BALCONY.minZ + 0.6], within: 0.3 },
+    { kind: 'walk', name: 'walk-balcony', to: [ROOM2_DROP.at[0] + 0.5, ROOM2_DROP.at[2]], within: 0.3 },
+    { kind: 'use', name: 'touch-drop2', at: ROOM2_DROP.at, until: (s) => s.taken >= 3, linger: 1.0 },
+    { kind: 'walk', name: 'walk-balcony-back', to: [stairX, ROOM2_BALCONY.minZ + 0.6], within: 0.3 },
+    { kind: 'walk', name: 'walk-stair-down', to: [stairX, ROOM2_STAIRS_FOOT_Z - 0.8], within: 0.3 },
+    { kind: 'walk', name: 'walk-court-b', to: [ROOM2_PEDESTAL_B.base[0], -144.9], within: 0.3 },
+    {
+      kind: 'use',
+      name: 'pick-up-court',
+      at: ROOM2_PEDESTAL_B.orb,
+      until: (s) => s.orb === 'hand',
+      linger: 0.6,
+    },
+    // S-40 部屋3「煙突の見晴らし」: up the second flight to the summit, peek from the edge, the vidro on the north pedestal
+    { kind: 'walk', name: 'walk-landing', to: [AREA1_SLOPE.x, -144.0], within: 0.4 },
+    { kind: 'walk', name: 'walk-flight2', to: [AREA1_SLOPE.x, AREA1_SLOPE.toZ - 1.0], within: 0.4 },
+    { kind: 'walk', name: 'walk-edge', to: [ROOM3_EDGE[0], ROOM3_EDGE[2]], within: 0.3 },
+    { kind: 'peek', name: 'peek-valley', at: [eastX(110.6), SUMMIT_Y + 0.6, -162.6], seconds: 2.4 },
+    { kind: 'walk', name: 'walk-pedestal-n', to: [eastX(114.6), bridgeZ], within: 0.3 },
+    { kind: 'look', name: 'look-pedestal-n', at: ROOM3_PEDESTAL_N.orb, seconds: 0.8 },
+    {
+      kind: 'use',
+      name: 'place-summit',
+      at: ROOM3_PEDESTAL_N.orb,
+      until: (s) => s.sphereRadius > 3.99,
+      linger: 0.6,
+    },
+    { kind: 'walk', name: 'walk-bridge-n', to: [eastX(110.8), bridgeZ], within: 0.3 },
+    { kind: 'use', name: 'touch-drop3', at: ROOM3_DROP.at, until: (s) => s.taken >= 4, linger: 0.4 },
+    // the third drop: its light runs over the bridge and along the ridge, then down the shortcut — watch it go
+    {
+      kind: 'look',
+      name: 'look-shortcut',
+      at: [stairsX, SUMMIT_Y - 1, SHORTCUT_STAIRS.topZ + 2],
+      seconds: 3.2,
+    },
+    { kind: 'walk', name: 'walk-bridge-back', to: [eastX(114.6), bridgeZ], within: 0.3 },
+    {
+      kind: 'use',
+      name: 'pick-up-summit',
+      at: ROOM3_PEDESTAL_N.orb,
+      until: (s) => s.orb === 'hand',
+      linger: 0.6,
+    },
+    // over the settled bridge again, along the ridge to the stairs' top, down into the entrance plaza (帰り道の近道)
+    { kind: 'walk', name: 'walk-ridge', to: [stairsX, bridgeZ], within: 0.4, sprint: true },
+    { kind: 'walk', name: 'walk-shortcut', to: [stairsX, AREA1_PLAZA.center[2] - 5.5], within: 0.5 },
+    {
+      kind: 'look',
+      name: 'look-home',
+      at: [stairsX, SUMMIT_Y + 2, (SHORTCUT_STAIRS.topZ + SHORTCUT_STAIRS.footZ) / 2],
+      seconds: 1.2,
     },
   ];
 }
@@ -167,11 +253,21 @@ export class Autopilot {
 
   /**
    * S-36: play on past the east gate, along the road into the morning to 部屋1's drop and back out of the alley (?autoplay=1
-   * with &autoplayTo=area1; the room calls it before the first step). The script alone ends at the east gate as it did, so
-   * the sensors that time it (S-38) are as they were.
+   * with &autoplayTo=area1; the room calls it before the first step); S-40: on through 部屋2 and 部屋3 and down the shortcut
+   * into the entrance plaza. The script alone ends at the east gate as it did, so the sensors that time it (S-38) are as they
+   * were.
    */
   extendToArea1(): void {
     if (this.index === 0 && this.script === SCRIPT) this.script = [...SCRIPT, ...area1Script()];
+  }
+
+  /**
+   * S-40 (its unit test plays エリア1's part in a Rapier world): start at the named step instead of the first (unknown names
+   * leave it where it is). Before the first step only.
+   */
+  startAt(step: string): void {
+    const i = this.script.findIndex((s) => s.name === step);
+    if (this.index === 0 && i >= 0) this.index = i;
   }
   private elapsed = 0;
   private stillFor = 0;

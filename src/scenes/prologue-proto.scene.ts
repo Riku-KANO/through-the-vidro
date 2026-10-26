@@ -19,13 +19,16 @@ export const title =
  *   autoplay=1     the same, played by the script (S-04's home autoplay, then the in-room autopilot)
  *   direct=1       start in the workshop without the home;
  *                  spawn=bench|furnace|shelf|door|path|dead-end|far|gate|road|slope|plaza|east|south|west|film|
- *                  area1-road|area1-plaza|area1-alley|area1-wall|area1-gate
+ *                  area1-road|area1-plaza|area1-alley|area1-wall|area1-slope|area1-court|area1-court-a|area1-court-b|
+ *                  area1-summit|area1-edge|area1-shortcut|area1-shortcut-foot
  *                  (gate/road: S-34's gate and the road past it; S-35: slope = the slope's brow looking down to the plaza,
  *                  plaza = up at the broken lighthouse, east/south/west = the plaza's gates (east open, toward the dawn
  *                  since S-39), film = held at the film in the gate's arch, looking back at the vidro's pedestal;
  *                  S-36: area1-road = on the road where the sky moves toward morning, area1-plaza = up at the chimney from
  *                  エリア1's entrance plaza, area1-alley = before 部屋1's alley, area1-wall = before its crumbled wall looking at
- *                  where the drop hovers, area1-gate = before the slope's shut gate)
+ *                  where the drop hovers; S-40: area1-slope = up the slope toward 部屋2 (S-36's area1-gate), area1-court(-a/-b) = 部屋2's
+ *                  courtyard and its pedestals A and B, area1-summit / area1-edge = 部屋3's lookout and its edge over the valley,
+ *                  area1-shortcut(-foot) = the shortcut's stairs from the summit / at the entrance plaza)
  *   finaleHold=<s> (S-34, with a spawn) as if the drop had been taken that many seconds ago, held there: the light over
  *                  the bridge, what it has settled and the gate; &finaleOrb=hand: the vidro then taken back
  *                  (furnace/shelf/door: S-24's views of the interior)
@@ -35,9 +38,12 @@ export const title =
  *                  measures it at rest)
  *   peek=hold      keep peeking (the heaviest view, for measuring); peek=toggle: peek toggles per press
  *   peekHold=<0..1>, growHold=<0..1>   freeze the peek / a placed orb's growth (exact screenshots)
- *   autoplayTo=area1   (S-36) autoplay on to エリア1 部屋1's drop (by default it stops before the plaza's east gate)
+ *   autoplayTo=area1   (S-36, S-40) autoplay on through エリア1's three rooms and down the shortcut (by default it stops before
+ *                  the plaza's east gate)
  *   area1=lazy     (S-36, with a spawn in the town) build エリア1 behind the scenes as in play (by default before the first frame)
- *   area1Drop=taken    (S-36) start with 部屋1's drop taken (to see the next room's lamps)
+ *   area1Drop=taken    (S-36) start with 部屋1's drop taken (to see the next room's lamps); S-40: area1Drop=1,2 the rooms whose
+ *                  drops are taken
+ *   shortcutHold=<s>   (S-40, with a spawn) every drop of エリア1 taken and the shortcut's light held that many seconds in
  * Publishes window.__vidro.sceneProbe.room (game/prologue/room.ts RoomProbe) next to the home/dive probe, and
  * .sound (game/prologue/sound.ts SoundProbe): the room's events answered with po-pens and glass (S-16), silent until
  * the audio starts: through the home, the press of 「はじめる」 starts the page's one engine, shared by the home's drops

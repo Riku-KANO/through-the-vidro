@@ -130,3 +130,49 @@ describe('LayerField.assign (表・裏・共通の割り当て)', () => {
     );
   });
 });
+
+describe('S-40: several settled regions at once (定着の範囲を複数)', () => {
+  const sweep = { box: { min: [0, 0, -4], max: [1, 2, 0] } as const, direction: [0, 0, -1] as const };
+
+  it('takes as many as asked (S-34’s `settle: true` is one; none without the option)', () => {
+    expect(new LayerField().settleSlotCount).toBe(0);
+    expect(new LayerField({ settle: true }).settleSlotCount).toBe(1);
+    expect(new LayerField({ settle: 3 }).settleSlotCount).toBe(3);
+  });
+
+  it('each part of the world reads only its own slots: the default is the first (S-34’s shader), a range reads those', () => {
+    const field = new LayerField({ settle: 3 });
+    const shared = new THREE.MeshStandardNodeMaterial();
+    const a = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardNodeMaterial());
+    const b = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardNodeMaterial());
+    const c = new THREE.Mesh(new THREE.BoxGeometry(), shared);
+    const d = new THREE.Mesh(new THREE.BoxGeometry(), shared);
+    field.assign(a, 'back');
+    field.assign(b, 'back', { settleSlots: [1, 2] });
+    const slots = (m: THREE.Mesh) => (m.material as THREE.Material).userData.settleSlots;
+    expect(slots(a)).toEqual([0, 0]);
+    expect(slots(b)).toEqual([1, 2]);
+    // without the option, none
+    const plain = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardNodeMaterial());
+    new LayerField().assign(plain, 'back');
+    expect(slots(plain)).toBeNull();
+    // a material already patched for a kind keeps its first range (a drop's glass shared with the prologue)
+    field.assign(c, 'back');
+    field.assign(d, 'back', { settleSlots: [1, 2] });
+    expect(d.material).toBe(c.material);
+  });
+
+  it('a region in each slot is set and cleared on its own without throwing; a slot past the last is ignored', () => {
+    const field = new LayerField({ settle: 2 });
+    expect(() => field.setSettled({ sweep, front: -1, glow: 1 }, 0)).not.toThrow();
+    expect(() => field.setSettled({ sweep, front: -2, glow: 0.5 }, 1)).not.toThrow();
+    expect(() => field.setSettled(null, 1)).not.toThrow();
+    expect(() => field.setSettled({ sweep, front: -2, glow: 0.5 }, 7)).not.toThrow();
+    // the materials it patches carry the settled region's light (with one slot or many)
+    const m = new THREE.MeshStandardNodeMaterial();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), m);
+    field.assign(mesh, 'back');
+    expect((mesh.material as THREE.MeshStandardNodeMaterial).emissiveNode).not.toBeNull();
+    expect((mesh.material as THREE.MeshStandardNodeMaterial).maskNode).not.toBeNull();
+  });
+});

@@ -75,6 +75,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （`tests/e2e/S-30-furnace-colour.spec.ts`）。
 - **部屋の出来事の記録（`room.events` → `probe.events`）に新しい種類を足さない（S-34）。** S-16・S-18 の e2e は記録の名前をすべて音の表と照合し、
   知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`、ヒントの `room.hints`。S-39）。
+- **台本（autoplay）を伸ばしたら、まず `prologue/autopilot.test.ts` で Rapier とセッションに通す（S-40）。** 手の届かない所で押すと、
+  ブラウザの通しは待ちの上限（10 分）まで止まる。単体なら数秒で分かる。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
 
 ## コードの配置と書き込み範囲
@@ -211,7 +213,11 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **裏の層を表に定着させるときは、光の掃き（`src/layers/settle.ts`）で行う（S-34）。** 描画は `new LayerField({ settle: true })` と毎フレームの
   `setSettled(...)`（uniform だけ。オプションなしのシーンのシェーダは変わらない）。当たり判定は `settledSegmentIds` を `BackFooting.settle`・
   `SurfaceColliders.settle` へ。区画は光が全体を通り過ぎてから定着し、定着した足場の上では玉を拾える。箱は区画を切らない（`segmentsCutByBox` が空）。
-  エリアで使うときの課題: 定着の範囲は今は1つ、拾える例外はセッションの中（`PickUpContext.settled` へ移す）。
+  定着の範囲は複数（S-40）: 層の field は `new LayerField({ settle: n })` で n スロット（`setSettled(view, slot)`、`settle: true` は 1 スロットで
+  S-34 と同じシェーダ）。セッションは定着する部屋の道（序章の橋）とエリアの近道（`AreaDecl.shortcut`、区間を並べた光の道）を `settleLegs()` の
+  順に並べ、その順にスロットを割り当てる。区間の箱は軸に平行なので、光の道は方角に沿って区間に分けて置く（`checkAreas` が区画が二つに切れて
+  いないかを見る）。拾える例外は `orb/rules.ts` の `PickUpContext.settled`。一つの field を読む部分ごとに読むスロットを絞る（`assign(…,
+  { settleSlots })`、既定は 0 番だけ）。全部の材質に全部のスロットを読ませると読み込みの温めのフレームが伸びる（S-40: 3 スロットで WebGL2 913ms）。
 - **透過の材質は、最初に描く前にノードを1つ持たせる（three r186、S-12）。** ノードのない透過の材質（`MeshPhysicalNodeMaterial({ transmission })` だけ）の物は、
   描画の大きさが A → B → A と変わる間に画面外にいると、視界に戻ったときに破棄済みの背景画像のまま描かれる（WebGPU は毎フレーム
   「Destroyed texture used in a submit」で描画が捨てられ、WebGL2 は warning の「attempt to use a deleted object」）。動的解像度がプレイ中に倍率を
@@ -239,5 +245,11 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   パイプラインを作り終える。透過のガラスは `compileAsync` に入れない（画面と違う大きさの描画先）。three r186 の InstancedMesh は描画
   コンテキストごとに別のシェーダになって裏のコンパイルで温まらない（WebGL2 で初めて描くフレームが 100 ms 超）ので、後から足す物には使わず、
   1つの Mesh にまとめるか頂点を書く。読み込みで描く物に InstancedMesh を足すと、読み込みのフレームが延びる（WebGL2 で 0.5 秒）。
+- **後から足すエリアを視界の中で足すときは霞から出す（S-40、発案者の判断 2026-10-26）。** エリアの材質に、場面の霧の色（`area1/art.ts`
+  `hazeOf`）へ `1 − appear` で混ぜる `outputNode` を最初から付けて裏でコンパイルし（足し算の光は appear を掛ける）、足すときは部品を1つずつ
+  表示しながら appear を 0 → 1（3.5 秒）。当たり判定も数フレームに分けて作る。three の霧の作り（`fog()` の第1引数）が変わると `hazeOf` が
+  null になる（`area1/art.test.ts` が知らせる）。
+- **落下の見張りの地面（`area1Ground` など）は、裏の層の足場の下に表の床があるならその床を返す（S-40）。** 足場の高さを返すと、足場のない
+  ときにその下の床に立つ体を見張りが毎フレーム戻す。
 - **新しい場所のガラスは、区域ごとに InstancedMesh を分ける（S-35）。** 1つにすると境界球が全体を覆い、画面の外でも描かれる（通常と覗くパスの両方）。
 

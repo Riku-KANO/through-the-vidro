@@ -909,7 +909,8 @@ slices:
 
   - id: S-40
     title: エリア1の部屋2・3と近道 — 二つの台座の中庭、煙突の見晴らし、3つ目の雫で頂から入口の広場への裏の階段が定着する
-    status: todo
+    status: integrated
+    accepted: レビュー2巡で、1巡目の P2 7件を直し、2巡目は P1・P2 なし。全検査 ALL OK。霞から現れる間の最長フレーム 19.7〜20.7ms、読み込みのフレームは 280・281 回で S-36 から増えない。範囲外の src/game/orb/rules.ts（PickUpContext.settled、受け入れ条件そのもの）は統合で追認して paths に足した（2026-10-27）
     depends: [S-36]
     requirements:
       - パズル設計（原則、ギミック一覧：二重の台座、難易度の曲線：最後の部屋で初めて「置くと先が見えない」問題に向き合う）
@@ -917,7 +918,7 @@ slices:
       - 空間の可読性と導線（5 煙突の目印、6 次の場所が先に見える、9 行き止まりには理由）
     paths:
       - src/game/area1/**、src/game/area/**
-      - src/layers/**（定着の範囲を複数に。拾える例外をセッションの中から PickUpContext.settled へ）
+      - src/layers/**（定着の範囲を複数に。拾える例外をセッションの中から PickUpContext.settled へ）、src/game/orb/rules.ts（PickUpContext.settled。統合で追認）
       - src/game/prologue/room.ts、session.ts、autopilot.ts（配線と台本）
       - src/game/prologue/sound.ts、src/audio/**（近道が定着する音）
       - 上の単体テスト、tests/e2e/S-40-*.spec.ts、tests/e2e/S-06-*・S-36-*（通しを伸ばす分）

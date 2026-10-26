@@ -1,5 +1,11 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
-import { countSettled, type SettleSweep, settledSegmentIds, sweepFront } from '../../layers/settle';
+import {
+  countSettled,
+  type SettleSweep,
+  settledSegmentIds,
+  sweepFront,
+  sweepSpan,
+} from '../../layers/settle';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import {
   type AreaCount,
@@ -162,6 +168,12 @@ export type FinaleEvent =
   | { type: 'gateOpen' }
   | { type: 'gateOpened' };
 
+/**
+ * S-40: an area's shortcut home (game/area ShortcutDecl), on its own bus: the light starts along its way (the area's last drop
+ * taken) / has fixed all of it. Kept off the room's event log like the close's (S-34: the log's names are S-16's sounds).
+ */
+export type ShortcutEvent = { type: 'settle'; area: string } | { type: 'settled'; area: string };
+
 /** 0..1 of a span of `seconds`, `elapsed` into it; exactly 1 at its end (within float noise of many small steps). */
 export function progressOf(elapsed: number, seconds: number): number {
   if (elapsed >= seconds - 1e-9) return 1;
@@ -171,6 +183,88 @@ export function progressOf(elapsed: number, seconds: number): number {
 /** Where the light's front stands along the sweep `elapsed` seconds after the drop was taken (eased, 遷移のルール5). */
 export function finaleFront(sweep: SettleSweep, elapsed: number): number {
   return sweepFront(sweep, glassEase(progressOf(elapsed, SETTLE_SECONDS)));
+}
+
+/**
+ * S-40: where the light's front stands on each leg of a way of several sweeps (a shortcut's), `elapsed` seconds into its
+ * `seconds`: the light runs the legs one after the other as one way, eased over the whole of it (遷移のルール5: it slows only
+ * where it starts and where it ends), at one speed along each leg's direction. A leg the light has not reached yet is null;
+ * one it has passed stands at its far end. One leg is finaleFront's curve over `seconds`. Written into `out`.
+ */
+export function legFronts(
+  legs: readonly SettleSweep[],
+  seconds: number,
+  elapsed: number,
+  out: (number | null)[] = [],
+  ease: (u: number) => number = glassEase,
+): (number | null)[] {
+  let total = 0;
+  for (const leg of legs) {
+    const [lo, hi] = sweepSpan(leg);
+    total += hi - lo;
+  }
+  const s = ease(progressOf(elapsed, seconds)) * total;
+  let offset = 0;
+  out.length = legs.length;
+  legs.forEach((leg, k) => {
+    const [lo, hi] = sweepSpan(leg);
+    const span = hi - lo;
+    if (k > 0 && s <= offset + 1e-9) out[k] = null;
+    else out[k] = s >= offset + span - 1e-9 ? hi : lo + Math.max(0, s - offset);
+    offset += span;
+  });
+  return out;
+}
+
+/**
+ * 仮 (S-40): the share of a shortcut's seconds its light takes to get up to speed, and again to come to rest; between them it
+ * runs at one pace (S-40 review: on the game's one curve over the whole way it raced the stairs at 29 m/s).
+ */
+export const SHORTCUT_RAMP = 0.18;
+
+/**
+ * S-40: 0..1 → 0..1, the way a shortcut's light runs: easing in over the first `ramp` of the time, at a steady pace, easing out
+ * over the last (a trapezoid of speed; the position is its integral). Monotonic, 0 at 0, 1 at 1.
+ */
+export function steadyEase(u: number, ramp: number = SHORTCUT_RAMP): number {
+  const t = Math.min(1, Math.max(0, u));
+  const r = Math.min(0.5, Math.max(1e-6, ramp));
+  // the steady speed v so that the area under the trapezoid is 1: v (1 − r) = 1
+  const v = 1 / (1 - r);
+  if (t < r) return (v * t * t) / (2 * r);
+  if (t > 1 - r) {
+    const w = 1 - t;
+    return 1 - (v * w * w) / (2 * r);
+  }
+  return (v * r) / 2 + v * (t - r);
+}
+
+/**
+ * S-40: one way the light settles (S-34's close: a room's drop over its bridge; an area's shortcut once its last drop is taken),
+ * its legs in the order the light runs them, and how long it has been running (null: not yet).
+ */
+interface SettleRun {
+  readonly legs: readonly SettleSweep[];
+  readonly seconds: number;
+  /** What starts it: this drop taken (a room's), or every drop of this area taken (its shortcut's). */
+  readonly drop: string | null;
+  readonly area: string | null;
+  elapsed: number | null;
+  /** Dev holds: it does not move on. */
+  held: boolean;
+  /** Its legs' fronts now (null: not reached yet), written as it steps. */
+  readonly fronts: (number | null)[];
+}
+
+/** One leg of the light, as the room draws it (a slot of the field: layers/field.ts setSettled). */
+export interface SettleLegState {
+  /** Whose light: an area's shortcut (its id), or null for a settling room's (the prologue's bridge). */
+  area: string | null;
+  sweep: SettleSweep;
+  /** Its front now, or null when the light has not reached it (or its way has not started). */
+  front: number | null;
+  /** 0..1, linear in time: how far its way's light has run (the band's brightness follows it). */
+  progress: number;
 }
 
 /** What 置く・拾う・調べる act on. A drop without an id is the first room's (the prologue's). */
@@ -244,6 +338,28 @@ export function peekModifier(amount: number): MovementModifier {
 
 const MAIN = 'main';
 
+function run(
+  legs: readonly SettleSweep[],
+  seconds: number,
+  trigger: { drop: string } | { area: string },
+): SettleRun {
+  return {
+    legs,
+    seconds,
+    drop: 'drop' in trigger ? trigger.drop : null,
+    area: 'area' in trigger ? trigger.area : null,
+    elapsed: null,
+    held: false,
+    fronts: legs.map(() => null),
+  };
+}
+
+/** Moves a way of light to `elapsed` seconds, its legs' fronts with it (a shortcut's at its steady pace: steadyEase). */
+function setElapsed(r: SettleRun, elapsed: number): void {
+  r.elapsed = elapsed;
+  legFronts(r.legs, r.seconds, elapsed, r.fronts, r.area === null ? glassEase : steadyEase);
+}
+
 /** Does the time from `was` to `now` reach `at` (within float noise of many small steps)? */
 function crosses(was: number, now: number, at: number): boolean {
   return was < at - 1e-9 && now >= at - 1e-9;
@@ -256,15 +372,20 @@ export class PrologueSession {
   readonly finaleEvents = new EventBus<FinaleEvent>();
   /** S-39: the hints (HintEvent: the vidro's whisper), apart from `events` and the close's. */
   readonly hintEvents = new EventBus<HintEvent>();
+  /** S-40: the areas' shortcuts settling (ShortcutEvent), apart from the others. */
+  readonly shortcutEvents = new EventBus<ShortcutEvent>();
 
   /** S-36: the rooms played, and what the session asks of them all together. */
   readonly areas: readonly AreaDecl[];
   readonly pedestals: Readonly<Record<string, Vec3>>;
   readonly footing: readonly FootingSegment[];
   readonly surface: readonly FootingSegment[];
-  /** S-34: the sweep of the room whose drop settles (at most one: S-40 makes them many), and that drop's id. */
+  /** S-34: the sweep of the first room whose drop settles (the close: its gate opens), and that drop's id. */
   readonly settle: SettleSweep | null;
   private readonly settleDrop: string | null;
+  /** S-40: every way the light settles: each settling room's, each area's shortcut; the close's (S-34) is the first room's. */
+  private readonly runs: SettleRun[] = [];
+  private readonly closeRun: SettleRun | null;
   private readonly drops: DropTally;
   private readonly countsOut: Record<string, AreaCount> = {};
 
@@ -274,11 +395,8 @@ export class PrologueSession {
   private hand: Tween;
   private shakeLeft = 0;
   private sphereCache: { orbs: readonly Orb[]; spheres: OrbSphere[] } | null = null;
-  /** S-34: seconds since the drop was taken (null before). */
-  private finaleAt: number | null = null;
-  /** Dev hold (holdFinale): the close does not move on. */
-  private finaleHeld = false;
-  private settledCache: { front: number; footing: string[]; surface: string[] } | null = null;
+  /** What the light has fixed, by how many segments it has (it only grows: the same count is the same set). */
+  private settledCache: { count: number; footing: string[]; surface: string[] } | null = null;
   /** S-35: the film at the slope's entrance (up while the vidro is not in hand) and the left-behind vidro's call, linear. */
   private filmTween: Tween;
   private callValue = 0;
@@ -298,10 +416,13 @@ export class PrologueSession {
     this.footing = options.areas ? footingOf(areas) : (options.footing ?? []);
     this.surface = options.areas ? surfaceOf(areas) : (options.surface ?? []);
     const settling = areas.flatMap((a) => a.rooms.filter((r) => r.settle));
-    if (settling.length > 1)
-      throw new Error(`PrologueSession: ${settling.length} rooms settle (one at most, S-40)`);
     this.settle = settling[0]?.settle ?? null;
     this.settleDrop = settling[0]?.drop?.id ?? null;
+    for (const r of settling)
+      if (r.settle && r.drop) this.runs.push(run([r.settle], SETTLE_SECONDS, { drop: r.drop.id }));
+    this.closeRun = this.runs[0] ?? null;
+    for (const a of areas)
+      if (a.shortcut) this.runs.push(run(a.shortcut.legs, a.shortcut.seconds, { area: a.id }));
     this.drops = new DropTally(areas, DROP_FLIGHT_SECONDS);
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
@@ -422,6 +543,11 @@ export class PrologueSession {
     return this.sphereCache.spheres;
   }
 
+  /** S-34: seconds since the close's drop was taken (null before). */
+  private get finaleAt(): number | null {
+    return this.closeRun?.elapsed ?? null;
+  }
+
   /** S-34: 0..1, linear in time since the drop was taken: the light across the bridge (SETTLE_SECONDS). */
   get settleProgress(): number {
     return this.finaleAt === null ? 0 : progressOf(this.finaleAt, SETTLE_SECONDS);
@@ -446,38 +572,100 @@ export class PrologueSession {
     return sweep && this.finaleAt !== null ? finaleFront(sweep, this.finaleAt) : null;
   }
 
-  /** S-34: ids of the bridge's footing segments the light has fixed, in segment order (the same array until it moves). */
+  /**
+   * S-34: ids of the footing segments the light has fixed, in segment order (the same array until it grows). S-40: of every
+   * way it has run (the prologue's bridge, the shortcuts).
+   */
   settledFooting(): readonly string[] {
     return this.settled()?.footing ?? NONE;
   }
 
-  /** S-34: ids of the surface-only segments the light has fixed as cut, in segment order. */
+  /** S-34: ids of the surface-only segments the light has fixed as cut, in segment order (S-40: of every way). */
   settledSurface(): readonly string[] {
     return this.settled()?.surface ?? NONE;
   }
 
+  /** S-40: how many legs of light the session has (the room's field takes one slot per leg: settleLegs). */
+  get settleLegCount(): number {
+    let n = 0;
+    for (const r of this.runs) n += r.legs.length;
+    return n;
+  }
+
   /**
-   * What the light has fixed. The light only moves on, so the same number of settled segments is the same set: the lists
-   * are made again only when it grows (a few times while the light crosses, not every frame).
+   * S-40: every leg of every way the light settles, in a fixed order (the settling rooms', then the areas' shortcuts', each
+   * way's legs in order) — the room gives each its own slot of the field. Written into `out` (no allocation once filled).
+   */
+  settleLegs(out: SettleLegState[] = []): SettleLegState[] {
+    let i = 0;
+    for (const r of this.runs) {
+      const progress = r.elapsed === null ? 0 : progressOf(r.elapsed, r.seconds);
+      for (let k = 0; k < r.legs.length; k++) {
+        const sweep = r.legs[k] as SettleSweep;
+        const front = r.elapsed === null ? null : (r.fronts[k] ?? null);
+        const o = out[i];
+        if (o) {
+          o.area = r.area;
+          o.sweep = sweep;
+          o.front = front;
+          o.progress = progress;
+        } else out[i] = { area: r.area, sweep, front, progress };
+        i++;
+      }
+    }
+    out.length = i;
+    return out;
+  }
+
+  /** S-40: 0..1, linear in time: how far an area's shortcut's light has run (0 before its last drop is taken). */
+  shortcutProgress(area: string): number {
+    const r = this.runs.find((q) => q.area === area);
+    return r?.elapsed == null ? 0 : progressOf(r.elapsed, r.seconds);
+  }
+
+  /** S-40: seconds since an area's shortcut started to settle, or null before (or with no shortcut). */
+  shortcutElapsed(area: string): number | null {
+    return this.runs.find((q) => q.area === area)?.elapsed ?? null;
+  }
+
+  /**
+   * What the light has fixed, over every way it has run. The light only moves on, so the same number of settled segments
+   * is the same set: the lists are made again only when it grows (a few times while the light crosses, not every frame).
    */
   private settled(): { footing: string[]; surface: string[] } | null {
-    const sweep = this.settle;
-    const front = this.settleFront;
-    if (!sweep || front === null) return null;
-    const cache = this.settledCache;
-    if (cache?.front === front) return cache;
     const footing = this.footing;
     const surface = this.surface;
-    const nFooting = countSettled(footing, sweep, front);
-    const nSurface = countSettled(surface, sweep, front);
-    if (cache && cache.footing.length === nFooting && cache.surface.length === nSurface) {
-      cache.front = front;
-      return cache;
+    let count = 0;
+    let any = false;
+    for (const r of this.runs) {
+      if (r.elapsed === null) continue;
+      any = true;
+      for (let k = 0; k < r.legs.length; k++) {
+        const front = r.fronts[k];
+        const leg = r.legs[k] as SettleSweep;
+        if (front == null) continue;
+        count += countSettled(footing, leg, front) + countSettled(surface, leg, front);
+      }
+    }
+    if (!any) return null;
+    const cache = this.settledCache;
+    if (cache?.count === count) return cache;
+    const fixedFooting = new Set<string>();
+    const fixedSurface = new Set<string>();
+    for (const r of this.runs) {
+      if (r.elapsed === null) continue;
+      for (let k = 0; k < r.legs.length; k++) {
+        const front = r.fronts[k];
+        const leg = r.legs[k] as SettleSweep;
+        if (front == null) continue;
+        for (const id of settledSegmentIds(footing, leg, front)) fixedFooting.add(id);
+        for (const id of settledSegmentIds(surface, leg, front)) fixedSurface.add(id);
+      }
     }
     this.settledCache = {
-      front,
-      footing: settledSegmentIds(footing, sweep, front),
-      surface: settledSegmentIds(surface, sweep, front),
+      count,
+      footing: footing.filter((seg) => fixedFooting.has(seg.id)).map((seg) => seg.id),
+      surface: surface.filter((seg) => fixedSurface.has(seg.id)).map((seg) => seg.id),
     };
     return this.settledCache;
   }
@@ -488,9 +676,23 @@ export class PrologueSession {
    * The orb is the caller's to place.
    */
   holdFinale(elapsed: number): void {
+    const close = this.closeRun;
+    if (!close) return;
     if (this.settleDrop !== null) this.drops.setTaken(this.settleDrop);
-    this.finaleAt = Math.max(0, elapsed);
-    this.finaleHeld = true;
+    setElapsed(close, Math.max(0, elapsed));
+    close.held = true;
+  }
+
+  /**
+   * S-40 dev holds (the room's ?shortcutHold): every drop of the area as if taken, and its shortcut's light `elapsed` seconds
+   * along, held there (drawn, collided and asked by the pickup alike). No events.
+   */
+  holdShortcut(area: string, elapsed: number): void {
+    const r = this.runs.find((q) => q.area === area);
+    if (!r) return;
+    for (const d of this.drops.drops) if (d.area === area) this.drops.setTaken(d.id);
+    setElapsed(r, Math.max(0, elapsed));
+    r.held = true;
   }
 
   /**
@@ -522,16 +724,33 @@ export class PrologueSession {
     this.orbsValue = stepOrbs(this.orbsValue, dt);
     this.hand = stepTween(this.hand, dt, HAND_SECONDS);
     this.shakeLeft = Math.max(0, this.shakeLeft - dt);
-    if (this.finaleAt !== null) this.stepFinale(dt);
+    for (const r of this.runs) {
+      if (r.elapsed === null || r.held) continue;
+      const was = r.elapsed;
+      setElapsed(r, was + dt);
+      if (r === this.closeRun) this.stepFinale(was, was + dt);
+      else if (r.area !== null && crosses(was, was + dt, r.seconds))
+        this.shortcutEvents.emit({ type: 'settled', area: r.area });
+    }
     if (input.feet) this.feetZ = input.feet[2];
     this.pushing = input.pushing ?? false;
     this.stepMembrane(dt);
     for (const id of this.drops.step(dt)) {
       this.events.emit({ type: 'dropTaken' });
       // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale) — the settling room's drop only
-      if (id === this.settleDrop && this.finaleAt === null) {
-        this.finaleAt = 0;
-        this.finaleEvents.emit({ type: 'settle' });
+      // S-40: and once an area's last drop is taken, the light runs along its shortcut home
+      const area = this.drops.drop(id)?.area ?? null;
+      const complete =
+        area !== null && this.drops.taken(area) === this.drops.drops.filter((d) => d.area === area).length;
+      for (const r of this.runs) {
+        if (r.elapsed !== null) continue;
+        if (r.drop === id) {
+          setElapsed(r, 0);
+          if (r === this.closeRun) this.finaleEvents.emit({ type: 'settle' });
+        } else if (r.area !== null && r.area === area && complete) {
+          setElapsed(r, 0);
+          this.shortcutEvents.emit({ type: 'settle', area });
+        }
       }
     }
   }
@@ -569,11 +788,7 @@ export class PrologueSession {
     }
   }
 
-  private stepFinale(dt: number): void {
-    if (this.finaleHeld) return;
-    const was = this.finaleAt ?? 0;
-    const now = was + dt;
-    this.finaleAt = now;
+  private stepFinale(was: number, now: number): void {
     // once each, when the time crosses its moment (within float noise, like stepTween): the light across, and with it
     // the gate starting to open; the gate open
     if (crosses(was, now, SETTLE_SECONDS)) this.finaleEvents.emit({ type: 'settled' });
@@ -621,16 +836,15 @@ export class PrologueSession {
     }
     if (at !== id) return 'nothing';
     // S-34: what the drop's light has fixed is no longer this orb's to hold: on the settled bridge the orb comes (the
-    // exception to 実体化した足場の上にいるときは回収できない), and a settled surface-only wall stays cut
+    // exception to 実体化した足場の上にいるときは回収できない), and a settled surface-only wall stays cut (S-40: the rule's own
+    // exception, orb/rules PickUpContext.settled)
     const settled = this.settled();
-    const unsettled = (segments: readonly FootingSegment[], ids: readonly string[] | undefined) =>
-      ids && ids.length > 0 ? segments.filter((seg) => !ids.includes(seg.id)) : segments;
-    const surface = unsettled(this.surface, settled?.surface);
     const ctx = {
       pedestals: this.pedestals,
-      footing: unsettled(this.footing, settled?.footing),
-      surface: surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
+      footing: this.footing,
+      surface: this.surface.length > 0 ? { segments: this.surface, body: PICKUP_BODY } : undefined,
       feet,
+      settled: settled ?? undefined,
     };
     if (!canPickUp(this.orbsValue, MAIN, ctx)) {
       this.tremble('pickup');

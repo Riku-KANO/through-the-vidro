@@ -10,6 +10,7 @@ import {
   AREA1_PLAZA,
   AREA1_SLOPE,
   AREA1_STREET,
+  area1Ground,
   eastOf,
   eastX,
   ROOM1_DROP,
@@ -35,7 +36,7 @@ import {
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import type { FinaleEvent, HintEvent } from './session';
+import type { FinaleEvent, HintEvent, ShortcutEvent } from './session';
 import {
   AREA1_AMBIENCE,
   answer,
@@ -45,6 +46,7 @@ import {
   cueFor,
   cueName,
   PROLOGUE_AMBIENCE,
+  SHORTCUT_SOUND_FROM,
   type SoundBanks,
   type SoundCue,
   type SoundOptions,
@@ -386,6 +388,7 @@ function fakeRoom(): SoundRoom & {
   events: EventBus<PrologueEvent>;
   finale: EventBus<FinaleEvent>;
   hints: EventBus<HintEvent>;
+  shortcut: EventBus<ShortcutEvent>;
   probe: FakeRoomProbe;
 } {
   const camera = new THREE.PerspectiveCamera();
@@ -395,6 +398,7 @@ function fakeRoom(): SoundRoom & {
     events: new EventBus<PrologueEvent>(),
     finale: new EventBus<FinaleEvent>(),
     hints: new EventBus<HintEvent>(),
+    shortcut: new EventBus<ShortcutEvent>(),
     camera,
     probe: {
       orb: 'hand',
@@ -1335,5 +1339,77 @@ describe('S-36: エリア1’s morning (朝の風、遠くの風鈴), placed in 
       zone: 'area1-alley',
       material: 'stone',
     });
+  });
+});
+
+describe('S-40: エリア1’s shortcut settling (近道が定着する音: the bridge’s sound, from the light as it runs)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const withShortcut = (): SoundBanks => ({ ...fakeBanks(), shortcut: fakeBuffer('shortcut', 6.9) });
+
+  it('sounds once as its light starts, from where it starts (by the north pedestal), then follows the light', async () => {
+    const r = soundscapeRig(false, withShortcut);
+    await r.begin();
+    r.frame();
+    const before = r.engine.started.length;
+    r.room.shortcut.emit({ type: 'settle', area: 'area1' });
+    expect(r.engine.started.length).toBe(before + 1);
+    expect(tagOf(r.engine.ctx.sources.at(-1))).toBe('shortcut');
+    const emitter = r.engine.voiceEmitters.at(-1);
+    expect(emitter?.bus).toBe('sfx');
+    expect(emitter?.position.x).toBeCloseTo(SHORTCUT_SOUND_FROM[0], 6);
+    expect(emitter?.position.z).toBeCloseTo(SHORTCUT_SOUND_FROM[2], 6);
+    // the light moves on down the stairs: the sound with it
+    const probe = r.room.probe as { area1?: { state: string; shortcut?: { front: Vec3 | null } } };
+    probe.area1 = { state: 'ready', shortcut: { front: [96, -6, -147] } };
+    r.frame();
+    expect(emitter?.position.x).toBeCloseTo(96, 6);
+    expect(emitter?.position.z).toBeCloseTo(-147, 6);
+    // through: it stays where the light stopped
+    r.room.shortcut.emit({ type: 'settled', area: 'area1' });
+    probe.area1 = { state: 'ready', shortcut: { front: null } };
+    r.frame();
+    expect(emitter?.position.z).toBeCloseTo(-147, 6);
+    const s = r.sound.probe.shortcut;
+    expect(s.ready).toBe(true);
+    expect(s.played).toHaveLength(1);
+    expect(s.refused).toEqual([]);
+    expect(s.voicesStarted).toBe(1);
+    // counted apart from the cues (S-16's table)
+    expect(r.sound.probe.playedCount).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('before the audio (or its sound) is there, it is refused and never played later', async () => {
+    const r = soundscapeRig(false, withShortcut);
+    r.room.shortcut.emit({ type: 'settle', area: 'area1' });
+    expect(r.sound.probe.shortcut.refused).toEqual(['settle']);
+    await r.begin();
+    for (let i = 0; i < 30; i++) r.frame();
+    expect(r.sound.probe.shortcut.played).toEqual([]);
+    r.sound.dispose();
+  });
+
+  it('エリア1’s far chimes hang more than 10 m from anywhere you walk in it (音だけ: S-40 moved them off 部屋2’s balcony)', () => {
+    const chimes = AREA1_AMBIENCE.find((p) => p.id === 'chimes:area1')?.position as Vec3;
+    let nearest = Number.POSITIVE_INFINITY;
+    for (let x = 80; x <= 145; x += 0.5)
+      for (let z = -176; z <= -105; z += 0.5) {
+        const g = area1Ground(x, z);
+        if (g === null) continue;
+        nearest = Math.min(nearest, Math.hypot(x - chimes[0], g + 1.6 - chimes[1], z - chimes[2]));
+      }
+    expect(nearest).toBeGreaterThan(10);
+  });
+
+  it('with no shortcut sound loaded (a failed render), it stays silent and says so', async () => {
+    const r = soundscapeRig();
+    await r.begin();
+    r.frame();
+    r.room.shortcut.emit({ type: 'settle', area: 'area1' });
+    expect(r.sound.probe.shortcut.ready).toBe(false);
+    expect(r.sound.probe.shortcut.refused).toEqual(['settle']);
+    r.sound.dispose();
   });
 });
