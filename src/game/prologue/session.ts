@@ -196,13 +196,14 @@ export function legFronts(
   seconds: number,
   elapsed: number,
   out: (number | null)[] = [],
+  ease: (u: number) => number = glassEase,
 ): (number | null)[] {
   let total = 0;
   for (const leg of legs) {
     const [lo, hi] = sweepSpan(leg);
     total += hi - lo;
   }
-  const s = glassEase(progressOf(elapsed, seconds)) * total;
+  const s = ease(progressOf(elapsed, seconds)) * total;
   let offset = 0;
   out.length = legs.length;
   legs.forEach((leg, k) => {
@@ -213,6 +214,29 @@ export function legFronts(
     offset += span;
   });
   return out;
+}
+
+/**
+ * 仮 (S-40): the share of a shortcut's seconds its light takes to get up to speed, and again to come to rest; between them it
+ * runs at one pace (S-40 review: on the game's one curve over the whole way it raced the stairs at 29 m/s).
+ */
+export const SHORTCUT_RAMP = 0.18;
+
+/**
+ * S-40: 0..1 → 0..1, the way a shortcut's light runs: easing in over the first `ramp` of the time, at a steady pace, easing out
+ * over the last (a trapezoid of speed; the position is its integral). Monotonic, 0 at 0, 1 at 1.
+ */
+export function steadyEase(u: number, ramp: number = SHORTCUT_RAMP): number {
+  const t = Math.min(1, Math.max(0, u));
+  const r = Math.min(0.5, Math.max(1e-6, ramp));
+  // the steady speed v so that the area under the trapezoid is 1: v (1 − r) = 1
+  const v = 1 / (1 - r);
+  if (t < r) return (v * t * t) / (2 * r);
+  if (t > 1 - r) {
+    const w = 1 - t;
+    return 1 - (v * w * w) / (2 * r);
+  }
+  return (v * r) / 2 + v * (t - r);
 }
 
 /**
@@ -234,6 +258,8 @@ interface SettleRun {
 
 /** One leg of the light, as the room draws it (a slot of the field: layers/field.ts setSettled). */
 export interface SettleLegState {
+  /** Whose light: an area's shortcut (its id), or null for a settling room's (the prologue's bridge). */
+  area: string | null;
   sweep: SettleSweep;
   /** Its front now, or null when the light has not reached it (or its way has not started). */
   front: number | null;
@@ -328,10 +354,10 @@ function run(
   };
 }
 
-/** Moves a way of light to `elapsed` seconds, its legs' fronts with it. */
+/** Moves a way of light to `elapsed` seconds, its legs' fronts with it (a shortcut's at its steady pace: steadyEase). */
 function setElapsed(r: SettleRun, elapsed: number): void {
   r.elapsed = elapsed;
-  legFronts(r.legs, r.seconds, elapsed, r.fronts);
+  legFronts(r.legs, r.seconds, elapsed, r.fronts, r.area === null ? glassEase : steadyEase);
 }
 
 /** Does the time from `was` to `now` reach `at` (within float noise of many small steps)? */
@@ -579,10 +605,11 @@ export class PrologueSession {
         const front = r.elapsed === null ? null : (r.fronts[k] ?? null);
         const o = out[i];
         if (o) {
+          o.area = r.area;
           o.sweep = sweep;
           o.front = front;
           o.progress = progress;
-        } else out[i] = { sweep, front, progress };
+        } else out[i] = { area: r.area, sweep, front, progress };
         i++;
       }
     }

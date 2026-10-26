@@ -4,9 +4,10 @@ import { expect, type Page, test } from '@playwright/test';
 
 /**
  * S-36: エリア1's way in and its first room, on both render paths.
- *  1. the scripted play (?autoplay=1): home → dive → the prologue → the central plaza, where エリア1 is built and warmed
- *     behind the scenes (out of view), → along the road into the morning → the entrance plaza → 部屋1: peek, place, through
- *     the crumbled wall, the drop, back out, the vidro picked up. A tracer (as S-38's) notes every render pipeline three
+ *  1. the scripted play (?autoplay=1): home → dive → the prologue → the slope's brow, from where エリア1 is built and warmed
+ *     behind the scenes (S-40: added at once out of view, or out of the haze in view) → along the road into the morning →
+ *     the entrance plaza → 部屋1: peek, place, through the crumbled wall, the drop, back out, the vidro picked up (S-40: on
+ *     through 部屋2 and 部屋3 and down the shortcut, tests/e2e/S-40-*.spec.ts). A tracer (as S-38's) notes every render pipeline three
  *     makes: none for glass while playing, none at all once エリア1 is ready (it was all made before it was seen). The
  *     longest frame while エリア1 is built and warmed; the loading's warm-up frame within 300 draw calls and a second
  *  2. along the road with real input: the sky goes from before dawn to morning as you walk east, and back as you walk back
@@ -361,7 +362,7 @@ for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-36', backend);
 
-  test(`S-36 autoplay: the plaza builds エリア1 out of view, the road into the morning, 部屋1's drop; nothing compiled once it is seen [${backend}]`, async ({
+  test(`S-36 autoplay: エリア1 built from the brow (added out of view, or out of the haze), the road into the morning, its rooms; nothing compiled once it is seen [${backend}]`, async ({
     page,
   }) => {
     test.setTimeout(660_000);

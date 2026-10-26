@@ -121,7 +121,7 @@ const BUDGET = { drawCalls: 300, triangles: 1_500_000 };
 /** S-06's limit on a frame of play. */
 const PLAY_FRAME_MS = 200;
 /** The aim on the slope and the road while エリア1 is added (spine S-40: 目安 50 ms); asserted with headroom for a busy GPU. */
-const ADD_FRAME_MS = 100;
+const ADD_FRAME_MS = 60;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -330,12 +330,22 @@ for (const backend of backends) {
       const q = await peekShot(page, join(shotDir, `${name}.png`));
       expect(q.peeking).toBe(true);
       budget[name] = { drawCalls: q.drawCalls, triangles: q.triangles };
+      // (S-40 review: what the peek costs depends on where it looks — toward the town (north-west) both the frame and the peek
+      // image draw it; the same place peeking the other way, for the record)
+      if (name !== 'edge-peek') {
+        await lookAt(page, [q.position.x + 10, q.position.y + q.eyeHeight + 1, q.position.z - 2]);
+        await page.waitForTimeout(300);
+        const away = await peekShot(page, join(shotDir, `${name}-east.png`));
+        budget[`${name}-east`] = { drawCalls: away.drawCalls, triangles: away.triangles };
+      }
     }
-    // the shortcut's light (エリア1's drops all taken, held): along the ridge, down the stairs, then fixed for good
+    // the shortcut's light (エリア1's drops all taken, held): along the ridge, down the stairs, then fixed for good. At its
+    // steady pace (8.5 m/s: session.ts steadyEase) it is on the ridge at 1.6 s, 5 m down the stairs at 3.4 s, 7 m from the
+    // gate at 4.6 s
     for (const [name, spawn, seconds] of [
-      ['shortcut-ridge', 'area1-summit', 1.1],
-      ['shortcut-stairs', 'area1-shortcut', 2.9],
-      ['shortcut-arrives', 'area1-shortcut-foot', 3.9],
+      ['shortcut-ridge', 'area1-summit', 1.6],
+      ['shortcut-stairs', 'area1-shortcut', 3.4],
+      ['shortcut-arrives', 'area1-shortcut-foot', 4.6],
       ['shortcut-fixed', 'area1-shortcut', 10],
       ['shortcut-fixed-foot', 'area1-shortcut-foot', 10],
     ] as const) {
@@ -366,6 +376,14 @@ for (const backend of backends) {
     // the lamps toward 部屋2 read as lights once 部屋1's drop is taken
     expect(shots['slope-next']?.warm ?? 0, 'the lit lamps toward 部屋2').toBeGreaterThan(
       (shots.slope?.warm ?? 0) + 0.0015,
+    );
+    // the shortcut's light reads as light where it runs (原則4: 解けた理由が光で見える): warm bright pixels on the stairs from
+    // their top and coming down to the gate, against the same views once it is through
+    expect(shots['shortcut-stairs']?.warm ?? 0, 'the light down the stairs').toBeGreaterThan(
+      (shots['shortcut-fixed']?.warm ?? 0) + 0.001,
+    );
+    expect(shots['shortcut-arrives']?.warm ?? 0, 'the light coming to the gate').toBeGreaterThan(
+      (shots['shortcut-fixed-foot']?.warm ?? 0) + 0.001,
     );
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);
@@ -576,6 +594,7 @@ for (const backend of backends) {
     });
     const { chimneyTop } = r0.layout.area1;
     const appears: number[] = [];
+    let midway = false;
     // facing east (the chimney's side) and walking down the slope sideways (facing east, the left hand is south)
     await lookAt(page, [r0.position.x + 30, r0.position.y + r0.eyeHeight + 6, r0.position.z]);
     await page.keyboard.down('KeyA');
@@ -584,6 +603,11 @@ for (const backend of backends) {
       for (const end = Date.now() + 120_000; Date.now() < end; ) {
         const r = await room(page);
         appears.push(r.area1.appear);
+        // one picture while it comes out of the haze (S-40 review: no ghost of the haze's colour against the sky)
+        if (!midway && r.area1.addedInView && r.area1.appear > 0.2 && r.area1.appear < 0.6) {
+          midway = true;
+          await page.screenshot({ path: join(shotDir, 'east-appearing.png') });
+        }
         if (r.position.z < r0.layout.slopeEndZ - 1.5) break;
         // keep facing east
         const dYaw = wrap(Math.atan2(-1, 0) - r.yaw);

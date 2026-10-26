@@ -6,6 +6,7 @@ import { LayerField } from '../../layers/field';
 import { EYE_HEIGHT, FOV_DEFAULT } from '../player/constants';
 import { SLOPE, slopeHeight } from '../prologue/layout';
 import { type Area1Art, buildArea1, hazeOf } from './art';
+import { SHORTCUT_LEGS } from './layout';
 
 /**
  * S-36: エリア1 as drawn (area1/art.ts buildArea1), and the boxes the room tests against the view before it adds エリア1 to the
@@ -77,6 +78,44 @@ describe('S-36: エリア1 as drawn, and the boxes the room adds it by', () => {
     expect(inView(SLOPE.fromZ - 2, (25 * Math.PI) / 180)).toBe(true);
     // turned back up the slope, toward the workshop: out of view (added at once there, appear 1)
     expect(inView(SLOPE.fromZ - 2, Math.PI)).toBe(false);
+    art.dispose();
+  });
+
+  it('S-40: what is drawn of the north bridge, the shortcut’s stairs and its gate lies within the light’s legs (all of it settles)', () => {
+    const art = build();
+    art.root.updateMatrixWorld(true);
+    const inLeg = (p: THREE.Vector3) =>
+      SHORTCUT_LEGS.some(
+        (l) =>
+          p.x >= l.box.min[0] - 1e-6 &&
+          p.x <= l.box.max[0] + 1e-6 &&
+          p.y >= l.box.min[1] - 1e-6 &&
+          p.y <= l.box.max[1] + 1e-6 &&
+          p.z >= l.box.min[2] - 1e-6 &&
+          p.z <= l.box.max[2] + 1e-6,
+      );
+    const p = new THREE.Vector3();
+    let checked = 0;
+    const out: string[] = [];
+    art.root.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (
+        !mesh.isMesh ||
+        !['area1-back-glass', 'area1-back-rails', 'area1-shortcut-gate'].includes(mesh.name)
+      )
+        return;
+      const pos = mesh.geometry.getAttribute('position');
+      for (let i = 0; i < pos.count; i++) {
+        p.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+        // the north bridge, the ridge and the stairs (not the south bridge, not the courtyard's stair)
+        if (p.x > 113.6 || p.z < -161) continue;
+        checked++;
+        if (!inLeg(p) && out.length < 5)
+          out.push(`${mesh.name} (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`);
+      }
+    });
+    expect(checked).toBeGreaterThan(1000);
+    expect(out).toEqual([]);
     art.dispose();
   });
 

@@ -22,6 +22,7 @@ import {
   PrologueSession,
   SETTLE_SECONDS,
   type ShortcutEvent,
+  steadyEase,
 } from '../prologue/session';
 import {
   type AreaDecl,
@@ -421,6 +422,36 @@ describe('S-40: the light along several legs (legFronts)', () => {
     expect(firstDone).toBeGreaterThan(0.5);
     expect(firstDone).toBeLessThan(1.2);
     expect(legFronts(LEGS, 2, 2)).toEqual([42, 45]);
+  });
+});
+
+describe('S-40: a shortcut’s light runs at a steady pace (steadyEase), not raced through its middle', () => {
+  it('starts and ends at rest, goes only forward, and keeps one speed between its short start and stop', () => {
+    expect(steadyEase(0)).toBe(0);
+    expect(steadyEase(1)).toBeCloseTo(1, 12);
+    let last = 0;
+    const speeds: number[] = [];
+    for (let u = 0.01; u <= 1 + 1e-9; u += 0.01) {
+      const v = steadyEase(u);
+      expect(v).toBeGreaterThanOrEqual(last);
+      speeds.push((v - last) / 0.01);
+      last = v;
+    }
+    const top = Math.max(...speeds);
+    // its top speed is the steady one (no more than 1 / (1 − ramp) times the mean), where the game's one curve doubles it
+    expect(top).toBeLessThan(1.3);
+    expect(speeds.filter((v) => v > top - 1e-6).length).toBeGreaterThan(50);
+  });
+
+  it('down a way of two legs, its front moves at about one speed from leg to leg', () => {
+    const fronts: number[] = [];
+    for (let t = 0; t <= 2 + 1e-9; t += 0.05) {
+      const [a, b] = legFronts(LEGS, 2, t, [], steadyEase);
+      fronts.push((b ?? 42) - 42 + ((a ?? 39.9) - 39.9));
+    }
+    const steps = fronts.slice(1).map((f, i) => f - (fronts[i] ?? 0));
+    const steady = steps.slice(Math.ceil(steps.length * 0.25), Math.floor(steps.length * 0.75));
+    expect(Math.max(...steady) - Math.min(...steady)).toBeLessThan(1e-6);
   });
 });
 

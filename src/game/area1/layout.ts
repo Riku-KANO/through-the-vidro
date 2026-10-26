@@ -399,12 +399,16 @@ export const SHORTCUT_LEGS: readonly SettleSweep[] = [
     direction: [COMPASS.west[0], 0, COMPASS.west[1]],
   },
   {
-    box: boxAt(94.0, 98.0, AREA1_Y - 0.6, SUMMIT_Y + 0.6, SHORTCUT_STAIRS.topZ, -136.2),
+    // (up to the handrails' tops at the stairs' head: S-40 review)
+    box: boxAt(94.0, 98.0, AREA1_Y - 0.6, SUMMIT_Y + 1.2, SHORTCUT_STAIRS.topZ, -136.2),
     direction: [COMPASS.north[0], 0, COMPASS.north[1]],
   },
 ];
-/** 仮 (S-40): seconds the light takes over both legs (about 42 m; the prologue's bridge took 1.6 s over 6 m). */
-export const SHORTCUT_SECONDS = 4.5;
+/**
+ * 仮 (S-40): seconds the light takes over both legs (about 42 m, at a steady 8.5 m/s between a short start and stop:
+ * prologue/session.ts steadyEase; the prologue's bridge, 6.4 m in 1.6 s, reaches about 9 m/s at its fastest).
+ */
+export const SHORTCUT_SECONDS = 6;
 export const AREA1_SHORTCUT: ShortcutDecl = {
   id: 'area1-shortcut',
   legs: SHORTCUT_LEGS,

@@ -104,6 +104,11 @@ export interface Area1ArtOptions {
    * everything toward it; without it, `appear` does nothing (what is added pops in).
    */
   haze?: THREE.Node | null;
+  /**
+   * S-40: the field's slots of the light that can reach エリア1 (its shortcut's legs): its materials read only these (layers/field.ts
+   * assign `settleSlots`). Without it, the field's default (the first slot).
+   */
+  settleSlots?: readonly [number, number];
 }
 
 export interface Area1Art {
@@ -272,7 +277,7 @@ export function* buildArea1(
   const entries: THREE.Group[] = [];
   const put = (o: THREE.Object3D, name: string, kind: LayerKind = 'shared'): THREE.Object3D => {
     o.name = name;
-    field.assign(o, kind);
+    field.assign(o, kind, options.settleSlots ? { settleSlots: options.settleSlots } : {});
     const entry = new THREE.Group();
     entry.name = `${name}:entry`;
     entry.add(o);
@@ -388,7 +393,7 @@ export function* buildArea1(
     );
     parts.push(
       boxGeometry({
-        min: [ROOM2_BALCONY.minX, COURT_Y - 0.5, ROOM2_BALCONY.minZ],
+        min: [ROOM2_BALCONY.minX, ROOM2_BALCONY.y - 0.2, ROOM2_BALCONY.minZ],
         max: [ROOM2_BALCONY.maxX, ROOM2_BALCONY.y - 0.001, ROOM2_BALCONY.maxZ],
       }),
     );
@@ -460,6 +465,15 @@ export function* buildArea1(
       );
       globes.push(new THREE.SphereGeometry(0.16, 24, 12).translate(x, AREA1_Y + 2.84, z));
     }
+    // 部屋3: the summit's lip over the valley edged in brass (ルール2: 形は縁で伝える), as are the roofs across (their eaves)
+    brassParts.push(
+      rod(
+        new THREE.Vector3(ROOM3_TERRACE.minX + 0.03, SUMMIT_Y - 0.03, ROOM3_TERRACE.minZ),
+        new THREE.Vector3(ROOM3_TERRACE.minX + 0.03, SUMMIT_Y - 0.03, ROOM3_TERRACE.maxZ),
+        0.035,
+        8,
+      ),
+    );
     // 部屋2's balcony railing: a handrail, a mid rail and posts (the same lines as its colliders: physics.ts balconyRails)
     const y = ROOM2_BALCONY.y;
     for (const r of balconyRails()) {
@@ -533,6 +547,21 @@ export function* buildArea1(
         if (x0 === x1) g.rotateY(Math.PI / 2);
         brassParts.push(g.translate((x0 + x1) / 2, top - 0.12, (z0 + z1) / 2));
       }
+    }
+    // (S-40 review: the balcony's block is the courtyard's houses' grey, under its stone floor; a brass line along its edge)
+    if (zone === 'court') {
+      const b = ROOM2_BALCONY;
+      parts.push(
+        boxGeometry({ min: [b.minX, COURT_Y - 0.5, b.minZ + 0.002], max: [b.maxX, b.y - 0.2, b.maxZ] }),
+      );
+      brassParts.push(
+        rod(
+          new THREE.Vector3(b.minX, b.y - 0.04, b.minZ - 0.01),
+          new THREE.Vector3(b.maxX, b.y - 0.04, b.minZ - 0.01),
+          0.03,
+          8,
+        ),
+      );
     }
     if (parts.length > 0) put(new THREE.Mesh(merged(parts), grey), `area1-houses-${zone}`);
   };
@@ -723,11 +752,13 @@ export function* buildArea1(
           max: [t.max[0], t.max[1] - 0.003, t.max[2]],
         }),
       );
+    // (2 cm in from the sides of their footing: the light's box ends where the north one does, and a face on its edge
+    // would flicker in and out of it)
     for (const b of [ROOM3_BRIDGE_N, ROOM3_BRIDGE_S])
       glass.push(
         boxGeometry({
-          min: [b.min[0], SUMMIT_Y - DECK, b.min[2]],
-          max: [b.max[0], SUMMIT_Y - 0.003, b.max[2]],
+          min: [b.min[0], SUMMIT_Y - DECK, b.min[2] + 0.02],
+          max: [b.max[0], SUMMIT_Y - 0.003, b.max[2] - 0.02],
         }),
       );
     const steps = shortcutSegments();
@@ -989,9 +1020,13 @@ export function* buildArea1(
     appear,
     focus,
     setFocus(pedestal, drop) {
-      const i = AREA1_PEDESTALS.findIndex((p) => p.id === pedestal);
-      focusCup.value = i;
-      for (const [id, u] of dropFocus) u.value = id === drop ? 1 : 0;
+      let cup = -1;
+      for (let i = 0; i < AREA1_PEDESTALS.length; i++) if (AREA1_PEDESTALS[i]?.id === pedestal) cup = i;
+      focusCup.value = cup;
+      for (const d of DROPS) {
+        const u = dropFocus.get(d.id);
+        if (u) u.value = d.id === drop ? 1 : 0;
+      }
     },
     setNext(room1, room2 = 0) {
       nextLit.room1.value = Math.max(0, Math.min(NEXT_LAMPS_BY_ROOM.room1.length, room1));

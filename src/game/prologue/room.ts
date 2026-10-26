@@ -52,7 +52,6 @@ import {
   ROOM3_ROOF_S,
   ROOM3_TERRACE,
   SHORTCUT_GATE,
-  SHORTCUT_LEGS,
   SHORTCUT_SECONDS,
   SHORTCUT_STAIRS,
   SUMMIT_Y,
@@ -423,7 +422,7 @@ const MAX_AREA1_FRAMES = 300;
  */
 const APPEAR_SECONDS = 3.5;
 /** 仮 (S-40): how much brighter the band of light at the shortcut's front is than the prologue's (it runs in the morning). */
-const SHORTCUT_GLOW = 6;
+const SHORTCUT_GLOW = 3.5;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -1031,8 +1030,6 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const close = { settle: 0, gate: 0, angle: 0, front: null as number | null };
   const legsNow: SettleLegState[] = [];
   const legViews = Array.from({ length: settleSlots }, () => ({ sweep: BRIDGE_SETTLE, front: 0, glow: 0 }));
-  /** S-40: the shortcut's legs among them (their slots follow the settling rooms'). */
-  const shortcutFrom = settleSlots - SHORTCUT_LEGS.length;
   const stageFinale = (): void => {
     const elapsed = session.finaleElapsed;
     // the light from the drop taken; the gate from when the light has reached the far shore (session.ts)
@@ -1043,9 +1040,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     const sc = probe.area1.shortcut;
     sc.front = null;
     sc.leg = null;
+    let area1Leg = 0;
     for (let i = 0; i < legViews.length; i++) {
       const leg = legsNow[i];
       const view = legViews[i];
+      const ofArea1 = leg?.area === AREA1.id;
+      if (ofArea1) area1Leg++;
       if (!leg || !view || leg.front === null) {
         field.setSettled(null, i);
         continue;
@@ -1056,10 +1056,10 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       view.sweep = leg.sweep;
       view.front = leg.front;
       // (the shortcut's in the morning, over 40 m: brighter than the bridge's at dawn, so it reads from the summit)
-      view.glow = running ? settleGlow(leg.progress) * (i >= shortcutFrom ? SHORTCUT_GLOW : 1) : 0;
+      view.glow = running ? settleGlow(leg.progress) * (leg.area !== null ? SHORTCUT_GLOW : 1) : 0;
       field.setSettled(view, i);
-      if (running && i >= shortcutFrom) {
-        sc.leg = i - shortcutFrom;
+      if (running && ofArea1) {
+        sc.leg = area1Leg - 1;
         sc.front = frontPoint(leg.sweep, leg.front);
       }
     }
@@ -1068,7 +1068,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     const fixedSurface = session.settledSurface();
     footing.settle(fixedFooting);
     a1Footing?.settle(fixedFooting);
-    for (const w of a1.walls.values()) w.settle(fixedSurface);
+    for (const w of a1.walls) w.colliders.settle(fixedSurface);
     if (trial?.settle(fixedSurface) && probe.trial) probe.trial.off = trial.cutCount;
     close.angle = gateAngle(close.gate);
     finaleArt.setGate(close.angle);
@@ -1156,7 +1156,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     art: null as Area1Art | null,
     colliders: null as Area1Colliders | null,
     /** S-40: each surface-only wall of it (部屋1's, 部屋2's, the shortcut's gate), by id. */
-    walls: new Map<string, SurfaceColliders>(),
+    walls: [] as { id: string; colliders: SurfaceColliders }[],
     /** S-40: what is left to add of its colliders, a step a frame (S-40: 足す作業を数フレームに分ける). */
     pending: [] as (() => void)[],
     warmAt: 0,
@@ -1174,6 +1174,18 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const dropCore = art.drop.children[0] as THREE.Mesh | undefined;
   /** S-40: where each of エリア1's drops hovers (they are posed from it). */
   const area1Drops = dropsOf([AREA1]);
+  /** S-40: the field's slots of エリア1's shortcut (its materials read only these). */
+  const area1Slots = ((): [number, number] => {
+    const legs = session.settleLegs();
+    let from = -1;
+    let to = -2;
+    for (let i = 0; i < legs.length; i++)
+      if (legs[i]?.area === AREA1.id) {
+        if (from < 0) from = i;
+        to = i;
+      }
+    return [from, to];
+  })();
   const startArea1 = (): void => {
     if (a1.gen || a1.art || !dropShell || !dropCore) return;
     a1.gen = buildArea1(
@@ -1185,7 +1197,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
         shellMaterial: dropShell.material as THREE.Material,
       },
       // S-40: what is added in view comes out of the haze: the scene fog's own colour
-      { haze: hazeOf(art.scene) },
+      // S-40: and its materials read only its shortcut's slots of light (the prologue's keep S-34's one: layers/field.ts)
+      { haze: hazeOf(art.scene), settleSlots: area1Slots },
     );
     probe.area1.state = 'building';
     probe.area1.startedAt = time;
@@ -1203,7 +1216,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       for (const w of surfaceWallsOf(AREA1)) {
         const c = new SurfaceColliders(R, world, surfaceSegments(w));
         c.sync(session.spheres());
-        a1.walls.set(w.id, c);
+        a1.walls.push({ id: w.id, colliders: c });
       }
     },
   ];
@@ -1331,18 +1344,18 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   /** S-40: which way the motes lead: to the first room whose drop waits, or (all taken) down the shortcut. */
   const roomDrops = [ROOM1_DROP.id, ROOM2_DROP.id, ROOM3_DROP.id];
   const motesTarget = (): number => {
-    const waiting = roomDrops.findIndex((id) => session.dropStateOf(id) !== 'taken');
-    return waiting < 0 ? 3 : waiting;
+    for (let i = 0; i < roomDrops.length; i++) if (session.dropStateOf(roomDrops[i]) !== 'taken') return i;
+    return roomDrops.length;
   };
   /** エリア1's walls and footing, its lamps toward the next rooms, the motes, its appearance (stage, every frame). */
   const stageArea1 = (dt: number): void => {
     const built = a1.art;
     if (!built) return;
     const spheres = opts.growHold === null ? session.spheres() : fieldList;
-    for (const [id, w] of a1.walls) {
-      w.sync(spheres);
-      const p = probe.area1.walls[id];
-      if (p) p.off = w.cutCount;
+    for (const w of a1.walls) {
+      w.colliders.sync(spheres);
+      const p = probe.area1.walls[w.id];
+      if (p) p.off = w.colliders.cutCount;
     }
     probe.area1.wall.off = probe.area1.walls[ROOM1_WALL.id]?.off ?? 0;
     if (a1Footing) {
@@ -1754,7 +1767,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       furniture.dispose();
       trial?.dispose();
       alive = false;
-      for (const w of a1.walls.values()) w.dispose();
+      for (const w of a1.walls) w.colliders.dispose();
       a1Footing?.dispose();
       a1.colliders?.dispose();
       a1.art?.dispose();

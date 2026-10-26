@@ -88,6 +88,7 @@ import {
   type HintEvent,
   SETTLE_SECONDS,
   type ShortcutEvent,
+  steadyEase,
 } from './session';
 
 /**
@@ -285,9 +286,9 @@ export interface FinalePlayed {
 
 /* ---------- S-40: エリア1's shortcut settling ---------- */
 
-/** The shortcut's light's sound: the bridge's (S-34), its run drawn out over the shortcut's seconds, on the light's curve. */
+/** The shortcut's light's sound: the bridge's (S-34), its run drawn out over the shortcut's seconds, on its light's pace. */
 export const SHORTCUT_SOURCE = synth('shortcut-settle', (sr) =>
-  renderSettle(sr, SHORTCUT_SECONDS, glassEase),
+  renderSettle(sr, SHORTCUT_SECONDS, steadyEase),
 );
 /** Where its light starts: the near face of its first leg, along its way (area1/layout.ts SHORTCUT_LEGS), over the deck. */
 export const SHORTCUT_SOUND_FROM: Vec3 = (() => {

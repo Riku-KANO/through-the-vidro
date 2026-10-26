@@ -574,6 +574,19 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
     expect(ROOM3_EDGE[2]).toBeGreaterThan(ROOM3_PEDESTAL_S.base[2]);
   });
 
+  it('from nowhere on the roofs across the valley is either pedestal in reach (the vidro cannot be taken there, 原則3)', () => {
+    // picked up from a roof, the bridge back would go: shut out on the roof (S-40 review: the margin is about 0.4 m)
+    for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S])
+      for (let x = r.minX + BODY_RADIUS; x <= r.maxX + 1e-9; x += 0.1)
+        for (let z = r.minZ + BODY_RADIUS; z <= r.maxZ - BODY_RADIUS + 1e-9; z += 0.1) {
+          const eye: Vec3 = [x, SUMMIT_Y + EYE_HEIGHT, z];
+          for (const p of [ROOM3_PEDESTAL_N, ROOM3_PEDESTAL_S])
+            expect(dist(eye, p.orb), `${p.id} from (${x.toFixed(1)}, ${z.toFixed(1)})`).toBeGreaterThan(
+              REACH + 0.1,
+            );
+        }
+  });
+
   it('the south roof is a dead end with a reason (ルール9: 光の揺らぎ)', () => {
     const [cx, cz] = [
       (ROOM3_ROOF_S.minX + ROOM3_ROOF_S.maxX) / 2,
