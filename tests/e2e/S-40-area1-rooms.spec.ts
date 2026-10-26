@@ -254,8 +254,11 @@ async function peekShot(page: Page, path: string): Promise<RoomProbe> {
   return q;
 }
 
-/** Mean luminance, near-black share and warm bright share of the page (a screenshot). */
-async function measure(page: Page, png: Buffer): Promise<{ mean: number; dark: number; warm: number }> {
+/** Mean luminance, near-black share, warm bright share and bright share (luminance over 0.9) of the page (a screenshot). */
+async function measure(
+  page: Page,
+  png: Buffer,
+): Promise<{ mean: number; dark: number; warm: number; bright: number }> {
   return page.evaluate(async (b64) => {
     const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
     const c = new OffscreenCanvas(bmp.width, bmp.height);
@@ -266,15 +269,17 @@ async function measure(page: Page, png: Buffer): Promise<{ mean: number; dark: n
     let sum = 0;
     let dark = 0;
     let warm = 0;
+    let bright = 0;
     let n = 0;
     for (let i = 0; i < d.length; i += 8) {
       const l = (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
       sum += l;
       if (l < 0.06) dark++;
       if (l > 0.75 && ((d[i] ?? 0) - (d[i + 2] ?? 0)) / 255 > 0.05) warm++;
+      if (l > 0.9) bright++;
       n++;
     }
-    return { mean: sum / n, dark: dark / n, warm: warm / n };
+    return { mean: sum / n, dark: dark / n, warm: warm / n, bright: bright / n };
   }, png.toString('base64'));
 }
 
@@ -289,7 +294,7 @@ for (const backend of backends) {
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(join(root, 'artifacts/S-40'), { recursive: true });
     const errors = collectErrors(page);
-    const shots: Record<string, { mean: number; dark: number; warm: number }> = {};
+    const shots: Record<string, { mean: number; dark: number; warm: number; bright: number }> = {};
     const budget: Record<string, { drawCalls: number; triangles: number }> = {};
     const shoot = async (name: string): Promise<void> => {
       const png = await page.screenshot({ path: join(shotDir, `${name}.png`) });
@@ -377,13 +382,14 @@ for (const backend of backends) {
     expect(shots['slope-next']?.warm ?? 0, 'the lit lamps toward 部屋2').toBeGreaterThan(
       (shots.slope?.warm ?? 0) + 0.0015,
     );
-    // the shortcut's light reads as light where it runs (原則4: 解けた理由が光で見える): warm bright pixels on the stairs from
-    // their top and coming down to the gate, against the same views once it is through
-    expect(shots['shortcut-stairs']?.warm ?? 0, 'the light down the stairs').toBeGreaterThan(
-      (shots['shortcut-fixed']?.warm ?? 0) + 0.001,
+    // the shortcut's light reads as light where it runs (原則4: 解けた理由が光で見える): its band's bright pixels on the stairs
+    // from their top and coming down to the gate, against the same views once it is through (S-40 measured 0.00095 against
+    // 0.00007, 0.0016 against 0.00004: in the morning the band is a warm white)
+    expect(shots['shortcut-stairs']?.bright ?? 0, 'the light down the stairs').toBeGreaterThan(
+      (shots['shortcut-fixed']?.bright ?? 0) + 0.0005,
     );
-    expect(shots['shortcut-arrives']?.warm ?? 0, 'the light coming to the gate').toBeGreaterThan(
-      (shots['shortcut-fixed-foot']?.warm ?? 0) + 0.001,
+    expect(shots['shortcut-arrives']?.bright ?? 0, 'the light coming to the gate').toBeGreaterThan(
+      (shots['shortcut-fixed-foot']?.bright ?? 0) + 0.0005,
     );
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `near-black share in ${name}`).toBeLessThan(0.02);

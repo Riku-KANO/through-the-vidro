@@ -39,6 +39,11 @@ export interface SettledView {
   sweep: SettleSweep;
   front: number;
   glow: number;
+  /**
+   * S-40: how many times S-34's width the band of light is (1 by default). Read by the slots after the first only (the first
+   * keeps S-34's shader): a long way seen from far off in the morning (エリア1's shortcut) needs a wider band to read.
+   */
+  width?: number;
 }
 
 /** One materializing sphere as the renderer sees it. */
@@ -80,6 +85,7 @@ function settleSlot() {
     max: uniform(new THREE.Vector3(-FAR, -FAR, -FAR)).setGroup(renderGroup),
     front: uniform(new THREE.Vector4(0, 0, -1, -FAR)).setGroup(renderGroup),
     glow: uniform(0).setGroup(renderGroup),
+    width: uniform(1).setGroup(renderGroup),
   };
 }
 type SettleSlot = ReturnType<typeof settleSlot>;
@@ -208,20 +214,22 @@ export class LayerField {
       const near = smoothstep(SETTLE_NEAR[0], SETTLE_NEAR[1], length(positionView));
       let settled: THREE.Node<'float'> | null = null;
       let light: THREE.Node<'float'> | null = null;
-      for (const slot of slots) {
+      slots.forEach((slot, k) => {
         const inBox = step(slot.min, p).mul(step(p, slot.max));
         const box = inBox.x.mul(inBox.y).mul(inBox.z);
         const s = dot(slot.front.xyz, p);
         const behind = step(s, slot.front.w);
-        const line = s.sub(slot.front.w).div(SETTLE_LINE);
-        const halo = s.sub(slot.front.w).div(SETTLE_HALO);
+        // (the first slot keeps S-34's constant widths; the others scale theirs: SettledView.width)
+        const first = from + k === 0;
+        const line = s.sub(slot.front.w).div(first ? SETTLE_LINE : slot.width.mul(SETTLE_LINE));
+        const halo = s.sub(slot.front.w).div(first ? SETTLE_HALO : slot.width.mul(SETTLE_HALO));
         const band = exp(line.mul(line).negate()).add(exp(halo.mul(halo).negate()).mul(SETTLE_HALO_SHARE));
         const here = box.mul(behind);
         const lit = box.mul(band).mul(slot.glow);
         // one slot: S-34's expression exactly; more: settled where any is, their bands added
         settled = settled === null ? here : (max(settled, here) as THREE.Node<'float'>);
         light = light === null ? lit : light.add(lit);
-      }
+      });
       return vec2(settled ?? float(0), (light ?? float(0)).mul(near));
     })();
     this.settleNodes.set(key, node);
@@ -322,6 +330,7 @@ export class LayerField {
     u.max.value.set(box.max[0], box.max[1], box.max[2]);
     u.front.value.set(direction[0], direction[1], direction[2], view.front);
     u.glow.value = view.glow;
+    u.width.value = view.width ?? 1;
   }
 
   /** True while the peek image is drawn: back objects are shown whole and seams are dark. */

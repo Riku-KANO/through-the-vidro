@@ -421,8 +421,12 @@ const MAX_AREA1_FRAMES = 300;
  * added in view (on the game's one curve, glassEase).
  */
 const APPEAR_SECONDS = 3.5;
-/** 仮 (S-40): how much brighter the band of light at the shortcut's front is than the prologue's (it runs in the morning). */
-const SHORTCUT_GLOW = 3.5;
+/**
+ * 仮 (S-40): the band of light at the shortcut's front: how much brighter and how many times wider than the prologue's (it runs
+ * in the morning, over 40 m, and is seen from the summit and the plaza: a thin bright line there reads as a white thread).
+ */
+const SHORTCUT_GLOW = 2;
+const SHORTCUT_BAND_WIDTH = 5;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -1029,7 +1033,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const openRad = (GATE_OPEN_DEG * Math.PI) / 180;
   const close = { settle: 0, gate: 0, angle: 0, front: null as number | null };
   const legsNow: SettleLegState[] = [];
-  const legViews = Array.from({ length: settleSlots }, () => ({ sweep: BRIDGE_SETTLE, front: 0, glow: 0 }));
+  const legViews = Array.from({ length: settleSlots }, () => ({
+    sweep: BRIDGE_SETTLE,
+    front: 0,
+    glow: 0,
+    width: 1,
+  }));
   const stageFinale = (): void => {
     const elapsed = session.finaleElapsed;
     // the light from the drop taken; the gate from when the light has reached the far shore (session.ts)
@@ -1057,6 +1066,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       view.front = leg.front;
       // (the shortcut's in the morning, over 40 m: brighter than the bridge's at dawn, so it reads from the summit)
       view.glow = running ? settleGlow(leg.progress) * (leg.area !== null ? SHORTCUT_GLOW : 1) : 0;
+      view.width = leg.area !== null ? SHORTCUT_BAND_WIDTH : 1;
       field.setSettled(view, i);
       if (running && ofArea1) {
         sc.leg = area1Leg - 1;
