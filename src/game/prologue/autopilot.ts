@@ -177,7 +177,7 @@ function area1Script(): Step[] {
     // S-40 部屋2「二つの台座の中庭」: up the first flight to the landing, into the courtyard
     { kind: 'walk', name: 'walk-corner', to: [AREA1_SLOPE.x, AREA1_STREET.z], within: 0.4 },
     { kind: 'walk', name: 'walk-flight1', to: [AREA1_SLOPE.x, -143.0], within: 0.4 },
-    { kind: 'walk', name: 'walk-court', to: [eastX(126.6), -144.7], within: 0.3 },
+    { kind: 'walk', name: 'walk-court', to: [eastX(127.6), -144.6], within: 0.3 },
     { kind: 'peek', name: 'peek-court', at: ROOM2_DROP.at, seconds: 2.0 },
     { kind: 'look', name: 'look-court-b', at: ROOM2_PEDESTAL_B.orb, seconds: 0.8 },
     {
@@ -259,6 +259,15 @@ export class Autopilot {
    */
   extendToArea1(): void {
     if (this.index === 0 && this.script === SCRIPT) this.script = [...SCRIPT, ...area1Script()];
+  }
+
+  /**
+   * S-40 (its unit test plays エリア1's part in a Rapier world): start at the named step instead of the first (unknown names
+   * leave it where it is). Before the first step only.
+   */
+  startAt(step: string): void {
+    const i = this.script.findIndex((s) => s.name === step);
+    if (this.index === 0 && i >= 0) this.index = i;
   }
   private elapsed = 0;
   private stillFor = 0;

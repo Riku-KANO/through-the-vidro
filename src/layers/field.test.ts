@@ -130,3 +130,27 @@ describe('LayerField.assign (表・裏・共通の割り当て)', () => {
     );
   });
 });
+
+describe('S-40: several settled regions at once (定着の範囲を複数)', () => {
+  const sweep = { box: { min: [0, 0, -4], max: [1, 2, 0] } as const, direction: [0, 0, -1] as const };
+
+  it('takes as many as asked (S-34’s `settle: true` is one; none without the option)', () => {
+    expect(new LayerField().settleSlotCount).toBe(0);
+    expect(new LayerField({ settle: true }).settleSlotCount).toBe(1);
+    expect(new LayerField({ settle: 3 }).settleSlotCount).toBe(3);
+  });
+
+  it('a region in each slot, set and cleared on its own; a slot past the last is ignored', () => {
+    const field = new LayerField({ settle: 2 });
+    expect(() => field.setSettled({ sweep, front: -1, glow: 1 }, 0)).not.toThrow();
+    expect(() => field.setSettled({ sweep, front: -2, glow: 0.5 }, 1)).not.toThrow();
+    expect(() => field.setSettled(null, 1)).not.toThrow();
+    expect(() => field.setSettled({ sweep, front: -2, glow: 0.5 }, 7)).not.toThrow();
+    // the materials it patches carry the settled region's light (with one slot or many)
+    const m = new THREE.MeshStandardNodeMaterial();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), m);
+    field.assign(mesh, 'back');
+    expect((mesh.material as THREE.MeshStandardNodeMaterial).emissiveNode).not.toBeNull();
+    expect((mesh.material as THREE.MeshStandardNodeMaterial).maskNode).not.toBeNull();
+  });
+});
