@@ -753,7 +753,7 @@ export const AREA1_SPAWNS = {
   /** At the slope's foot looking up the first flight, toward the courtyard's corner (the last of 部屋1's lamps). */
   'area1-slope': (() => {
     const lamp = NEXT_LAMPS_BY_ROOM.room1.at(-1) as Vec3;
-    return viewAt([eastX(121 - 0.4), area1SlopeHeight(-130), -130], [lamp[0], lamp[1] - 1.2, lamp[2]]);
+    return viewAt([eastX(121 - 0.4), area1SlopeHeight(-131), -131], [lamp[0], lamp[1] - 1.2, lamp[2]]);
   })(),
   /** 部屋2: on the landing at the courtyard's opening, the balcony, the stair and both pedestals ahead. */
   'area1-court': viewAt(

@@ -335,6 +335,7 @@ for (const backend of backends) {
     for (const [name, spawn, seconds] of [
       ['shortcut-ridge', 'area1-summit', 1.1],
       ['shortcut-stairs', 'area1-shortcut', 2.9],
+      ['shortcut-arrives', 'area1-shortcut-foot', 3.9],
       ['shortcut-fixed', 'area1-shortcut', 10],
       ['shortcut-fixed-foot', 'area1-shortcut-foot', 10],
     ] as const) {

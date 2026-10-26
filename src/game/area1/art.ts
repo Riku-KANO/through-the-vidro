@@ -352,8 +352,9 @@ export function* buildArea1(
       }),
     ),
   );
-  deck.colorNode = vec4(0.72, 0.76, 0.8, 1);
-  deck.emissiveNode = vec3(0.95, 0.74, 0.46).mul(0.05);
+  // a cool glass, darker than the stone round it (it reads as the back layer, and the light that fixes it shows on it)
+  deck.colorNode = vec4(0.42, 0.5, 0.6, 1);
+  deck.emissiveNode = vec3(0.95, 0.74, 0.46).mul(0.04);
   yield;
 
   // ---- floors: the entrance plaza, the street, the alley, the slope's deck, the courtyard and its balcony, the summit's

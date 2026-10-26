@@ -422,7 +422,7 @@ const MAX_AREA1_FRAMES = 300;
  */
 const APPEAR_SECONDS = 3.5;
 /** 仮 (S-40): how much brighter the band of light at the shortcut's front is than the prologue's (it runs in the morning). */
-const SHORTCUT_GLOW = 3;
+const SHORTCUT_GLOW = 6;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
