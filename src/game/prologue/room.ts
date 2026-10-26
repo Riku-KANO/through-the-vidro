@@ -116,7 +116,6 @@ import {
 } from './physics';
 import { buildPlaza, fogRangeAt } from './plaza';
 import { buildRoomArt } from './room-art';
-import type { SettleLegState, ShortcutEvent } from './session';
 import {
   type FinaleEvent,
   finaleFront,
@@ -124,7 +123,9 @@ import {
   type InteractTarget,
   PrologueSession,
   peekModifier,
+  type SettleLegState,
   SHAKE_AMPLITUDE,
+  type ShortcutEvent,
 } from './session';
 import { buildSlope, slopeGroundNode } from './slope';
 import { pickTarget, type TargetCandidate } from './targets';
@@ -1161,7 +1162,6 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     warmAt: 0,
     lastFrame: null as number | null,
     /** S-40: added in view: its parts are shown one at a time and it comes out of the haze from `appearFrom` (room clock). */
-    inView: false,
     appearFrom: null as number | null,
     /** The room clock when 部屋1's / 部屋2's drop was taken (the lamps toward the next room light from then). */
     nextSince: null as number | null,
@@ -1214,7 +1214,6 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const addArea1 = (inView: boolean): void => {
     const built = a1.art;
     if (!built || a1.colliders || a1.pending.length > 0) return;
-    a1.inView = inView;
     for (const e of built.entries) e.visible = !inView;
     a1.appearFrom = inView ? time : null;
     built.appear.value = inView ? 0 : 1;
