@@ -824,7 +824,7 @@ describe('S-35: down the slope to the central plaza (落下なし, やわらか�
     }
   });
 
-  it('the east gate is open: through it a few metres of road, the railing at its end stops the body (仮の行き止まり)', () => {
+  it('the east gate is open: through it the road goes on east toward エリア1 (S-36: no railing across it), held on both sides', () => {
     const r = room();
     const [dx, dz] = COMPASS.east;
     const p = body(r, {
@@ -833,12 +833,11 @@ describe('S-35: down the slope to the central plaza (落下なし, やわらか�
     });
     const s = walk(r, p, forward, 12);
     expect(s.every((q) => q.grounded && Math.abs(q.y - PLAZA_Y) < 0.03)).toBe(true);
-    expect(fromCenter(p.feet)).toBeGreaterThan(PLAZA.radius + 2);
-    // short of the road's end, within the railing's reach (measured along the east, whichever way it points: S-39)
-    const shortOfEnd = (EAST_ROAD_END_X - p.feet.x) * dx;
-    expect(shortOfEnd).toBeGreaterThan(0);
-    expect(shortOfEnd).toBeLessThan(0.9);
-    expect(s.at(-1)?.speed ?? 1).toBeLessThan(0.05);
+    // on past where S-35's railing stood (6 m out), still walking
+    expect((p.feet.x - PLAZA.center[0]) * dx).toBeGreaterThan(PLAZA.radius + 8);
+    expect(s.at(-1)?.speed ?? 0).toBeGreaterThan(1);
+    // the road's end (where エリア1's entrance plaza begins, built behind the scenes: area1/physics.test.ts) is far on
+    expect((EAST_ROAD_END_X - p.feet.x) * dx).toBeGreaterThan(30);
     // and its sides hold the body too
     for (const intent of [strafeLeft, strafeRight]) {
       const q = body(r, {

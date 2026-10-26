@@ -1,6 +1,17 @@
 import type { FootingSegment, Vec3 } from '../../layers/footing';
 import { countSettled, type SettleSweep, settledSegmentIds, sweepFront } from '../../layers/settle';
 import { glassEase, stepTween, type Tween } from '../../layers/tween';
+import {
+  type AreaCount,
+  type AreaDecl,
+  type DropState,
+  DropTally,
+  footingOf,
+  type PlacedDrop,
+  pedestalsOf,
+  type RoomDecl,
+  surfaceOf,
+} from '../area';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
 import {
   PEEK_FOV_DELTA_DEG,
@@ -15,10 +26,12 @@ import type { MovementModifier } from '../player/motion';
 import { EventBus, type PrologueEvent } from './events';
 
 /**
- * The prologue's game state (pure, no three.js or Rapier): where the vidro is, the peek, the hand, the
- * refusals and the light drop. It strings S-02's orb rules together for one room:
+ * The game's state (pure, no three.js or Rapier): where the vidro is, the peek, the hand, the refusals and the light drops.
+ * It strings S-02's orb rules together for the rooms of the areas it is given (S-36, game/area: each room's pedestals, its
+ * drop, its surface-only walls and back-layer footing), the prologue's first:
  *   作業台の玉を手にする → 覗く → 台座に置く (実体化) → 渡る → 光の雫に触れる
- *   → (S-34) 雫の光が橋を表に定着させ、門が開く → 橋を戻って玉を拾う → 門の先へ.
+ *   → (S-34) 雫の光が橋を表に定着させ、門が開く → 橋を戻って玉を拾う → 門の先へ
+ *   → (S-36) エリア1 部屋1: 置く → 崩れた壁を抜ける → 雫 → 壁の外で玉を拾う.
  * The scene feeds it the input and the player's feet, and draws what it says.
  */
 
@@ -57,10 +70,17 @@ export const CALL_FALL_SECONDS = 1.2;
  * S-35 玉の置き忘れ (発案者 2026-10-23: 玉を持たずに坂道へは出られない): does the film at the slope's entrance (at `membraneZ`) hold a
  * body whose feet are at `feetZ`? It holds whoever has not got the vidro in hand and comes from the far shore's side (z
  * greater than the film's): the body eases to a stop before it like at any edge. Someone already past it (a dev view) walks
- * on; with the vidro in hand there is nothing to it.
+ * on; with the vidro in hand there is nothing to it. S-36: only while the vidro is left behind the film (`orbZ`, where it
+ * stands: on the bench or a pedestal on the workshop's side, z greater than the film's) — left on a pedestal down in the town
+ * (エリア1), the way back to it is down the slope, and the film never shuts you off from it (原則3: 罰がない).
  */
-export function membraneHolds(orb: OrbPlace, feetZ: number, membraneZ: number): boolean {
-  return orb !== 'hand' && feetZ > membraneZ;
+export function membraneHolds(
+  orb: OrbPlace,
+  feetZ: number,
+  membraneZ: number,
+  orbZ: number = Number.POSITIVE_INFINITY,
+): boolean {
+  return orb !== 'hand' && orbZ > membraneZ && feetZ > membraneZ;
 }
 
 /**
@@ -77,11 +97,12 @@ export function vidroCalls(
   gateOpening: boolean,
   pushing: boolean,
   calling = false,
+  orbZ: number = Number.POSITIVE_INFINITY,
 ): boolean {
   return (
     (pushing || calling) &&
     gateOpening &&
-    membraneHolds(orb, feetZ, membrane.z) &&
+    membraneHolds(orb, feetZ, membrane.z, orbZ) &&
     feetZ - membrane.z <= membrane.callReach
   );
 }
@@ -152,7 +173,11 @@ export function finaleFront(sweep: SettleSweep, elapsed: number): number {
   return sweepFront(sweep, glassEase(progressOf(elapsed, SETTLE_SECONDS)));
 }
 
-export type InteractTarget = { kind: 'bench' } | { kind: 'pedestal'; id: string } | { kind: 'drop' };
+/** What 置く・拾う・調べる act on. A drop without an id is the first room's (the prologue's). */
+export type InteractTarget =
+  | { kind: 'bench' }
+  | { kind: 'pedestal'; id: string }
+  | { kind: 'drop'; id?: string };
 
 export type InteractResult =
   | 'take'
@@ -164,18 +189,23 @@ export type InteractResult =
   | 'nothing';
 
 export type OrbPlace = 'bench' | 'hand' | 'pedestal';
-export type DropState = 'waiting' | 'flying' | 'taken';
+export type { DropState };
 
 export interface SessionOptions {
   /** Where the vidro starts: on the workbench (the prologue) or already in hand (dev spawns). */
   orbStart: 'bench' | 'hand';
-  pedestals: Readonly<Record<string, Vec3>>;
+  /**
+   * S-36 エリアの仕組み: the areas played (game/area: rooms with their pedestals, drop, surface-only walls, back-layer footing
+   * and settling). Without it, the one room the fields below describe (the prologue's room as it was given before S-36).
+   */
+  areas?: readonly AreaDecl[];
+  pedestals?: Readonly<Record<string, Vec3>>;
   /** Back-layer footing, for 拾う前に足場の上にいないか (技術設計 > 裏の層の実装 > 安全). */
-  footing: readonly FootingSegment[];
+  footing?: readonly FootingSegment[];
   /** Surface-only walls (S-28): a placed orb cuts them away, so 拾う前に壁の中にいないか too. */
   surface?: readonly FootingSegment[];
   /** Where the light drop hovers (it is back layer: touchable only inside a sphere). */
-  drop: Vec3;
+  drop?: Vec3;
   /**
    * S-34: what the drop's light fixes onto the surface once it is taken (the bridge, layout.ts BRIDGE_SETTLE). Footing and
    * surface-only segments it has passed are no longer the orb's to hold: the pickup no longer asks about them.
@@ -183,6 +213,21 @@ export interface SessionOptions {
   settle?: SettleSweep;
   /** S-35: the film at the slope's entrance (layout.ts MEMBRANE): where it stands across the way, and the vidro's call. */
   membrane?: { z: number; callReach: number };
+}
+
+/** The one room the fields of SessionOptions describe (before S-36), as an area. */
+function legacyAreas(o: SessionOptions): AreaDecl[] {
+  const room: RoomDecl = {
+    id: 'room',
+    pedestals: Object.entries(o.pedestals ?? {}).map(([id, orb]) => ({
+      id,
+      base: [orb[0], 0, orb[2]] as Vec3,
+      orb,
+    })),
+    ...(o.drop ? { drop: { id: 'drop', at: o.drop } } : {}),
+    ...(o.settle ? { settle: o.settle } : {}),
+  };
+  return [{ id: 'room', rooms: [room] }];
 }
 
 /**
@@ -204,7 +249,6 @@ function crosses(was: number, now: number, at: number): boolean {
   return was < at - 1e-9 && now >= at - 1e-9;
 }
 const NONE: readonly string[] = [];
-const NONE_SEGMENTS: readonly FootingSegment[] = [];
 
 export class PrologueSession {
   readonly events = new EventBus<PrologueEvent>();
@@ -213,13 +257,22 @@ export class PrologueSession {
   /** S-39: the hints (HintEvent: the vidro's whisper), apart from `events` and the close's. */
   readonly hintEvents = new EventBus<HintEvent>();
 
+  /** S-36: the rooms played, and what the session asks of them all together. */
+  readonly areas: readonly AreaDecl[];
+  readonly pedestals: Readonly<Record<string, Vec3>>;
+  readonly footing: readonly FootingSegment[];
+  readonly surface: readonly FootingSegment[];
+  /** S-34: the sweep of the room whose drop settles (at most one: S-40 makes them many), and that drop's id. */
+  readonly settle: SettleSweep | null;
+  private readonly settleDrop: string | null;
+  private readonly drops: DropTally;
+  private readonly countsOut: Record<string, AreaCount> = {};
+
   private orbsValue: readonly Orb[] = createOrbs(0);
   private onBench: boolean;
   private peekState: PeekState = { progress: 0, peeking: false };
   private hand: Tween;
   private shakeLeft = 0;
-  private dropValue: DropState = 'waiting';
-  private dropElapsed = 0;
   private sphereCache: { orbs: readonly Orb[]; spheres: OrbSphere[] } | null = null;
   /** S-34: seconds since the drop was taken (null before). */
   private finaleAt: number | null = null;
@@ -239,6 +292,17 @@ export class PrologueSession {
   private quietFor = 0;
 
   constructor(readonly options: SessionOptions) {
+    const areas = options.areas ?? legacyAreas(options);
+    this.areas = areas;
+    this.pedestals = options.areas ? pedestalsOf(areas) : (options.pedestals ?? {});
+    this.footing = options.areas ? footingOf(areas) : (options.footing ?? []);
+    this.surface = options.areas ? surfaceOf(areas) : (options.surface ?? []);
+    const settling = areas.flatMap((a) => a.rooms.filter((r) => r.settle));
+    if (settling.length > 1)
+      throw new Error(`PrologueSession: ${settling.length} rooms settle (one at most, S-40)`);
+    this.settle = settling[0]?.settle ?? null;
+    this.settleDrop = settling[0]?.drop?.id ?? null;
+    this.drops = new DropTally(areas, DROP_FLIGHT_SECONDS);
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
     this.filmTween = this.onBench ? { progress: 1, target: 1 } : { progress: 0, target: 0 };
@@ -250,7 +314,17 @@ export class PrologueSession {
    */
   holdsAtMembrane(feetZ: number): boolean {
     const m = this.options.membrane;
-    return !!m && membraneHolds(this.orbPlace, feetZ, m.z);
+    return !!m && membraneHolds(this.orbPlace, feetZ, m.z, this.orbZ);
+  }
+
+  /**
+   * S-36: z of where the vidro stands while it is not in hand — on the bench (the workshop: north of everything), or its
+   * pedestal's — so the film knows whether it was left behind it.
+   */
+  private get orbZ(): number {
+    const at = this.pedestal;
+    if (at === null) return Number.POSITIVE_INFINITY;
+    return this.pedestals[at]?.[2] ?? Number.POSITIVE_INFINITY;
   }
 
   /**
@@ -274,6 +348,28 @@ export class PrologueSession {
   get orbPlace(): OrbPlace {
     if (this.onBench) return 'bench';
     return this.pedestal === null ? 'hand' : 'pedestal';
+  }
+
+  /** S-36: every drop of the areas, with its area and room, in declaration order. */
+  get dropList(): readonly PlacedDrop[] {
+    return this.drops.drops;
+  }
+
+  /** S-36: how many drops each area has and how many are taken (the same object each call, updated). */
+  areaCounts(): Record<string, AreaCount> {
+    return this.drops.counts(this.countsOut);
+  }
+
+  /** S-36: a drop's state (the first room's when no id is given). */
+  dropStateOf(id?: string): DropState {
+    const d = id ?? this.drops.first;
+    return d === null ? 'waiting' : this.drops.state(d);
+  }
+
+  /** S-36: 0..1 along a drop's flight into the vidro. */
+  dropProgressOf(id?: string): number {
+    const d = id ?? this.drops.first;
+    return d === null ? 0 : this.drops.progress(d);
   }
 
   /** The pedestal the vidro stands on, or null. */
@@ -300,14 +396,14 @@ export class PrologueSession {
     return this.shakeLeft / SHAKE_SECONDS;
   }
 
+  /** The first room's drop (the prologue's). */
   get dropState(): DropState {
-    return this.dropValue;
+    return this.dropStateOf();
   }
 
-  /** 0..1 along the drop's flight into the orb. */
+  /** 0..1 along the first room's drop's flight into the orb. */
   get dropProgress(): number {
-    if (this.dropValue === 'taken') return 1;
-    return this.dropValue === 'flying' ? Math.min(1, this.dropElapsed / DROP_FLIGHT_SECONDS) : 0;
+    return this.dropProgressOf();
   }
 
   /** 覗ける: the vidro is in hand (not on the bench, not placed). */
@@ -320,7 +416,7 @@ export class PrologueSession {
     if (this.sphereCache?.orbs !== this.orbsValue) {
       this.sphereCache = {
         orbs: this.orbsValue,
-        spheres: orbSpheres(this.orbsValue, this.options.pedestals),
+        spheres: orbSpheres(this.orbsValue, this.pedestals),
       };
     }
     return this.sphereCache.spheres;
@@ -346,7 +442,7 @@ export class PrologueSession {
 
   /** S-34: where the light's front stands along the sweep (settle.ts), or null before the drop is taken / with no sweep. */
   get settleFront(): number | null {
-    const sweep = this.options.settle;
+    const sweep = this.settle;
     return sweep && this.finaleAt !== null ? finaleFront(sweep, this.finaleAt) : null;
   }
 
@@ -365,13 +461,13 @@ export class PrologueSession {
    * are made again only when it grows (a few times while the light crosses, not every frame).
    */
   private settled(): { footing: string[]; surface: string[] } | null {
-    const sweep = this.options.settle;
+    const sweep = this.settle;
     const front = this.settleFront;
     if (!sweep || front === null) return null;
     const cache = this.settledCache;
     if (cache?.front === front) return cache;
-    const footing = this.options.footing;
-    const surface = this.options.surface ?? NONE_SEGMENTS;
+    const footing = this.footing;
+    const surface = this.surface;
     const nFooting = countSettled(footing, sweep, front);
     const nSurface = countSettled(surface, sweep, front);
     if (cache && cache.footing.length === nFooting && cache.surface.length === nSurface) {
@@ -392,15 +488,23 @@ export class PrologueSession {
    * The orb is the caller's to place.
    */
   holdFinale(elapsed: number): void {
-    this.dropValue = 'taken';
-    this.dropElapsed = DROP_FLIGHT_SECONDS;
+    if (this.settleDrop !== null) this.drops.setTaken(this.settleDrop);
     this.finaleAt = Math.max(0, elapsed);
     this.finaleHeld = true;
   }
 
-  /** The light drop is real (inside a sphere) and can be touched. */
-  dropMaterialized(): boolean {
-    const [x, y, z] = this.options.drop;
+  /**
+   * Dev holds (the room's ?area1Drop=taken): a drop as if taken long ago — no events, and (unlike holdFinale) not the close.
+   */
+  holdDropTaken(id: string): void {
+    this.drops.setTaken(id);
+  }
+
+  /** A light drop (the first room's when no id is given) is real (inside a sphere) and can be touched. */
+  dropMaterialized(id?: string): boolean {
+    const d = this.drops.drop(id ?? this.drops.first ?? '');
+    if (!d) return false;
+    const [x, y, z] = d.at;
     return this.spheres().some(
       (s) => Math.hypot(x - s.center[0], y - s.center[1], z - s.center[2]) <= s.radius,
     );
@@ -422,12 +526,10 @@ export class PrologueSession {
     if (input.feet) this.feetZ = input.feet[2];
     this.pushing = input.pushing ?? false;
     this.stepMembrane(dt);
-    if (this.dropValue === 'flying') {
-      this.dropElapsed += dt;
-      if (this.dropElapsed >= DROP_FLIGHT_SECONDS - 1e-9) {
-        this.dropValue = 'taken';
-        this.events.emit({ type: 'dropTaken' });
-        // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale)
+    for (const id of this.drops.step(dt)) {
+      this.events.emit({ type: 'dropTaken' });
+      // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale) — the settling room's drop only
+      if (id === this.settleDrop && this.finaleAt === null) {
         this.finaleAt = 0;
         this.finaleEvents.emit({ type: 'settle' });
       }
@@ -438,7 +540,9 @@ export class PrologueSession {
   private stepMembrane(dt: number): void {
     const m = this.options.membrane;
     if (!m) return;
-    const away = this.orbPlace !== 'hand';
+    // up while the vidro is left behind the film (S-36: not while it stands on a pedestal down in the town)
+    const orbZ = this.orbZ;
+    const away = this.orbPlace !== 'hand' && orbZ > m.z;
     this.filmTween.target = away ? 1 : 0;
     this.filmTween = stepTween(this.filmTween, dt, FILM_SECONDS);
     this.calling = vidroCalls(
@@ -448,6 +552,7 @@ export class PrologueSession {
       this.gateProgress > 0,
       this.pushing,
       this.calling,
+      orbZ,
     );
     this.callValue = this.calling
       ? Math.min(1, this.callValue + dt / CALL_RISE_SECONDS)
@@ -494,12 +599,13 @@ export class PrologueSession {
         return 'take';
       case 'pedestal':
         return this.atPedestal(target.id, feet);
-      case 'drop':
-        if (this.dropValue !== 'waiting' || !this.dropMaterialized()) return 'nothing';
-        this.dropValue = 'flying';
-        this.dropElapsed = 0;
+      case 'drop': {
+        const id = target.id ?? this.drops.first;
+        if (id === null || this.drops.state(id) !== 'waiting' || !this.dropMaterialized(id)) return 'nothing';
+        this.drops.touch(id);
         this.events.emit({ type: 'dropTouched' });
         return 'touch-drop';
+      }
     }
   }
 
@@ -519,10 +625,10 @@ export class PrologueSession {
     const settled = this.settled();
     const unsettled = (segments: readonly FootingSegment[], ids: readonly string[] | undefined) =>
       ids && ids.length > 0 ? segments.filter((seg) => !ids.includes(seg.id)) : segments;
-    const surface = unsettled(this.options.surface ?? NONE_SEGMENTS, settled?.surface);
+    const surface = unsettled(this.surface, settled?.surface);
     const ctx = {
-      pedestals: this.options.pedestals,
-      footing: unsettled(this.options.footing, settled?.footing),
+      pedestals: this.pedestals,
+      footing: unsettled(this.footing, settled?.footing),
       surface: surface.length > 0 ? { segments: surface, body: PICKUP_BODY } : undefined,
       feet,
     };

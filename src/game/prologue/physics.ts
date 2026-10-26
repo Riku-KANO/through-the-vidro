@@ -69,7 +69,8 @@ export function insideAnySphere(x: number, y: number, z: number, spheres: readon
   return false;
 }
 
-function trimesh(R: typeof RAPIER, mesh: MeshData, at: Vec3): RAPIER.ColliderDesc {
+/** A static triangle mesh collider from mesh data placed at `at` (S-36: エリア1's colliders use it too). */
+export function trimesh(R: typeof RAPIER, mesh: MeshData, at: Vec3): RAPIER.ColliderDesc {
   const v = new Float32Array(mesh.positions.length);
   for (let i = 0; i < v.length; i += 3) {
     v[i] = (mesh.positions[i] ?? 0) + at[0];
@@ -84,7 +85,7 @@ function trimesh(R: typeof RAPIER, mesh: MeshData, at: Vec3): RAPIER.ColliderDes
 }
 
 /** A slab with its top at y = `top` (0 by default) over an x/z rectangle (rounded edges, like the drawn stone). */
-function slab(
+export function slab(
   R: typeof RAPIER,
   minX: number,
   maxX: number,
@@ -101,7 +102,7 @@ function slab(
 }
 
 /** A thin upright wall standing on y = `bottom`, its length along the unit (dx, dz) (a railing's plane, a shut gate). */
-function wall(
+export function wall(
   R: typeof RAPIER,
   at: [number, number],
   along: readonly [number, number],
@@ -193,12 +194,12 @@ function townColliders(R: typeof RAPIER): RAPIER.ColliderDesc[] {
   const b = EAST_ROAD_BOX;
   descs.push(slab(R, b.minX, b.maxX, b.minZ, b.maxZ, PLAZA_Y));
   const { inset, height, thickness } = EAST_ROAD_RAIL;
-  // across its end, and along its sides from the rim (plaza.ts draws them from the same numbers)
+  // along its sides from the rim on to エリア1's entrance plaza (plaza.ts draws them from the same numbers; S-36: the railing
+  // across its end is gone — past it is エリア1, built behind the scenes: area1/physics.ts)
   const x0 = EAST_ROAD_END_RAIL_X;
   const x1 = EAST_ROAD_RIM_X;
   for (const z of [b.minZ + inset, b.maxZ - inset])
     descs.push(wall(R, [(x0 + x1) / 2, z], [1, 0], Math.abs(x1 - x0), PLAZA_Y, height, thickness));
-  descs.push(wall(R, [x0, (b.minZ + b.maxZ) / 2], [0, 1], b.maxZ - b.minZ, PLAZA_Y, height, thickness));
   return descs;
 }
 

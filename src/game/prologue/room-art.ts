@@ -95,6 +95,11 @@ export interface RoomArt {
   drop: THREE.Object3D;
   /** Fog distances, moved out while the camera is far away (the miniature in the home orb). */
   fogRange: { near: FloatUniform; far: FloatUniform };
+  /**
+   * S-36 (発案者 2026-10-25: 道を進むにつれて空が次のエリアの時間帯へ移る): 0 (夜明け前) … 1 (エリア1の朝), where the body stands
+   * (area1/layout.ts daylightAt). The sky, the fog, the sky's light and the sun move with it; at 0 everything is as it was.
+   */
+  setDaylight(day: number): void;
   /** Ambient motion: light motes over the gap, the lamps, the furnace. */
   animate(t: number): void;
   dispose(): void;
@@ -112,7 +117,42 @@ const HORIZON_WARM = new THREE.Color(0.98, 0.6, 0.38);
 /** The sea of mist in the valley, close by; far away it pales into the horizon. */
 const MIST_DEEP = new THREE.Color(0.1, 0.14, 0.24);
 /** Where the sun is about to rise: low, ahead and to the right of the way. */
-const DAWN = new THREE.Vector3(0.78, 0, -0.62).normalize();
+export const DAWN = new THREE.Vector3(0.78, 0, -0.62).normalize();
+/** How narrowly the warm horizon gathers toward the dawn: the sky's warmth is max(cos, 0) to this power. */
+export const DAWN_SHARPNESS = 5;
+
+/**
+ * The sky's warmth toward the dawn for a direction on the ground (dx, dz): 0 a quarter turn from the dawn or more, 1 straight
+ * toward it — the sky's own `towardDawn` (S-39 提案4: one formula for the sky and the tests that ask where it is warm).
+ */
+export function dawnWarmth(dx: number, dz: number): number {
+  const l = Math.hypot(dx, dz);
+  if (l === 0) return 0;
+  return Math.max(0, (dx * DAWN.x + dz * DAWN.z) / l) ** DAWN_SHARPNESS;
+}
+
+/**
+ * 朝 (S-36; 光と時間帯: エリア1は朝; 色の進行: エリア1まではほぼ無色。白、薄い青灰): what the dawn turns into along the road to
+ * エリア1 (仮 values for the designer's eye). The sky: a pale blue zenith, a milky horizon, the warm side toward the sun a pale
+ * gold (all below the bloom's threshold of 0.9: 空は光らない, S-17). The sun has risen where the dawn was (the same bearing,
+ * higher); the sky's light is brighter and whiter. Linear colours.
+ */
+const MORNING_SUN_ELEVATION = (28 * Math.PI) / 180;
+export const MORNING = {
+  zenith: [0.17, 0.3, 0.6] as const,
+  horizonCool: [0.56, 0.63, 0.72] as const,
+  horizonWarm: [0.9, 0.79, 0.62] as const,
+  mistDeep: [0.4, 0.45, 0.54] as const,
+  /** Unit direction toward the morning sun. */
+  sun: [
+    DAWN.x * Math.cos(MORNING_SUN_ELEVATION),
+    Math.sin(MORNING_SUN_ELEVATION),
+    DAWN.z * Math.cos(MORNING_SUN_ELEVATION),
+  ] as const,
+  sunColor: 0xfff1df,
+  sunIntensity: 3.2,
+  hemisphere: { sky: 0xb8cbe8, ground: 0x4c525c, intensity: 1.35 },
+} as const;
 /** 奥ほど霞ませる (空間の可読性と導線 8): the fog in the colour of the cool horizon. 仮 distances. */
 const FOG_NEAR = 18;
 const FOG_FAR = 150;
@@ -363,17 +403,22 @@ export function buildRoomArt(
   };
 
   // ---- sky, fog, environment -------------------------------------------------------------
+  // S-36: the sky's colours go from 夜明け前 to 朝 with `day` (0 at the workshop and in the central plaza: as they were)
+  const day = uniform(0);
+  const toward = (dawn: THREE.Color, morning: readonly [number, number, number]) =>
+    mix(c3(dawn), vec3(...morning), day);
+  const zenith = toward(ZENITH, MORNING.zenith);
+  const horizonCool = toward(HORIZON_COOL, MORNING.horizonCool);
+  const horizonWarm = toward(HORIZON_WARM, MORNING.horizonWarm);
+  const mistDeep = toward(MIST_DEEP, MORNING.mistDeep);
   const dirY = positionWorldDirection.y;
   const flat = positionWorldDirection.mul(vec3(1, 0, 1)).normalize();
-  const towardDawn = pow(dot(flat, vec3(DAWN.x, 0, DAWN.z)).max(0), 5);
-  const horizon = mix(
-    c3(HORIZON_COOL),
-    c3(HORIZON_WARM),
-    towardDawn.mul(float(1).sub(smoothstep(0, 0.28, dirY))),
-  );
+  // dawnWarmth's formula
+  const towardDawn = pow(dot(flat, vec3(DAWN.x, 0, DAWN.z)).max(0), DAWN_SHARPNESS);
+  const horizon = mix(horizonCool, horizonWarm, towardDawn.mul(float(1).sub(smoothstep(0, 0.28, dirY))));
   // below the horizon the sky is the far mist (no hard line where the mist sea meets the sky)
   const sky = mix(
-    mix(horizon, c3(ZENITH), smoothstep(0.0, 0.62, dirY)),
+    mix(horizon, zenith, smoothstep(0.0, 0.62, dirY)),
     horizon.mul(0.86),
     float(1).sub(smoothstep(-0.12, 0.0, dirY)),
   );
@@ -386,7 +431,7 @@ export function buildRoomArt(
   const mist = float(1)
     .sub(smoothstep(MIST_FROM, MIST_TO, mistY))
     .mul(0.97);
-  const mistColor = mix(c3(MIST_DEEP), horizon.mul(0.86), rangeFogFactor(fogNear.mul(0.7), fogFar.mul(1.1)));
+  const mistColor = mix(mistDeep, horizon.mul(0.86), rangeFogFactor(fogNear.mul(0.7), fogFar.mul(1.1)));
   scene.fogNode = fog(mix(horizon.mul(0.92), mistColor, mist), max(rangeFogFactor(fogNear, fogFar), mist));
 
   // reflections: the same sky, the dawn glow and a dark band of the town around the horizon, so the edges
@@ -448,6 +493,23 @@ export function buildRoomArt(
   }
   put(keep(sun), 'shared');
   const sunDirection = sun.position.clone().sub(sun.target.position).normalize();
+  // S-36: the light of 夜明け前 and of 朝, mixed by `day` (setDaylight). The sun turns up toward its morning height on the
+  // dawn's bearing; its shadow map stays the one drawn at the start (the workshop's way: never seen from エリア1, and the
+  // same again at day 0). エリア1 lies outside that map: lit, no shadow (焼き込みは後のスライス).
+  const dawnLight = {
+    hemiSky: new THREE.Color(HEMISPHERE.sky),
+    hemiGround: new THREE.Color(HEMISPHERE.ground),
+    sun: new THREE.Color(SUN.color),
+    toSun: sunDirection.clone(),
+    reach: sun.position.distanceTo(sun.target.position),
+  };
+  const morningLight = {
+    hemiSky: new THREE.Color(MORNING.hemisphere.sky),
+    hemiGround: new THREE.Color(MORNING.hemisphere.ground),
+    sun: new THREE.Color(MORNING.sunColor),
+    toSun: new THREE.Vector3(...MORNING.sun).normalize(),
+  };
+  let dayNow = 0;
 
   // ---- materials -----------------------------------------------------------------------------
   const brass = keep(createBrassMaterial());
@@ -884,6 +946,25 @@ export function buildRoomArt(
     orbLight,
     drop,
     fogRange: { near: fogNear, far: fogFar },
+    setDaylight(d) {
+      const v = Math.min(1, Math.max(0, d));
+      if (v === dayNow) return;
+      dayNow = v;
+      day.value = v;
+      hemi.color.lerpColors(dawnLight.hemiSky, morningLight.hemiSky, v);
+      hemi.groundColor.lerpColors(dawnLight.hemiGround, morningLight.hemiGround, v);
+      hemi.intensity = HEMISPHERE.intensity + (MORNING.hemisphere.intensity - HEMISPHERE.intensity) * v;
+      sun.color.lerpColors(dawnLight.sun, morningLight.sun, v);
+      sun.intensity = SUN.intensity + (MORNING.sunIntensity - SUN.intensity) * v;
+      if (v === 0) {
+        // exactly as built (the workshop's realtime light agrees with its bake: S-26)
+        sun.position.set(...SUN.at);
+        sunDirection.copy(dawnLight.toSun);
+      } else {
+        sunDirection.lerpVectors(dawnLight.toSun, morningLight.toSun, v).normalize();
+        sun.position.copy(sun.target.position).addScaledVector(sunDirection, dawnLight.reach);
+      }
+    },
     animate(t) {
       ghostTime.value = t;
       // a fire breathes: a few slow, unrelated waves (no strobe). S-37: the fire's light baked apart (the floor and the

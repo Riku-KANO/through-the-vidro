@@ -3,6 +3,7 @@ import { FLOOR_MATERIALS } from '../../audio/footsteps';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS } from '../../layers/materialize';
 import { segmentsCutByBox, settledAt, sweepFront } from '../../layers/settle';
+import { AREA1_PLAZA, AREA1_ROAD } from '../area1/layout';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { PEEK_FOV_DELTA_DEG } from '../orb/peek';
 import { BODY_RADIUS, EYE_HEIGHT, FOV_DEFAULT, MAX_SLOPE_DEG } from '../player/constants';
@@ -77,7 +78,7 @@ import {
   WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_OBJECTS,
 } from './layout';
-import { WORKSHOP_LIGHTS } from './room-art';
+import { dawnWarmth, WORKSHOP_LIGHTS } from './room-art';
 
 /** Level-design invariants of the prologue (パズル設計 > 原則, 空間の可読性と導線). */
 const dist = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -535,10 +536,7 @@ describe('S-39: east is the side of the dawn — the workshop’s sky and its ba
     return [x / l, z / l] as const;
   })();
   /** room-art.ts's sky: how far toward the dawn's warm horizon a direction on the ground lies (its `towardDawn`, 0..1). */
-  const towardDawn = (dx: number, dz: number): number => {
-    const l = Math.hypot(dx, dz);
-    return Math.max(0, (dx * dawn[0] + dz * dawn[1]) / l) ** 5;
-  };
+  const towardDawn = dawnWarmth;
   /** Degrees right (+) of straight down the way (yaw 0) at which a direction on the ground lies. */
   const rightOfWay = (dx: number, dz: number): number => (Math.atan2(dx, -dz) * 180) / Math.PI;
 
@@ -612,11 +610,17 @@ describe('S-35: the central plaza, its broken lighthouse and its three gates', (
     expect(PLAZA_RIM.openingHalf).toBeGreaterThan(SLOPE.maxX + BODY_RADIUS);
   });
 
-  it('past the open east gate a few metres of road end at a railing (仮 until S-36), エリア1’s chimney beyond (ルール6, 9)', () => {
-    expect(EAST_ROAD.length).toBeGreaterThan(3);
-    expect(EAST_ROAD.length).toBeLessThan(10);
+  it('past the open east gate the road goes on about 60 m to エリア1’s entrance plaza (S-36), the chimney beyond (ルール6)', () => {
     // (along the east, whichever way it points: S-39 turned it round)
-    expect((EAST_ROAD_END_X - PLAZA.center[0]) * COMPASS.east[0]).toBeGreaterThan(PLAZA.radius + 3);
+    expect(EAST_ROAD.length).toBeGreaterThan(55);
+    expect(EAST_ROAD.length).toBeLessThan(65);
+    expect((EAST_ROAD_END_X - PLAZA.center[0]) * COMPASS.east[0]).toBeCloseTo(
+      PLAZA.radius + EAST_ROAD.length,
+      9,
+    );
+    // it ends where the entrance plaza begins: no railing across it any more (S-35's 仮の行き止まり is gone)
+    expect(EAST_ROAD_END_X).toBeCloseTo(AREA1_ROAD.toX, 9);
+    expect(AREA1_PLAZA.center[0] - COMPASS.east[0] * AREA1_PLAZA.radius).toBeCloseTo(EAST_ROAD_END_X, 9);
     // from the plaza the chimney rises over the open east gate
     const [gx, gz] = plazaGateAt(COMPASS.east);
     const toGate = Math.atan2(gz - PLAZA.center[2], gx - PLAZA.center[0]);

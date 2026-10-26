@@ -39,6 +39,15 @@ import { mulberry32, randomSeed } from '../../core/audio/rng';
 import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
 import { glassEase } from '../../layers/tween';
+import {
+  AREA1_SLOPE,
+  AREA1_STREET,
+  AREA1_Y,
+  area1SlopeHeight,
+  eastOf,
+  eastX,
+  ROOM1_ALLEY,
+} from '../area1/layout';
 import { HAND_ORB_RADIUS, handOrbCenter } from '../orb/hand-pose';
 import { EYE_HEIGHT, WALK_SPEED } from '../player/constants';
 import { type EventBus, eventName, type PrologueEvent } from './events';
@@ -56,6 +65,7 @@ import {
   PEDESTAL_ORB,
   PLAZA,
   PLAZA_Y,
+  SLOPE,
   SPAWNS,
   type SpawnName,
   TUB_DRIP,
@@ -140,10 +150,19 @@ export function cueName(cue: SoundCue): string {
   return cue.kind === 'popen' ? `popen:${cue.popen}` : `glass:${cue.strength}`;
 }
 
-/** The world point a cue sounds from. `hand` is the hand orb's world position. */
-export function sourcePoint(source: CueSource, orb: 'bench' | 'hand' | 'pedestal', hand: Vec3): Vec3 {
-  if (source === 'drop') return DROP;
-  if (source === 'orb' && orb === 'pedestal') return PEDESTAL_ORB;
+/**
+ * The world point a cue sounds from. `hand` is the hand orb's world position. S-36: `at` says where the vidro stands on its
+ * pedestal and which drop was touched, when the room has more than the prologue's (RoomProbe orbAt, dropAt); without it,
+ * the prologue's pedestal and drop.
+ */
+export function sourcePoint(
+  source: CueSource,
+  orb: 'bench' | 'hand' | 'pedestal',
+  hand: Vec3,
+  at: { orb?: Vec3; drop?: Vec3 } = {},
+): Vec3 {
+  if (source === 'drop') return at.drop ?? DROP;
+  if (source === 'orb' && orb === 'pedestal') return at.orb ?? PEDESTAL_ORB;
   if (source === 'orb' && orb === 'bench') return BENCH_ORB;
   return hand;
 }
@@ -213,6 +232,11 @@ export interface SoundRoom {
   > & {
     /** S-34: where the settling light's front is (world z), null when none. */
     finale?: { readonly frontZ: number | null };
+    /** S-36: where the vidro stands on its pedestal, and the drop last touched (the prologue's when absent). */
+    orbAt?: Vec3;
+    dropAt?: Vec3;
+    /** S-36: エリア1 as the room builds it: its ambience starts once it is in the scene and the body is in the town. */
+    area1?: { readonly state: string };
   };
 }
 
@@ -291,6 +315,29 @@ const [, LAMP] = LAMPS;
 export const TOWN_CHIMES: Vec3 = [PLAZA.center[0] + 22, PLAZA_Y + 30, PLAZA.center[2] - 68.4];
 
 /**
+ * エリア1の朝 (S-36, 仮置き, to be confirmed by ear; サウンドデザイン > 環境音): the morning's air moving down the street from the
+ * hill (a wind bed at the slope's foot, over the houses), and far chimes hung up the hill where the workshop street climbs,
+ * 音だけ (never drawn, never near where you walk). Played apart from the workshop's (its own player, started once エリア1 is
+ * built: 技術設計 > エリアごとに分けて読み込む), so the workshop sounds as it did (S-22, S-25: its bed and its strikes); the
+ * chimes on a random stream of their own (S-25), the wind a bed that draws nothing.
+ */
+export const AREA1_AMBIENCE: readonly AmbientSpot[] = [
+  {
+    id: 'wind:area1',
+    kind: 'wind',
+    position: [AREA1_SLOPE.x, area1SlopeHeight(AREA1_SLOPE.fromZ - 6) + 5, AREA1_SLOPE.fromZ - 6],
+    offset: (WIND_LOOP_SECONDS * 3) / 4,
+  },
+  {
+    id: 'chimes:area1',
+    kind: 'chimes',
+    position: [eastX(eastOf(AREA1_STREET.endX) + 6), AREA1_Y + 12, (ROOM1_ALLEY.minZ + AREA1_SLOPE.toZ) / 2],
+    ownStream: true,
+    far: true,
+  },
+];
+
+/**
  * 工房に立体的に置く (仮, to be confirmed by ear):
  *  - the wind through the glass gaps: the skylight at the top of the dome and the door, and outside, rising from the
  *    valley through the broken glass at the edge of the way (S-06: 割れた破片), so the way and the far shore are not
@@ -359,8 +406,10 @@ function idHash(id: string): number {
 interface PlaceOptions extends AmbienceOptions {
   /** Seeds the timing (the sensor's renders); live, a random one. */
   seed?: number;
-  /** Only the spots of PROLOGUE_AMBIENCE with these ids. */
+  /** Only the spots with these ids. */
   only?: readonly string[];
+  /** The spots placed (PROLOGUE_AMBIENCE by default; S-36: AREA1_AMBIENCE, its own player). */
+  spots?: readonly AmbientSpot[];
 }
 
 /**
@@ -374,7 +423,8 @@ function placeAmbience(
 ): { player: AmbiencePlayer; placed: PlacedSpot[] } {
   const { only } = opts;
   const seed = opts.seed ?? randomSeed();
-  const spots = only ? PROLOGUE_AMBIENCE.filter((s) => only.includes(s.id)) : PROLOGUE_AMBIENCE;
+  const all = opts.spots ?? PROLOGUE_AMBIENCE;
+  const spots = only ? all.filter((s) => only.includes(s.id)) : all;
   const placed = spots.map((spot) => {
     const emitter = engine.createEmitter('ambience', {
       x: spot.position[0],
@@ -694,7 +744,7 @@ export interface AmbienceProbe {
   sources: AmbienceSourceState[];
   /** How loud each kind sounds now, at its source (RMS of the last ~43 ms). */
   levels: Record<AmbienceKind, number>;
-  /** S-25: each spot's emitter, in PROLOGUE_AMBIENCE's order (none before the sounds are loaded). */
+  /** S-25: each spot's emitter, in PROLOGUE_AMBIENCE's order then (S-36) AREA1_AMBIENCE's (none before the sounds are loaded). */
   places: AmbiencePlaceProbe[];
   /** S-25: the last strikes of chimes and drops (at most 64), oldest first. */
   hits: AmbienceHit[];
@@ -786,6 +836,9 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   let steps: { player: Footsteps; feet: Emitter } | null = null;
   let ambience: AmbiencePlayer | null = null;
   let ambienceSpots: PlacedSpot[] = [];
+  /** S-36: エリア1's morning, its own player (started once エリア1 is built). */
+  let area1Ambience: AmbiencePlayer | null = null;
+  let area1Spots: PlacedSpot[] = [];
   const stepLog: FootstepEntry[] = [];
   const stepCounts = { count: 0, refused: 0, skipped: 0, missing: 0, voices: 0 };
   /** Stops the loading of the sounds when the room is left before they are all made. */
@@ -818,7 +871,10 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     play(cue) {
       if (disposed || !engine || !emitters) return null;
       follow();
-      const point = sourcePoint(cue.source, roomProbe.orb, [handWorld.x, handWorld.y, handWorld.z]);
+      const point = sourcePoint(cue.source, roomProbe.orb, [handWorld.x, handWorld.y, handWorld.z], {
+        orb: roomProbe.orbAt,
+        drop: roomProbe.dropAt,
+      });
       const emitter =
         cue.source === 'drop'
           ? emitters.drop
@@ -915,7 +971,9 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       return;
     }
     follow();
-    const [x, y, z] = sourcePoint('orb', roomProbe.orb, [handWorld.x, handWorld.y, handWorld.z]);
+    const [x, y, z] = sourcePoint('orb', roomProbe.orb, [handWorld.x, handWorld.y, handWorld.z], {
+      orb: roomProbe.orbAt,
+    });
     whisperAt.x = x;
     whisperAt.y = y;
     whisperAt.z = z;
@@ -960,10 +1018,13 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         const p = roomProbe.position;
         const feet = e.createEmitter('ambience', { x: p.x, y: p.y, z: p.z });
         const { player: placedPlayer, placed } = placeAmbience(e, banks.ambience);
-        live.push(feet, ...placed.map((p) => p.emitter));
+        const area1 = placeAmbience(e, banks.ambience, { spots: AREA1_AMBIENCE });
+        live.push(feet, ...placed.map((p) => p.emitter), ...area1.placed.map((p) => p.emitter));
         steps = { player: new Footsteps(banks.footsteps), feet };
         ambience = placedPlayer;
         ambienceSpots = placed;
+        area1Ambience = area1.player;
+        area1Spots = area1.placed;
         // S-34: the close's sounds, from the bridge (following the light) and from the gate
         if (banks.finale) {
           const settle = e.createEmitter('sfx', settleAt);
@@ -1039,6 +1100,15 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       // runs, so nothing is queued up to burst out later
       if (!ambience.playing && roomProbe.playing && e.ctx.state === 'running') ambience.start(e.now());
       ambience.update(e.ctx.currentTime);
+    }
+    if (area1Ambience) {
+      // S-36: エリア1's morning once it is in the scene and the body has come down into the town (past the slope's foot: not
+      // from the slope's brow, where it starts being built), then on, as the workshop's once it played
+      const st = roomProbe.area1?.state ?? 'waiting';
+      const there = (st === 'warming' || st === 'ready') && roomProbe.position.z < SLOPE.toZ;
+      if (!area1Ambience.playing && there && roomProbe.playing && e.ctx.state === 'running')
+        area1Ambience.start(e.now());
+      area1Ambience.update(e.ctx.currentTime);
     }
     // S-34: the settling light's sound follows its front across the bridge (and stays where the light stopped)
     if (lightRunning) followFront();
@@ -1173,15 +1243,15 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       return {
         ready: ambience !== null,
         playing: ambience?.playing ?? false,
-        sources: ambience?.sources ?? [],
+        sources: [...(ambience?.sources ?? []), ...(area1Ambience?.sources ?? [])],
         levels: ambience?.levels() ?? { ...SILENT_LEVELS },
-        places: ambienceSpots.map(({ spot, emitter }) => ({
+        places: [...ambienceSpots, ...area1Spots].map(({ spot, emitter }) => ({
           id: spot.id,
           kind: spot.kind,
           position: pannerPosition(emitter.input),
           panning: (emitter.input as PannerNode).panningModel,
         })),
-        hits: ambience ? [...ambience.hits] : [],
+        hits: [...(ambience?.hits ?? []), ...(area1Ambience?.hits ?? [])],
         draughts: ambience ? [...ambience.draughts] : [],
       };
     },
@@ -1209,9 +1279,11 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       loading.abort();
       // the ambience glides to silence (~20 ms) and lets go of its own nodes once that has run; the emitters fade too
       ambience?.dispose();
+      area1Ambience?.dispose();
       for (const e of live) e.dispose();
       live.length = 0;
       ambienceSpots = [];
+      area1Spots = [];
       // a shared engine and its context are its owner's to fade out and close
       if (shared) return;
       const e = engine;

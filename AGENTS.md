@@ -88,6 +88,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値、炉の音・扉の風鈴と吹き込み。生成音楽は M1以降 | S-09, S-21, S-22, S-25 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）、焼いた光の受け口（`lightmap.ts`）。案2と共有 | 変更は CHANGELOG に記録 |
+| `src/game/area/` | エリアの仕組み（部屋・台座・雫・表だけの壁・裏の足場の宣言、方角 `COMPASS`） | S-36 |
+| `src/game/area1/` | エリア1の形・配置・当たり判定の材料（灰色の箱） | S-36, S-40 |
 | `src/game/assets/` | 命名規則と extras から層・当たり判定・台座を組み立てる、印のついたガラス、焼いた光の強さ（`baked-light.ts`） | S-23, S-37 |
 | `blender/` | `scenes/`（.blend）、`scripts/common/`（案2と共有。VERSION と CHANGELOG）、`scripts/vidro/`（案1だけの規則）、`scripts/tests/` | S-23 ほか |
 | `public/assets/` | `pnpm assets` が書いた glb。**コミットする**（check.sh とセンサーはこれを読む。.blend を直したら glb も書き出してコミット） | S-23 ほか |
@@ -228,7 +230,14 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **Web Audio の inverse の距離の法則は maxDistance で頭打ちにならない（S-35）。** 遠い音源の大きさは level ÷ 距離で決まる（遠くの風鈴は
   195m で level 14.9）。頭打ちにする古い実装に備えて、遠い場所の panner は maxDistance を大きくする（`AmbientSpot.far`）。音の聞こえ方の検査
   （作業台で風の上に浮く）は音源の方位で変わる（HRTF）ので、音源を動かすときは方位を保つか、検査をやり直す。
-- **街の東西にある物は `COMPASS`（`src/game/prologue/layout.ts`）を通して置く（S-39）。** ゲームの中の東は夜明けの側（+X、坂を下りる右手）で、
-  地図の図（北が上）とは左右が鏡写し。x の符号を直に書かない。
+- **街の東西にある物は `COMPASS`（`src/game/area/compass.ts`、`prologue/layout.ts` が再 export）を通して置く（S-39、S-36）。** ゲームの中の
+  東は夜明けの側（+X、坂を下りる右手）で、地図の図（北が上）とは左右が鏡写し。x の符号を直に書かない。エリアの位置は `eastX(d)`（中央広場の
+  中心から東へ d m の x）・`eastOf(x)` で書く（`src/game/area1/layout.ts`）。
+- **部屋とエリアは `src/game/area/` の宣言（`RoomDecl`・`AreaDecl`）で置く（S-36）。** 台座・光の雫・表だけの壁・裏の足場・定着の掃きを部屋
+  ごとに並べ、セッションに `areas` で渡す。置く・拾う・拾う前の確かめはセッションが全部屋の区画で行い、雫の数はエリアごと（`probe.areas`）。
+- **後から足す物（エリア）は、裏で `compileAsync` してから視界の外で場面に足す（S-36）。** 足した後、物ごとに間引きを外して描き、
+  パイプラインを作り終える。透過のガラスは `compileAsync` に入れない（画面と違う大きさの描画先）。three r186 の InstancedMesh は描画
+  コンテキストごとに別のシェーダになって裏のコンパイルで温まらない（WebGL2 で初めて描くフレームが 100 ms 超）ので、後から足す物には使わず、
+  1つの Mesh にまとめるか頂点を書く。読み込みで描く物に InstancedMesh を足すと、読み込みのフレームが延びる（WebGL2 で 0.5 秒）。
 - **新しい場所のガラスは、区域ごとに InstancedMesh を分ける（S-35）。** 1つにすると境界球が全体を覆い、画面の外でも描かれる（通常と覗くパスの両方）。
 

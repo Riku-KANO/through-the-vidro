@@ -1,6 +1,11 @@
 import type { FloorMaterial } from '../../audio/footsteps';
 import { type Box, type FootingSegment, splitFooting, type Vec3 } from '../../layers/footing';
 import type { SettleSweep } from '../../layers/settle';
+import type { AreaDecl } from '../area';
+import { COMPASS } from '../area/compass';
+import { AREA1_CHIMNEY, AREA1_FLOOR_ZONES, AREA1_ROAD, AREA1_SPAWNS } from '../area1/layout';
+
+export { AREA1_CHIMNEY };
 
 /**
  * 序章「工房」 (進行構造とエリア設計): the workshop at the edge of the town, before dawn.
@@ -331,14 +336,10 @@ export const ROAD = { minX: FAR.minX, maxX: FAR.maxX, minZ: -24.6, maxZ: FAR.min
  * 坂を下りると夜明けの光とエリア1の煙突が同じ東の側に見える. West (エリア3's greenhouse, 夕方) is on the left, south (エリア2's
  * canal) straight on past the plaza. The map's figure has east on the other hand: the town here is its mirror image (left
  * and right swapped), the price of keeping the workshop's sky and bake (S-35 judged east the left, and the dawn read as
- * the west: process/slices/S-35.md 判断待ち1).
+ * the west: process/slices/S-35.md 判断待ち1). S-36: the compass itself lives in area/compass.ts (エリア1's layout places along
+ * it too).
  */
-export const COMPASS = {
-  north: [0, 1] as const,
-  east: [1, 0] as const,
-  south: [0, -1] as const,
-  west: [-1, 0] as const,
-};
+export { COMPASS };
 
 /** `a`·`u` + `b`·`v` on the ground (x, z): a step off the plaza's centre along two of the compass's directions. */
 function along(
@@ -421,12 +422,16 @@ export function plazaGateAt(dir: readonly [number, number], radius: number = PLA
 }
 
 /**
- * 東の門の先 (S-35, 仮 until S-36 builds エリア1): a few metres of stone on from the open east gate, as wide as the slope, ending
- * at a brass railing with a lamp at each end, エリア1's hill and its chimneys beyond (ルール6; ルール9: 柵と次の場所の眺め).
- * `length` from the rim to the railing.
+ * 東の道 (S-35 its first metres; S-36 all of it, area1/layout.ts AREA1_ROAD): from the open east gate about 60 m of stone,
+ * as wide as the slope, railings along both sides, on to エリア1's entrance plaza (街の配置: 各エリアの入口の広場まで約 60m). The
+ * sky moves from before dawn to the morning along it (area1/layout.ts daylightAt). `length` from the rim to the entrance plaza.
  */
-export const EAST_ROAD = { length: 6, halfWidth: 1.4, railing: 1.0 } as const;
-/** The east road's end (x): the railing stands just inside it. */
+export const EAST_ROAD = {
+  length: AREA1_ROAD.length,
+  halfWidth: AREA1_ROAD.halfWidth,
+  railing: 1.0,
+} as const;
+/** The east road's end (x): where エリア1's entrance plaza begins. */
 export const EAST_ROAD_END_X = PLAZA.center[0] + COMPASS.east[0] * (PLAZA.radius + EAST_ROAD.length);
 /**
  * The east road's stone as a box on x and z, from its end to `under` metres in under the plaza's rim (the road runs along
@@ -441,21 +446,6 @@ export function eastRoadBox(under: number): { minX: number; maxX: number; minZ: 
     maxZ: PLAZA.center[2] + EAST_ROAD.halfWidth,
   };
 }
-
-/**
- * 工房街の煙突 (空間の可読性と導線 5: 各エリアにも固有の目印; ハリノの地図: エリア1の坂の上、雫の部屋3のそば): S-35 draws it as a
- * landmark far off on エリア1's hill, east of the plaza a little to the south, so that from the slope's brow it stands to the
- * right of the lighthouse against the dawn's warm horizon (S-39: 右手（東）, 夜明けの側) and from the plaza it rises over the
- * open east gate. `foot` is where it stands on the hill, `top` its height above the plaza's floor. 仮: S-36 lays out
- * エリア1 (process/slices/S-39.md, S-36 への引き継ぎ).
- */
-export const AREA1_CHIMNEY = {
-  foot: (() => {
-    const [dx, dz] = along(COMPASS.east, 120, COMPASS.south, 26);
-    return [PLAZA.center[0] + dx, PLAZA_Y + 10, PLAZA.center[2] + dz] as Vec3;
-  })(),
-  top: 34,
-} as const;
 
 /**
  * Beyond the shut gates (S-35, 仮: 格子越しに水路と温室の気配): エリア2's canal running south from past the south gate, with its
@@ -514,6 +504,24 @@ export const LIP_HINTS: Box = { min: [-1.4, -0.1, EDGE_Z - 0.22], max: [1.4, 0.5
 export const BRIDGE_SETTLE: SettleSweep = {
   box: { min: [FAR.minX, -0.6, MOTES_END_Z - 0.05], max: [FAR.maxX, 2.0, LIP_HINTS.max[2] + 0.15] },
   direction: [0, 0, -1],
+};
+
+/**
+ * 序章「工房」 as an area (S-36 エリアの仕組み, game/area): its one room — the dead-end pedestal, the light drop over the far shore,
+ * the back-layer bridge, and the light of the drop settling the bridge (S-34). (S-24's trial wall, ?trial=surface-wall, is
+ * the room's to add.)
+ */
+export const PROLOGUE_AREA: AreaDecl = {
+  id: 'prologue',
+  rooms: [
+    {
+      id: 'workshop',
+      pedestals: [{ id: PEDESTAL_ID, base: PEDESTAL_BASE, orb: PEDESTAL_ORB }],
+      drop: { id: 'prologue', at: DROP },
+      footing: [{ id: 'bridge', segments: bridgeFooting() }],
+      settle: BRIDGE_SETTLE,
+    },
+  ],
 };
 
 /** 街灯 (乳白ガラス) along the way, on thin brass posts at its edges. Height of the globe's centre. */
@@ -594,6 +602,8 @@ export const FLOOR_ZONES: readonly FloorZone[] = [
     center: [PLAZA.center[0], PLAZA.center[2]],
   },
   { name: 'east-road', material: 'stone', box: eastRoadBox(0.5) },
+  // S-36: エリア1's entrance plaza, its street, the alley of 部屋1 and the slope's foot (area1/layout.ts)
+  ...AREA1_FLOOR_ZONES,
 ];
 
 function inZone(f: FloorZone, x: number, z: number): boolean {
@@ -702,6 +712,11 @@ export const SPAWNS = {
       pitch: 0.06,
     };
   })(),
+  /**
+   * S-36: エリア1 — on the road where the sky moves toward morning, in the entrance plaza looking up at the chimney, before
+   * 部屋1's alley, before the slope's shut gate (area1/layout.ts AREA1_SPAWNS).
+   */
+  ...AREA1_SPAWNS,
 } as const satisfies Record<string, Spawn>;
 
 export type SpawnName = keyof typeof SPAWNS;
