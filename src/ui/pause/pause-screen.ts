@@ -190,6 +190,8 @@ export class PauseScreen {
       // a page that comes up with the pause takes clicks at once; one shown later, only after a move (see onClick)
       this.pageMoved = true;
       if (!view.up) {
+        // the next opening's page comes up with the pause (closed on the question, it opens on the items)
+        this.shownPage = null;
         this.setHover(null);
         const active = document.activeElement;
         if (active instanceof HTMLElement && this.el.contains(active)) active.blur();

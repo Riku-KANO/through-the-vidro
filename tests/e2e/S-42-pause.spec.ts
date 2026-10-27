@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { VIDRO_VOLUMES } from '../../src/audio/levels';
 import { PAUSE_DUCK } from '../../src/audio/pause';
+import { WORKSHOP_TOP } from '../../src/game/prologue/layout';
 
 /**
  * S-42: the pause. Through the home (loading → 「はじめる」 → dive), as a player plays it, on both render paths:
@@ -489,18 +490,24 @@ for (const backend of backends) {
       y0: Math.max(yesBox.y, titleBox.y),
       y1: Math.min(yesBox.y + yesBox.height, titleBox.y + titleBox.height),
     };
-    if (overlap.x1 > overlap.x0 && overlap.y1 > overlap.y0) {
-      await page.mouse.dblclick((overlap.x0 + overlap.x1) / 2, (overlap.y0 + overlap.y1) / 2);
-      await waitPause(page, "q.page === 'confirm'");
-      await page.waitForTimeout(500);
-      const p = await pause(page);
-      expect(p.left, 'the second click did not leave').toBe(0);
-      expect(p.phase).toBe('open');
-      expect(p.page).toBe('confirm');
-    }
-    // Esc back to the items, Esc out
-    await page.keyboard.press('Escape');
-    await waitPause(page, "q.page === 'menu'");
+    expect(overlap.x1 - overlap.x0, 'タイトルへ and はい share a place on the screen').toBeGreaterThan(4);
+    expect(overlap.y1 - overlap.y0).toBeGreaterThan(4);
+    const at = { x: (overlap.x0 + overlap.x1) / 2, y: (overlap.y0 + overlap.y1) / 2 };
+    // the first click asks; the second, on the same spot once the question is up (はい under it, unseen yet: a double
+    // click, or a hurried second click), does not answer
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.click(at.x, at.y);
+    await waitPause(page, "q.page === 'confirm'", 3_000);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(500);
+    const p = await pause(page);
+    expect(p.left, 'the clicks right after the question came up did not leave').toBe(0);
+    expect(p.phase).toBe('open');
+    expect(p.page).toBe('confirm');
+    // a click meant for an answer, once it is written and the pointer went to it, is taken: いいえ back to the items
+    await page.locator('[data-pause-item="no"]').click();
+    await waitPause(page, "q.page === 'menu' && q.focused === 'title'");
+    // Esc out
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'closed'", 3_000);
 
@@ -695,13 +702,18 @@ for (const backend of backends) {
     expect(again.position, 'standing where play was left').toEqual(far.position);
     const path = await page.evaluate(() => (window as unknown as { __s42Cam: number[][] }).__s42Cam);
     const eyeY = far.position.y + 1.6;
-    const highest = Math.max(...path.map((q) => q[2] ?? 0));
+    // the middle of the way (not the miniature view at its far end): the frames between 0.35 and 0.85 of the dive
+    const middle = path.filter((q) => (q[0] ?? 0) >= 0.35 && (q[0] ?? 0) <= 0.85);
+    const lowest = Math.min(...middle.map((q) => q[2] ?? 0));
     writeFileSync(
       join(root, `artifacts/S-42/far-${backend}.json`),
-      JSON.stringify({ backend, far: far.position, highest, shots, path }, null, 2),
+      JSON.stringify({ backend, far: far.position, lowestInTheMiddle: lowest, shots, path }, null, 2),
     );
-    // it rose over the town on the way (not straight through it)
-    expect(highest - eyeY, 'the arc rises well above where play stands').toBeGreaterThan(6);
+    // it goes over the town on the way (not straight through it): well above where play stands, and over the workshop's
+    // dome (WORKSHOP_TOP 3.9 m)
+    expect(middle.length, 'frames in the middle of the way').toBeGreaterThan(10);
+    expect(lowest - eyeY, 'the arc stays well above where play stands').toBeGreaterThan(6);
+    expect(lowest, 'and above the workshop’s dome').toBeGreaterThan(WORKSHOP_TOP);
     for (const [name, l] of Object.entries(shots)) {
       expect(l.dark, `${name}: no black picture`).toBeLessThan(0.35);
       expect(l.mean, `${name}: not dark`).toBeGreaterThan(0.04);

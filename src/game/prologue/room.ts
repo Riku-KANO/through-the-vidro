@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { drawsGlass, readsBackdrop, withGlassUnculled } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
+import { glassEaseInverse } from '../../core/transition';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
 import type { Box, FootingSegment, Vec3 } from '../../layers/footing';
@@ -442,46 +443,95 @@ const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
 const FOCUS_SECONDS = 0.2;
 /** S-42: a camera pose (where it stands, a point it looks at). */
-type Pose = { pos: THREE.Vector3; target: THREE.Vector3 };
+export type Pose = { pos: THREE.Vector3; target: THREE.Vector3 };
 const smoothSpan = (u: number, from: number, to: number): number => {
   const t = Math.min(1, Math.max(0, (u - from) / (to - from)));
   return t * t * (3 - 2 * t);
 };
+/** Yaw and pitch of a direction (layout.ts lookDirection's angles). */
+function anglesOf(x: number, y: number, z: number, out: { yaw: number; pitch: number }): void {
+  const len = Math.hypot(x, y, z) || 1;
+  out.yaw = Math.atan2(-x, -z);
+  out.pitch = Math.asin(Math.min(1, Math.max(-1, y / len)));
+}
+/** `a` moved by whole turns to lie within half a turn of `near`. */
+const turnNear = (a: number, near: number): number =>
+  a - 2 * Math.PI * Math.round((a - near) / (2 * Math.PI));
 /**
- * S-42: moves the dive's camera (`pos`, `target`: its pose at u) toward where play stands (`eye`), so that the dive back from
- * the pause's タイトルへ leaves from that eye and the dive in again ends there. Returns how far (0..1) it has gone over (the
- * haze follows it). `landing` is the dive's own end (the landing pose).
- *  - in the workshop: the dive's own way in through the skylight (from its crossing, u 0.62: dive-path.ts), moved over by
- *    how far the eye stands from the landing pose. The landing pose itself (the first dive) moves nothing
- *  - out of it (仮): from above the workshop (u 0.3) the camera leaves the dive in an arc high over the town, reaches the
- *    eye's column first and comes down onto it, looking level, so it passes through neither the dome nor the town
+ * S-42 (仮): where the dive's time (its share, 0..1) leaves its own way for where play stands: in the workshop the eye's turn
+ * starts above it (u 0.3) and its place from the skylight's crossing on (u 0.62: dive-path.ts, the moment the home camera
+ * passes the orb's surface); out of it the camera leaves above the workshop (u 0.15) and is over the eye a little before
+ * the end. The dive's u is its eased value (glassEase of its time: ui/flow), so these are times along it.
  */
-function towardEye(u: number, landing: Pose, eye: Pose, pos: THREE.Vector3, target: THREE.Vector3): number {
+const TURN_FROM = glassEaseInverse(0.3);
+const SKYLIGHT_FROM = glassEaseInverse(0.62);
+const LEAVE_FROM = glassEaseInverse(0.15);
+const OVER_EYE_AT = 0.92;
+/** 仮: the arc over the town rises this share of the way to go, within these heights (m). */
+const ARC_RISE = 0.2;
+const ARC_MIN = 6;
+const ARC_MAX = 50;
+const path = { yaw: 0, pitch: 0 };
+const eyeAngles = { yaw: 0, pitch: 0 };
+const landingAngles = { yaw: 0, pitch: 0 };
+/**
+ * S-42: bends the dive's camera (`pos`, `target`: its pose at the dive's eased value u) toward where play stands (`eye`), so
+ * that the dive back from the pause's タイトルへ leaves from that eye and the dive in again ends there. Returns how far
+ * (0..1) its place has gone over (the haze follows it). `landing` is the dive's own end (the landing pose).
+ *  - in the workshop: the dive's own way in through the skylight, moved over by how far the eye stands from the landing
+ *    pose, and its view turned by how far the eye looks away from the landing's. The landing pose (the first dive) bends
+ *    nothing
+ *  - out of it (仮): from above the workshop the camera leaves the dive in an arc high over the town, is over the eye a
+ *    little before the end and comes down onto it; its view turns from the dive's (down onto the workshop) to the eye's.
+ *    It passes through neither the dome nor the town (for a roof right over the eye, see S-42 残件)
+ * Both run on the dive's time, not its eased value, so the way is spread over the dive (no leap in its fast middle).
+ */
+export function towardEye(
+  u: number,
+  landing: Pose,
+  eye: Pose,
+  pos: THREE.Vector3,
+  target: THREE.Vector3,
+): number {
+  const t = glassEaseInverse(Math.min(1, Math.max(0, u)));
+  anglesOf(target.x - pos.x, target.y - pos.y, target.z - pos.z, path);
+  anglesOf(eye.target.x - eye.pos.x, eye.target.y - eye.pos.y, eye.target.z - eye.pos.z, eyeAngles);
+  const l = landing;
+  anglesOf(l.target.x - l.pos.x, l.target.y - l.pos.y, l.target.z - l.pos.z, landingAngles);
+  // how far the eye looks round from the landing pose, the short way
+  const turnAway = turnNear(eyeAngles.yaw - landingAngles.yaw, 0);
   const inWorkshop =
     Math.hypot(eye.pos.x, eye.pos.z) < WORKSHOP_FLOOR_RADIUS - 0.4 && eye.pos.y < WORKSHOP_TOP - 1;
+  let placed: number;
+  let yaw: number;
+  let pitch: number;
   if (inWorkshop) {
-    const w = smoothSpan(u, 0.62, 1);
-    pos.x += (eye.pos.x - landing.pos.x) * w;
-    pos.y += (eye.pos.y - landing.pos.y) * w;
-    pos.z += (eye.pos.z - landing.pos.z) * w;
-    target.x += (eye.target.x - landing.target.x) * w;
-    target.y += (eye.target.y - landing.target.y) * w;
-    target.z += (eye.target.z - landing.target.z) * w;
-    return w;
+    placed = smoothSpan(t, SKYLIGHT_FROM, 1);
+    pos.x += (eye.pos.x - l.pos.x) * placed;
+    pos.y += (eye.pos.y - l.pos.y) * placed;
+    pos.z += (eye.pos.z - l.pos.z) * placed;
+    // the dive's own view, turned by the eye's turn from the landing's (over the end of the dive, not at its end)
+    const turn = smoothSpan(t, TURN_FROM, 1);
+    yaw = path.yaw + turnAway * turn;
+    pitch = path.pitch + (eyeAngles.pitch - landingAngles.pitch) * turn;
+  } else {
+    placed = smoothSpan(t, LEAVE_FROM, 1);
+    if (placed <= 0) return 0;
+    const across = smoothSpan(t, LEAVE_FROM, OVER_EYE_AT);
+    const rise = Math.min(
+      ARC_MAX,
+      Math.max(ARC_MIN, ARC_RISE * Math.hypot(eye.pos.x - pos.x, eye.pos.z - pos.z)),
+    );
+    pos.x += (eye.pos.x - pos.x) * across;
+    pos.z += (eye.pos.z - pos.z) * across;
+    pos.y += (eye.pos.y - pos.y) * placed + rise * Math.sin(Math.PI * placed);
+    // from the dive's view to the eye's (its yaw taken on the side the landing's turn says, as the dive's own view turns)
+    yaw = path.yaw + turnNear(eyeAngles.yaw - path.yaw, turnAway) * placed;
+    pitch = path.pitch + (eyeAngles.pitch - path.pitch) * placed;
   }
-  const w = smoothSpan(u, 0.3, 1);
-  if (w <= 0) return 0;
-  // over to the eye's column early, down onto it late; the arc rises with the way to go
-  const across = 1 - (1 - w) ** 3;
-  const lift =
-    Math.min(50, Math.max(6, 0.2 * Math.hypot(eye.pos.x - pos.x, eye.pos.z - pos.z))) * Math.sin(Math.PI * w);
-  pos.x += (eye.pos.x - pos.x) * across;
-  pos.z += (eye.pos.z - pos.z) * across;
-  pos.y += (eye.pos.y - pos.y) * w + lift;
-  target.x += (eye.target.x - target.x) * across;
-  target.z += (eye.target.z - target.z) * across;
-  target.y += (eye.target.y - target.y) * w + lift;
-  return w;
+  const c = Math.cos(pitch);
+  target.set(pos.x - Math.sin(yaw) * c, pos.y + Math.sin(pitch), pos.z - Math.cos(yaw) * c);
+  return placed;
 }
 const STRINGS = {
   ja: {
@@ -742,20 +792,19 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     pose(u, outPos, outTarget) {
       dive.pose(u, outPos, outTarget);
       if (!built) return;
-      // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
-      const away = Math.max(0, outPos.length() - 25);
-      let near = 18 + away;
-      let far = 150 + away * 3;
       // S-42: the dive ends where play stands (back from the pause's タイトルへ, and in again, it passes through that eye
       // and its haze; the first time that is the landing pose itself, and the dive is as it was)
+      let w = 0;
       if (u > 0) {
         built.eyePose(eye.pos, eye.target, eye.fog);
-        const w = towardEye(u, landing, eye, outPos, outTarget);
-        near += (eye.fog.near - near) * w;
-        far += (eye.fog.far - far) * w;
+        w = towardEye(u, landing, eye, outPos, outTarget);
       }
-      built.fogRange.near.value = near;
-      built.fogRange.far.value = far;
+      // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
+      const away = Math.max(0, outPos.length() - 25);
+      const near = 18 + away;
+      const far = 150 + away * 3;
+      built.fogRange.near.value = near + (eye.fog.near - near) * w;
+      built.fogRange.far.value = far + (eye.fog.far - far) * w;
     },
     prepare() {
       building ??= buildRoom(ctx, opts, shell).then((b) => {
