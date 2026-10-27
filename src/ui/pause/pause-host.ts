@@ -241,7 +241,8 @@ export class PauseHost {
     this.awayAmount = this.away
       ? Math.min(1, this.awayAmount + awayStep)
       : Math.max(0, this.awayAmount - awayStep);
-    this.mix?.set(this.timeline.frost);
+    // (leaving, the pause's turn-down stays on as the frost clears, so the ambience fades from there: no swell between)
+    this.mix?.set(this.away ? 1 : this.timeline.frost);
     this.mix?.setAway(this.awayAmount);
 
     const view = this.view;

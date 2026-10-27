@@ -426,15 +426,21 @@ for (const backend of backends) {
     await expect
       .poll(async () => (await gate(page)).volumes?.ambience, { timeout: 2_000 })
       .toBe(VIDRO_VOLUMES.ambience);
-    // the longest frames while opening and closing (最長 50ms 目安: recorded, held loosely here for the headless runs)
-    const frames = (await pause(page)).frameMs;
-
-    // ---- Esc opens, Esc closes (one step back is the game) ----
+    // ---- Esc opens, Esc closes (one step back is the game); its longest frames, with no screenshot in between (taking
+    // one holds the page's frames back: the openings above were photographed) ----
+    await page.evaluate(() => {
+      const f = (window.__vidro.sceneProbe as { pause: { frameMs: Record<string, number> } }).pause.frameMs;
+      f.opening = 0;
+      f.open = 0;
+      f.closing = 0;
+    });
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'open'");
     await page.waitForTimeout(350); // past the echo guard of a lock that dropped
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'closed'", 3_000);
+    // 開閉で長いフレームを作らない (最長 50ms 目安): asserted at twice that, for headless runs beside other work
+    const frames = (await pause(page)).frameMs;
 
     // ---- mouse: hover swells and rings, click つづける ----
     await page.keyboard.press('Escape');
@@ -583,8 +589,8 @@ for (const backend of backends) {
         2,
       ),
     );
-    expect(frames.opening, 'the opening makes no long frame').toBeLessThan(150);
-    expect(frames.closing, 'the closing makes no long frame').toBeLessThan(150);
+    expect(frames.opening, 'the opening makes no long frame').toBeLessThan(100);
+    expect(frames.closing, 'the closing makes no long frame').toBeLessThan(100);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
     await page.evaluate(() => document.exitPointerLock()).catch(() => {});
