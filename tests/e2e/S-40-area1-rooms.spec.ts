@@ -348,11 +348,11 @@ for (const backend of backends) {
     }
     // the shortcut's light (エリア1's drops all taken, held): along the ridge, down the stairs, then fixed for good. At its
     // steady pace (8.5 m/s between glassEase's start and stop: session.ts steadyEase, S-41) it is 11 m along the ridge at
-    // 1.6 s, 7 m down the stairs at 3.4 s, 5 m from the gate at 4.6 s
+    // 1.6 s, 5 m down the stairs at 3.15 s, 7 m from the gate at 4.35 s (S-41: the same places S-40 took its pictures at)
     for (const [name, spawn, seconds] of [
       ['shortcut-ridge', 'area1-summit', 1.6],
-      ['shortcut-stairs', 'area1-shortcut', 3.4],
-      ['shortcut-arrives', 'area1-shortcut-foot', 4.6],
+      ['shortcut-stairs', 'area1-shortcut', 3.15],
+      ['shortcut-arrives', 'area1-shortcut-foot', 4.35],
       ['shortcut-fixed', 'area1-shortcut', 10],
       ['shortcut-fixed-foot', 'area1-shortcut-foot', 10],
     ] as const) {
