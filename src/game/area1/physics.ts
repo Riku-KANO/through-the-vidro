@@ -28,7 +28,6 @@ import {
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
   ROOM3_SHADE,
-  ROOM3_STACK,
   ROOM3_TERRACE,
   STREET_NORTH_Z,
   STREET_SOUTH_Z,
@@ -181,7 +180,7 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
     ),
   );
   for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
-  // S-41: 部屋3's shade — the roof's walls on the north roof's edge, the chimney's stub on the terrace
+  // S-41: 部屋3's shade — the roof's walls on the north roof's edge (its crumbled wall on the lip is surface-only: SurfaceColliders)
   for (const w of ROOM3_SHADE) {
     const h = w.top - (SUMMIT_Y - SLAB);
     descs.push(
@@ -191,11 +190,6 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
         (w.minZ + w.maxZ) / 2,
       ),
     );
-  }
-  {
-    const { at, radius, top } = ROOM3_STACK;
-    const h = top - at[1];
-    descs.push(R.ColliderDesc.cylinder(h / 2, radius).setTranslation(at[0], at[1] + h / 2, at[2]));
   }
   // S-41: the gates' posts (their leaves turn: Area1Gates)
   for (const g of AREA1_GATES)
@@ -243,6 +237,7 @@ export function addArea1Colliders(R: typeof RAPIER, world: RAPIER.World): Area1C
  */
 export class Area1Gates {
   private readonly leaves = new Map<string, RAPIER.Collider[]>();
+  private readonly gates = new Map(AREA1_GATES.map((g) => [g.id, g]));
   private readonly angles = new Map<string, number>();
   private readonly at = { x: 0, y: 0, z: 0 };
   private readonly turn = { x: 0, y: 0, z: 0, w: 1 };
@@ -278,7 +273,7 @@ export class Area1Gates {
   /** Puts a gate's leaves `angle` radians open. Returns whether they moved. */
   sync(id: string, angle: number): boolean {
     if (this.angles.get(id) === angle) return false;
-    const g = AREA1_GATES.find((q) => q.id === id);
+    const g = this.gates.get(id);
     const leaves = this.leaves.get(id);
     if (!g || !leaves) return false;
     this.angles.set(id, angle);

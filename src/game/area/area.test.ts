@@ -588,6 +588,36 @@ describe('S-41: rooms open in order — the next room is the first whose drop wa
     );
     // (an area without gates — the prologue's, the shortcut's tests' — has all its rooms open)
     expect(checkAreas([LOOP, PROLOGUE_AREA], MAIN_ORB_RADIUS)).toEqual([]);
+    // a gate after the last room leads nowhere; a gate whose light takes no time would never say it opens (S-41 review)
+    const last: AreaDecl = { ...ROW, gates: [...(ROW.gates ?? []), { id: 'y', after: 'row-2', opensAt: 1 }] };
+    expect(checkAreas([last], MAIN_ORB_RADIUS)).toContain(
+      'gate "y" opens after the last room of area "row": it leads to no room',
+    );
+    const now: AreaDecl = {
+      ...ROW,
+      gates: [
+        { id: 'row-g1', after: 'row-0', opensAt: 0 },
+        ROW.gates?.[1] as NonNullable<AreaDecl['gates']>[0],
+      ],
+    };
+    expect(checkAreas([now], MAIN_ORB_RADIUS)).toContain(
+      'gate "row-g1" opens at 0 s: its light must take some time',
+    );
+  });
+
+  it('the session opens the gates by the same rule: a room with no drop to give leaves the way past it open', () => {
+    // (S-41 review: the gates follow roomOpen, the one rule — a room without a drop never holds the next one shut)
+    const rooms = ROW_ROOMS.map((r, i) => (i === 0 ? { id: r.id, pedestals: r.pedestals } : r));
+    const area: AreaDecl = { ...ROW, rooms };
+    expect(roomOpen(area, 1, takenOf())).toBe(true);
+    expect(nextRoom(area, takenOf())).toBe(1);
+    const s = new PrologueSession({ orbStart: 'hand', areas: [area] });
+    const gates: AreaGateEvent[] = [];
+    s.gateEvents.on((e) => gates.push(e));
+    run(s, 1.5 + GATE_OPEN_SECONDS + 0.05);
+    expect(gates.map((e) => e.type)).toEqual(['open', 'opened']);
+    expect(s.areaGateProgress('row-g1')).toBe(1);
+    expect(s.areaGateProgress('row-g2')).toBe(0);
   });
 });
 

@@ -14,6 +14,7 @@ import {
   type DropState,
   DropTally,
   footingOf,
+  gateInto,
   nextRoom,
   type PlacedDrop,
   pedestalsOf,
@@ -409,12 +410,14 @@ function crosses(was: number, now: number, at: number): boolean {
 }
 const NONE: readonly string[] = [];
 
-/** S-41: one of an area's gates and how long since its room's drop was taken (null: not yet). */
+/**
+ * S-41: one of an area's gates — the way into the room at `into` (game/area gateInto) — and how long since that way opened
+ * (game/area roomOpen: the room before it gave its drop; null: not yet).
+ */
 interface GateRun {
   readonly decl: AreaGateDecl;
-  readonly area: string;
-  /** The drop that opens it (its room's). */
-  readonly drop: string | null;
+  readonly area: AreaDecl;
+  readonly into: number;
   elapsed: number | null;
   /** Dev holds: it does not move on (and says nothing). */
   held: boolean;
@@ -444,8 +447,10 @@ export class PrologueSession {
   private readonly closeRun: SettleRun | null;
   private readonly drops: DropTally;
   private readonly countsOut: Record<string, AreaCount> = {};
-  /** S-41: every area's gates between its rooms. */
+  /** S-41: every area's gates between its rooms (by id too), and the areas by id. */
   private readonly gates: GateRun[] = [];
+  private readonly gateById: Map<string, GateRun>;
+  private readonly areaById = new Map<string, AreaDecl>();
   private readonly isTaken = (id: string): boolean => this.drops.state(id) === 'taken';
 
   private orbsValue: readonly Orb[] = createOrbs(0);
@@ -483,15 +488,16 @@ export class PrologueSession {
     for (const a of areas)
       if (a.shortcut) this.runs.push(run(a.shortcut.legs, a.shortcut.seconds, { area: a.id }));
     this.drops = new DropTally(areas, DROP_FLIGHT_SECONDS);
-    for (const a of areas)
-      for (const g of a.gates ?? [])
-        this.gates.push({
-          decl: g,
-          area: a.id,
-          drop: a.rooms.find((r) => r.id === g.after)?.drop?.id ?? null,
-          elapsed: null,
-          held: false,
-        });
+    for (const a of areas) {
+      this.areaById.set(a.id, a);
+      for (let i = 1; i < a.rooms.length; i++) {
+        const g = gateInto(a, i);
+        if (g) this.gates.push({ decl: g, area: a, into: i, elapsed: null, held: false });
+      }
+    }
+    this.gateById = new Map(this.gates.map((g) => [g.decl.id, g]));
+    // (a way whose room before has no drop to give is open from the start)
+    this.openGates();
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
     this.filmTween = this.onBench ? { progress: 1, target: 1 } : { progress: 0, target: 0 };
@@ -701,22 +707,32 @@ export class PrologueSession {
    * after the drop is taken) over the prologue gate's seconds (GATE_OPEN_SECONDS; the room eases it, finale.ts gateAngle).
    */
   areaGateProgress(id: string): number {
-    for (const g of this.gates)
-      if (g.decl.id === id)
-        return g.elapsed === null ? 0 : progressOf(g.elapsed - g.decl.opensAt, GATE_OPEN_SECONDS);
-    return 0;
+    const g = this.gateById.get(id);
+    return g?.elapsed == null ? 0 : progressOf(g.elapsed - g.decl.opensAt, GATE_OPEN_SECONDS);
   }
 
   /** S-41: the room of an area to play next (game/area nextRoom): the first whose drop waits; its rooms' count when none does. */
   nextRoom(area: string): number {
-    const a = this.areas.find((q) => q.id === area);
+    const a = this.areaById.get(area);
     return a ? nextRoom(a, this.isTaken) : 0;
   }
 
   /** S-41: is the way into an area's room (by its index) open (game/area roomOpen)? */
   roomOpen(area: string, index: number): boolean {
-    const a = this.areas.find((q) => q.id === area);
+    const a = this.areaById.get(area);
     return !!a && roomOpen(a, index, this.isTaken);
+  }
+
+  /**
+   * S-41: starts the clock of every gate whose way has just opened (game/area roomOpen, the one rule): the drop's light sets
+   * out toward it now. `held` (dev holds): it stands open at once, saying nothing.
+   */
+  private openGates(held = false): void {
+    for (const g of this.gates) {
+      if (g.elapsed !== null || !roomOpen(g.area, g.into, this.isTaken)) continue;
+      g.elapsed = held ? g.decl.opensAt + GATE_OPEN_SECONDS : 0;
+      g.held = held;
+    }
   }
 
   /**
@@ -792,11 +808,7 @@ export class PrologueSession {
    */
   holdDropTaken(id: string): void {
     this.drops.setTaken(id);
-    for (const g of this.gates)
-      if (g.drop === id) {
-        g.elapsed = g.decl.opensAt + GATE_OPEN_SECONDS;
-        g.held = true;
-      }
+    this.openGates(true);
   }
 
   /** A light drop (the first room's when no id is given) is real (inside a sphere) and can be touched. */
@@ -836,9 +848,9 @@ export class PrologueSession {
       g.elapsed = was + dt;
       const { opensAt } = g.decl;
       if (crosses(was, g.elapsed, opensAt))
-        this.gateEvents.emit({ type: 'open', area: g.area, gate: g.decl.id });
+        this.gateEvents.emit({ type: 'open', area: g.area.id, gate: g.decl.id });
       if (crosses(was, g.elapsed, opensAt + GATE_OPEN_SECONDS))
-        this.gateEvents.emit({ type: 'opened', area: g.area, gate: g.decl.id });
+        this.gateEvents.emit({ type: 'opened', area: g.area.id, gate: g.decl.id });
     }
     if (input.feet) this.feetZ = input.feet[2];
     this.pushing = input.pushing ?? false;
@@ -846,7 +858,7 @@ export class PrologueSession {
     for (const id of this.drops.step(dt)) {
       this.events.emit({ type: 'dropTaken' });
       // S-41: the gate on the way on from its room starts its clock (the drop's light on its way to it)
-      for (const g of this.gates) if (g.drop === id && g.elapsed === null) g.elapsed = 0;
+      this.openGates();
       // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale) — the settling room's drop only
       // S-40: and once an area's last drop is taken, the light runs along its shortcut home
       const area = this.drops.drop(id)?.area ?? null;

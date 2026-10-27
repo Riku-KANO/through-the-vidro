@@ -208,34 +208,38 @@ export class PeekPipeline {
    * (玉越しの裏の層の見た目は変えない: the prologue's bridge seen from the town stays as it was). showBeyond() puts them back.
    */
   private hideBeyond(far: number): void {
-    const bc = this.backCamera;
-    const e = bc.matrixWorld.elements;
+    const e = this.backCamera.matrixWorld.elements;
     this.eye.set(e[12] ?? 0, e[13] ?? 0, e[14] ?? 0);
     // the camera looks down its −Z
     this.forward.set(-(e[8] ?? 0), -(e[9] ?? 0), -(e[10] ?? 0)).normalize();
-    const { eye, forward, sphere, beyond } = this;
-    let kept = 0;
-    this.opts.scene.traverseVisible((o) => {
-      const m = o as THREE.Mesh;
-      if (!(m.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine) || !o.frustumCulled) return;
-      if (!o.layers.test(bc.layers)) return;
-      const bounds = (m as THREE.InstancedMesh).boundingSphere ?? m.geometry?.boundingSphere;
-      if (!bounds) return;
-      sphere.copy(bounds).applyMatrix4(o.matrixWorld);
-      const depth = sphere.center.sub(eye).dot(forward);
-      if (depth - sphere.radius <= far) return;
-      if (backOnly(o)) kept++;
-      else beyond.push(o);
-    });
+    this.far = far;
+    this.kept = 0;
+    this.opts.scene.traverseVisible(this.visitBeyond);
     let back = 0;
-    for (const o of beyond) {
+    for (const o of this.beyond) {
       o.visible = false;
       if (backOnly(o)) back++;
     }
-    this.farLeftOut = beyond.length;
+    this.farLeftOut = this.beyond.length;
     this.farLeftOutBack = back;
-    this.farKeptBack = kept;
+    this.farKeptBack = this.kept;
   }
+
+  /** hideBeyond's walk over the scene (one function made once: the peek image is drawn every frame while peeking). */
+  private far = 0;
+  private kept = 0;
+  private readonly visitBeyond = (o: THREE.Object3D): void => {
+    const m = o as THREE.Mesh;
+    if (!(m.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine) || !o.frustumCulled) return;
+    if (!o.layers.test(this.backCamera.layers)) return;
+    const bounds = (m as THREE.InstancedMesh).boundingSphere ?? m.geometry?.boundingSphere;
+    if (!bounds) return;
+    this.sphere.copy(bounds).applyMatrix4(o.matrixWorld);
+    const depth = this.sphere.center.sub(this.eye).dot(this.forward);
+    if (depth - this.sphere.radius <= this.far) return;
+    if (backOnly(o)) this.kept++;
+    else this.beyond.push(o);
+  };
 
   private showBeyond(): void {
     for (const o of this.beyond) o.visible = true;

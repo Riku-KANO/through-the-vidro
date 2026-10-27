@@ -324,40 +324,45 @@ export const ROOM3_PEDESTAL_S: PedestalDecl = {
 };
 /**
  * S-41 (発案者 2026-10-27: 部屋3の雫は屋根の陰に置き、谷の端から覗いたときだけ見通せる; どちらの台座に置いた後も雫は見えない): 屋根の立ち上がり —
- * two walls standing up off the north roof's east edge (the roof house's walls, carried on above its flat top), south of where
- * the north bridge lands, with a narrow gap between them (too narrow for the body). The drop hovers in their lee, on the roof
- * behind the northern one: from the terrace they hide it — from its pedestals, from where the slope arrives — but for one
- * slant through the gap, which falls on the valley's edge between the bridges (端). Each a rect on the ground and its top.
+ * two walls standing up off the north roof's east edge (the roof house's walls carried on above its flat top), south of where
+ * the north bridge lands, a gap between them. The drop hovers in the lee of the northern one, on the roof behind it: from the
+ * terrace the walls hide it — from its pedestals, from where the slope arrives — but for one steep slant through the gap, which
+ * comes down on the terrace at its south-west corner, by the valley's edge where the south bridge leaves (端). Each a rect on
+ * the ground and its top.
  */
 export const ROOM3_SHADE: readonly (Rect & { top: number })[] = [
-  { ...rectAt(110.7, 111.2, -161.35, -160.15), top: SUMMIT_Y + 2.4 },
-  { ...rectAt(110.7, 111.2, -164.0, -161.9), top: SUMMIT_Y + 2.4 },
+  { ...rectAt(110.7, 111.2, -161.95, -160.15), top: SUMMIT_Y + 2.4 },
+  { ...rectAt(110.7, 111.2, -164.0, -163.6), top: SUMMIT_Y + 2.4 },
 ];
 /**
- * S-41: 煙突の根元 — the stub of an old chimney standing on the terrace behind the edge, on the slant through the gap, so
- * that slant reaches the drop from the edge alone (from farther back along it, the stub stands in the way). A round stack.
+ * S-41: 崩れた壁 on the lip (表にだけあるもの, as 部屋1's: 3部屋目は前の2部屋の組み合わせ) — along the terrace's south-west edge, where
+ * the slant through the walls comes down and the south bridge leaves. In the peek image it is not there: from the edge behind
+ * it the drop's light shows across the valley. It stands outside the north pedestal's sphere: with the vidro placed there the
+ * drop is real, but the wall still stands between (置くと先が見えない — 覚えておくしかない). Inside the south pedestal's sphere it
+ * is cut (S-28): placed there, the way onto the south bridge is open.
  */
-export const ROOM3_STACK = {
-  at: [eastX(115.5), SUMMIT_Y, -165.0] as Vec3,
-  radius: 0.6,
-  top: SUMMIT_Y + 3.2,
-} as const;
+export const ROOM3_RAILING: SurfaceDecl = {
+  id: 'area1-summit-wall',
+  box: boxAt(112.95, 113.3, SUMMIT_Y, SUMMIT_Y + 2.4, -168.4, -165.0),
+};
 /** 光の雫: on the north roof, in the lee of the northern wall (屋根の陰). S-40 had it just across the bridge, in plain sight. */
 export const ROOM3_DROP = {
   id: 'area1-room3',
   at: [eastX(110.1), SUMMIT_Y + 1.0, -160.95] as Vec3,
 } as const;
 /**
- * "端": where to peek from — at the terrace's lip between the bridges, where the slant through the gap between the roof's walls
- * falls (S-41; S-40's stood further back, both bridges and the drop's roof ahead).
+ * "端": where to peek from — on the terrace at its south-west corner, behind the crumbled wall on the lip, where the slant
+ * through the gap between the roof's walls comes down (S-41; S-40's stood between the bridges, both bridges and the drop's
+ * roof ahead).
  */
-const ROOM3_EDGE_E = 113.8;
-export const ROOM3_EDGE: Vec3 = [eastX(ROOM3_EDGE_E), SUMMIT_Y, -163.6];
+const ROOM3_EDGE_E = 113.85;
+export const ROOM3_EDGE: Vec3 = [eastX(ROOM3_EDGE_E), SUMMIT_Y, -167.55];
 /** 部屋3 as the game's session plays it. */
 export const ROOM3: RoomDecl = {
   id: 'area1-room3',
   pedestals: [ROOM3_PEDESTAL_N, ROOM3_PEDESTAL_S],
   drop: ROOM3_DROP,
+  surface: [ROOM3_RAILING],
   footing: [
     { id: 'area1-bridge-n', segments: splitFooting('area1-bridge-n', ROOM3_BRIDGE_N, 0.4) },
     { id: 'area1-bridge-s', segments: splitFooting('area1-bridge-s', ROOM3_BRIDGE_S, 0.4) },
@@ -707,7 +712,7 @@ export const MOTE_PATHS: readonly MotePath[] = [
     [AREA1_SLOPE.x, -146.2],
     [AREA1_SLOPE.x, -157.0],
     // S-41: to the valley's edge, where the slant through the roof's walls falls (端)
-    [eastX(ROOM3_EDGE_E + 0.6), ROOM3_EDGE[2] + 0.3],
+    [eastX(ROOM3_EDGE_E + 0.7), ROOM3_EDGE[2] + 0.4],
   ],
   [
     [eastX(115.5), -159.4],

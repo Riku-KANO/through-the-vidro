@@ -222,8 +222,13 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
     const gates = a.gates ?? [];
     for (const g of gates) {
       once('gate', g.id);
-      if (!a.rooms.some((r) => r.id === g.after))
-        problems.push(`gate "${g.id}" opens after room "${g.after}", which area "${a.id}" has not`);
+      const at = a.rooms.findIndex((r) => r.id === g.after);
+      if (at < 0) problems.push(`gate "${g.id}" opens after room "${g.after}", which area "${a.id}" has not`);
+      else if (at === a.rooms.length - 1)
+        problems.push(`gate "${g.id}" opens after the last room of area "${a.id}": it leads to no room`);
+      // (its events and its sound come as its clock crosses the moment: a moment at its start is never crossed)
+      if (!(g.opensAt > 0))
+        problems.push(`gate "${g.id}" opens at ${g.opensAt} s: its light must take some time`);
     }
     if (gates.length > 0)
       for (let i = 1; i < a.rooms.length; i++) {

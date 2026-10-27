@@ -8,11 +8,15 @@ import { expect, type Page, test } from '@playwright/test';
  *  1. 部屋は順に開く: the gate across the slope's foot stops you until 部屋1's drop is taken; its light comes along the lamps to
  *     the keystone, the leaves swing open with the prologue gate's sound, up the first flight. The same at the second flight's
  *     foot with 部屋2's drop (the courtyard played for real). Screens of each gate shut and open.
- *  2. 部屋3: peeking from the edge (端) the drop's pixels show through the gap in the roof's walls; with the vidro placed on the
- *     south pedestal, then on the north one, from by each pedestal (and from the edge) none do. Measured as S-27 did: the drop
- *     hidden by name against the same picture, the pixels that move between two shots of the same picture left out.
- *  3. 覗く像に遠い物を描かない: peeking in the courtyard from A toward the town, fewer draw calls than S-40's 266, nothing of the
- *     back layer left out, and the vidro's image as with nothing left out (the pixels inside it).
+ *  2. 部屋3: peeking from the edge (端, behind the crumbled wall on the lip) the drop's pixels show through the gap in the roof's
+ *     walls; with the vidro placed on the south pedestal, then on the north one, from by each pedestal and from the edge, none
+ *     do. Measured as S-27 did: the drop hidden by name against the same picture, the pixels that move between two shots of the
+ *     same picture left out.
+ *  3. 覗く像に遠い物を描かない: the peek image's far end is the haze's (nothing past it is to be seen: the vidro's image as with
+ *     nothing left out, nothing of the back layer ever left out). In the town that leaves out next to nothing; with the way's far
+ *     end (150 m, the measured alternative for the owner's call) peeking in the courtyard from A toward the town draws far fewer,
+ *     and where the far view is open (the slope's brow toward the chimney, the ridge toward the workshop) the record says how
+ *     much of the vidro's image changes.
  * Screens → artifacts/screens/S-41/<backend>/, the runs → artifacts/S-41/.
  */
 test.use({ locale: 'ja-JP' });
@@ -388,7 +392,8 @@ for (const backend of backends) {
     expect(taken.area1.nextRoom).toBe(1);
     // the light comes along the lamps toward the courtyard; at the keystone the gate starts to open (its own bus, its sound)
     const opening = await waitRoom(page, `r.area1.gates['${court.id}'].events.includes('open')`, 6_000);
-    expect(opening.area1.next, 'the lamps lit up to the keystone first').toBeGreaterThan(0.5);
+    // (the keystone is the third of 部屋1's five lamps: 3 / 5 lit when the gate starts to open)
+    expect(opening.area1.next, 'the lamps lit up to the keystone first').toBeGreaterThanOrEqual(0.59);
     // (on its own bus: nothing new in the room's events, S-16's table of sounds)
     expect(opening.events.some((e) => e.includes('gate'))).toBe(false);
     const opened = await waitRoom(page, `r.area1.gates['${court.id}'].events.includes('opened')`, 6_000);
@@ -479,7 +484,7 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-41 部屋3: the drop seen peeking from the edge alone; placed on either pedestal, not from by it [${backend}]`, async ({
+  test(`S-41 部屋3: the drop seen peeking from the edge alone; placed on either pedestal, not from by it nor from the edge [${backend}]`, async ({
     page,
   }) => {
     test.setTimeout(300_000);
@@ -496,40 +501,47 @@ for (const backend of backends) {
     await lock(page);
     await hookScene(page);
     const share: Record<string, number> = {};
+    const peekShare = async (name: string, shot?: string): Promise<void> => {
+      await page.mouse.down({ button: 'right' });
+      const p = await waitRoom(page, 'r.peekAmount > 0.999');
+      await page.waitForTimeout(500);
+      if (shot) await page.screenshot({ path: join(shotDir, shot) });
+      share[name] = await dropPixels(page, p.orbScreen);
+      await page.mouse.up({ button: 'right' });
+      await waitRoom(page, 'r.peekAmount === 0');
+    };
     // from where the slope arrives, looking across at the roofs: nothing of it (and peeking: nothing either)
     await lookAt(page, r3.drop);
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(shotDir, 'summit.png') });
     share.arrive = await dropPixels(page, null);
-    await page.mouse.down({ button: 'right' });
-    let p = await waitRoom(page, 'r.peekAmount > 0.999');
-    await page.waitForTimeout(400);
-    share['arrive-peek'] = await dropPixels(page, p.orbScreen);
-    await page.mouse.up({ button: 'right' });
-    await waitRoom(page, 'r.peekAmount === 0');
-    // the edge: peeking, its light through the gap between the roof's walls
-    await walkTo(page, r3.edge[0], r3.edge[2], { within: 0.2 });
+    await peekShare('arrive-peek');
+    // the edge, behind the crumbled wall on the lip: peeking, its light through the gap between the roof's walls
+    await walkTo(page, r3.edge[0], r3.edge[2], { within: 0.15 });
     await lookAt(page, r3.drop);
-    await page.mouse.down({ button: 'right' });
-    p = await waitRoom(page, 'r.peekAmount > 0.999');
-    await page.waitForTimeout(500);
-    await page.screenshot({ path: join(shotDir, 'edge-peek.png') });
-    share['edge-peek'] = await dropPixels(page, p.orbScreen);
-    await page.mouse.up({ button: 'right' });
-    await waitRoom(page, 'r.peekAmount === 0');
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: join(shotDir, 'edge.png') });
+    share.edge = await dropPixels(page, null);
+    await peekShare('edge-peek', 'edge-peek.png');
     // placed on the south pedestal (the drop is not in its sphere): from by it, and from the edge, nothing
     const zN = (r3.bridges.n.min[2] + r3.bridges.n.max[2]) / 2;
     const zS = (r3.bridges.s.min[2] + r3.bridges.s.max[2]) / 2;
-    await walkTo(page, r3.pedestals.s[0] + 0.6, zS + 0.6, { within: 0.25 });
+    const bySouth: [number, number] = [r3.pedestals.s[0] + 0.6, zS + 0.6];
+    await walkTo(page, bySouth[0], bySouth[1], { within: 0.25 });
     await use(page, r3.pedestals.s, 'pedestal', r3.ids.s);
     await waitRoom(page, 'r.sphereRadius > 3.99', 5_000);
     await lookAt(page, r3.drop);
     await page.waitForTimeout(300);
     share['placed-s'] = await dropPixels(page, null);
+    await walkTo(page, r3.edge[0], r3.edge[2], { within: 0.15 });
+    await lookAt(page, r3.drop);
+    await page.waitForTimeout(300);
+    share['placed-s-edge'] = await dropPixels(page, null);
+    await walkTo(page, bySouth[0], bySouth[1], { within: 0.25 });
     await use(page, r3.pedestals.s, 'pedestal', r3.ids.s);
     await waitRoom(page, "r.orb === 'hand' && r.sphereRadius === 0", 5_000);
-    // placed on the north one (the drop is real now, in the walls' lee): from by it, nothing (round the stub on the terrace)
-    await walkTo(page, r3.edge[0] + 0.2, r3.edge[2] - 0.4, { within: 0.3 });
+    // placed on the north one (the drop is real now, in the walls' lee): from by it, and back at the edge, nothing
+    await walkTo(page, r3.pedestals.n[0] + 1.2, zN - 1.4, { within: 0.3 });
     await walkTo(page, r3.pedestals.n[0] + 0.9, zN - 0.6, { within: 0.25 });
     await use(page, r3.pedestals.n, 'pedestal', r3.ids.n);
     const placed = await waitRoom(page, 'r.sphereRadius > 3.99', 5_000);
@@ -538,8 +550,15 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(shotDir, 'placed-n.png') });
     share['placed-n'] = await dropPixels(page, null);
+    await walkTo(page, r3.pedestals.n[0] + 1.2, zN - 1.4, { within: 0.3 });
+    await walkTo(page, r3.edge[0], r3.edge[2], { within: 0.15 });
+    await lookAt(page, r3.drop);
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(shotDir, 'placed-n-edge.png') });
+    share['placed-n-edge'] = await dropPixels(page, null);
     // over the bridge and round the northern wall, it is there to touch (覚えておいた所に)
     const wallA = r3.shade[0] as Rect & { top: number };
+    await walkTo(page, r3.terrace.minX + 0.6, zN, { within: 0.3, timeout: 40_000 });
     await walkTo(page, r3.bridges.n.min[0] + 0.2, zN, { within: 0.25 });
     await walkTo(page, wallA.minX - 0.5, zN - 0.1, { within: 0.25 });
     await walkTo(page, r3.drop[0], wallA.maxZ - 0.2, { within: 0.25 });
@@ -550,9 +569,16 @@ for (const backend of backends) {
     await use(page, r3.drop, 'drop', r3.ids.drop);
     await waitRoom(page, 'r.areas.area1.taken === 3', 6_000);
     writeFileSync(join(runDir, `room3-${backend}.json`), JSON.stringify({ backend, share, errors }, null, 2));
-    // (S-41 measured: the edge peek … of the vidro's circle; the rest 0)
     expect(share['edge-peek'], 'the drop through the gap, peeking from the edge').toBeGreaterThan(0.003);
-    for (const k of ['arrive', 'arrive-peek', 'placed-s', 'placed-n'])
+    for (const k of [
+      'arrive',
+      'arrive-peek',
+      'edge',
+      'placed-s',
+      'placed-s-edge',
+      'placed-n',
+      'placed-n-edge',
+    ])
       expect(share[k], `the drop seen ${k}`).toBeLessThan(0.0005);
     expect(share.lee, 'in its lee it is there').toBeGreaterThan(0.001);
     expect((await room(page)).fallRescues).toBe(0);
@@ -560,60 +586,83 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-41 the peek image leaves out what lies past the haze: fewer draw calls toward the town, the vidro's image as before [${backend}]`, async ({
+  test(`S-41 the peek image ends at the haze's far end: nothing of it changes, the back layer never left out; the way's far end measured [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(300_000);
     mkdirSync(runDir, { recursive: true });
     const errors = collectErrors(page);
     const runs: Record<string, unknown> = {};
-    for (const [name, spawn, at] of [
-      ['court-a', 'area1-court-a', 'room2'],
-      ['edge', 'area1-edge&area1Drop=1,2', 'room3'],
-    ] as const) {
-      await page.goto(`/?scene=prologue-proto&spawn=${spawn}${webgl}`);
-      const r0 = await waitRoom(
-        page,
-        "r.ready === true && r.orb === 'hand' && r.area1.state === 'ready'",
-        90_000,
+    const setFar = (m: number | null) =>
+      page.evaluate(
+        (v) =>
+          (window.__vidro.sceneProbe as { room: { setPeekFar: (m: number | null) => void } }).room.setPeekFar(
+            v,
+          ),
+        m,
       );
-      await lock(page);
-      await lookAt(page, at === 'room2' ? r0.layout.area1.room2.drop : r0.layout.area1.room3.drop);
-      await page.mouse.down({ button: 'right' });
-      const peek = await waitRoom(page, 'r.peekAmount > 0.999');
-      await page.waitForTimeout(600);
-      const cut = await room(page);
+    /** Peeking where it looks: the picture with the far end as `far` (null: the room's own) against everything drawn. */
+    const compare = async (far: number | null) => {
+      await setFar(far);
+      await page.waitForTimeout(400);
+      const r = await room(page);
       const a = await page.screenshot();
       await page.waitForTimeout(120);
       const again = await page.screenshot();
-      // everything the main camera would draw, into the peek image too (S-40's peek image)
-      await page.evaluate(() =>
-        (window.__vidro.sceneProbe as { room: { setPeekFar: (m: number | null) => void } }).room.setPeekFar(
-          1000,
-        ),
-      );
+      await setFar(1000);
       await page.waitForTimeout(400);
       const all = await room(page);
       const b = await page.screenshot();
-      const changed = await changedShare(page, a, again, b, peek.orbScreen);
-      await page.evaluate(() =>
-        (window.__vidro.sceneProbe as { room: { setPeekFar: (m: number | null) => void } }).room.setPeekFar(
-          null,
-        ),
-      );
-      await page.mouse.up({ button: 'right' });
-      runs[name] = {
-        cut: { drawCalls: cut.drawCalls, triangles: cut.triangles, peekFar: cut.peekFar },
-        all: { drawCalls: all.drawCalls, triangles: all.triangles, peekFar: all.peekFar },
-        changedInOrb: changed,
+      await setFar(null);
+      return {
+        drawCalls: r.drawCalls,
+        triangles: r.triangles,
+        peekFar: r.peekFar,
+        allDrawCalls: all.drawCalls,
+        changedInOrb: await changedShare(page, a, again, b, r.orbScreen),
       };
-      expect(cut.peekFar.leftOut, `${name}: something left out`).toBeGreaterThan(10);
-      expect(cut.peekFar.leftOutBack, `${name}: nothing of the back layer left out`).toBe(0);
-      expect(all.drawCalls - cut.drawCalls, `${name}: fewer draw calls`).toBeGreaterThan(40);
-      expect(changed, `${name}: the vidro's image as with nothing left out`).toBeLessThan(0.005);
-      expect(cut.drawCalls).toBeLessThanOrEqual(BUDGET.drawCalls);
-      expect(cut.triangles).toBeLessThanOrEqual(BUDGET.triangles);
-      if (name === 'court-a') expect(cut.drawCalls).toBeLessThan(S40_COURT_A_PEEK - 40);
+    };
+    for (const [name, spawn, at] of [
+      // toward the town from the courtyard (S-40: 266), from the edge; the open far views: the slope's brow toward the street's
+      // chimney (目印, about 190 m), the ridge's end toward the workshop's hill (about 190 m)
+      ['court-a', 'area1-court-a', 'room2'],
+      ['edge', 'area1-edge&area1Drop=1,2', 'room3'],
+      ['brow-chimney', 'slope', 'chimney'],
+      ['ridge-workshop', 'area1-shortcut', 'workshop'],
+    ] as const) {
+      await page.goto(`/?scene=prologue-proto&spawn=${spawn}${webgl}`);
+      const r0 = await waitRoom(page, "r.ready === true && r.orb === 'hand'", 90_000);
+      if (spawn !== 'slope') await waitRoom(page, "r.area1.state === 'ready'", 90_000);
+      await lock(page);
+      const lay = r0.layout.area1;
+      const target: P3 =
+        at === 'room2'
+          ? lay.room2.drop
+          : at === 'room3'
+            ? lay.room3.drop
+            : at === 'chimney'
+              ? (r0.layout as unknown as { area1: { chimneyTop: P3 } }).area1.chimneyTop
+              : [0, 4, 6];
+      await lookAt(page, target);
+      await page.mouse.down({ button: 'right' });
+      await waitRoom(page, 'r.peekAmount > 0.999');
+      await page.waitForTimeout(600);
+      // the room's own far end (the haze's), and the way's (150 m) for the owner's call
+      const own = await compare(null);
+      const way = await compare(150);
+      await page.mouse.up({ button: 'right' });
+      runs[name] = { own, way };
+      expect(own.peekFar.leftOutBack, `${name}: nothing of the back layer left out`).toBe(0);
+      expect(way.peekFar.leftOutBack, `${name}: nothing of the back layer left out (150 m)`).toBe(0);
+      expect(own.changedInOrb, `${name}: the vidro's image as with nothing left out`).toBeLessThan(0.005);
+      expect(own.drawCalls).toBeLessThanOrEqual(BUDGET.drawCalls);
+      expect(own.triangles).toBeLessThanOrEqual(BUDGET.triangles);
+      if (name === 'court-a') {
+        // at the way's far end, far fewer (the owner's call: process/slices/S-41.md 判断待ち)
+        expect(way.peekFar.leftOut).toBeGreaterThan(40);
+        expect(way.allDrawCalls - way.drawCalls).toBeGreaterThan(40);
+        expect(way.drawCalls).toBeLessThan(S40_COURT_A_PEEK - 40);
+      }
     }
     writeFileSync(
       join(runDir, `peek-far-${backend}.json`),

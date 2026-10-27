@@ -65,10 +65,10 @@ import {
   ROOM3_DROP,
   ROOM3_PEDESTAL_N,
   ROOM3_PEDESTAL_S,
+  ROOM3_RAILING,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
   ROOM3_SHADE,
-  ROOM3_STACK,
   ROOM3_TERRACE,
   SHORTCUT_GATE,
   SHORTCUT_SECONDS,
@@ -486,7 +486,10 @@ describe('S-40: 部屋3「煙突の見晴らし」 in a Rapier world, played wit
     expect(
       session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, [eastX(112.1), SUMMIT_Y, lipS[2]]),
     ).toBe('pickup-denied');
-    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, lipS)).toBe('pickup');
+    // (S-41: from behind the crumbled wall on the lip: in it, cut, the vidro would not come)
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, [eastX(114.3), SUMMIT_Y, lipS[2]]),
+    ).toBe('pickup');
   });
 });
 
@@ -585,23 +588,32 @@ describe('S-41: the gates’ leaves collide where they are drawn (layout gateLea
 describe('S-41: 部屋3 — the drop in the lee of the roof’s walls, the chimney’s stub on the terrace (屋根の陰)', () => {
   const lipN: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2];
 
-  it('the stub stops the body on the terrace; the roof’s walls stop it on the roof (their gap too narrow for it)', () => {
+  it('the crumbled wall on the lip stops the body; on the south pedestal it is cut: onto the south bridge (S-28), back, it comes', () => {
     const r = world();
-    const [sx, , sz] = ROOM3_STACK.at;
-    const p = body(r, [sx + 2.5, SUMMIT_Y, sz], WEST_YAW);
+    const w = ROOM3_RAILING.box;
+    const zS = (ROOM3_BRIDGE_S.min[2] + ROOM3_BRIDGE_S.max[2]) / 2;
+    const p = body(r, [eastX(115.0), SUMMIT_Y, zS], WEST_YAW);
     walk(r, p, forward, 3);
-    expect(Math.hypot(p.feet.x - sx, p.feet.z - sz)).toBeGreaterThan(ROOM3_STACK.radius + BODY_RADIUS - 0.05);
-    // placed on the north pedestal: over the bridge and along behind the walls, east into their gap — it holds
+    expect(p.feet.x).toBeGreaterThan(w.max[0] + BODY_RADIUS - 0.05);
     const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
     const g = played(r, session);
-    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, lipN)).toBe('place');
+    const by: Vec3 = [eastX(114.3), SUMMIT_Y, zS];
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, by)).toBe('place');
     g.run(MATERIALIZE_SECONDS + 0.1);
-    const [a, b] = ROOM3_SHADE as [(typeof ROOM3_SHADE)[0], (typeof ROOM3_SHADE)[0]];
-    const gapZ = (a.minZ + b.maxZ) / 2;
-    const q = body(r, [a.minX - 1.0, SUMMIT_Y, gapZ], yawToward(1, 0));
-    g.go(q, forward, 3);
-    // (its round side wedges a little into the gap's mouth, its middle never past the walls' face)
-    expect(q.feet.x).toBeLessThan(a.minX - 0.1);
+    expect(r.wall?.cutCount).toBe(surfaceSegments(ROOM3_RAILING).length);
+    g.go(p, forward, 3);
+    expect(eastOf(p.feet.x)).toBeLessThan(eastOf(ROOM3_ROOF_S.maxX) - 0.3);
+    // standing in the cut wall the vidro will not come; behind it on the terrace it does, and the wall is back
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, [
+        (w.min[0] + w.max[0]) / 2,
+        SUMMIT_Y,
+        zS,
+      ]),
+    ).toBe('pickup-denied');
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_S.id }, by)).toBe('pickup');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    expect(r.wall?.cutCount).toBe(0);
   });
 
   it('placed on the north pedestal: over its bridge, round the northern wall to the drop in its lee, and the drop is touched', () => {
@@ -622,6 +634,11 @@ describe('S-41: 部屋3 — the drop in the lee of the roof’s walls, the chimn
     expect(d).toBeLessThan(DROP_REACH);
     expect(session.dropMaterialized(ROOM3_DROP.id)).toBe(true);
     expect(session.interact({ kind: 'drop', id: ROOM3_DROP.id }, g.feet(p))).toBe('touch-drop');
+    // the northern wall stands solid on the roof's edge: east from the lee it holds the body (no stepping into the valley)
+    const wallA = ROOM3_SHADE[0] as (typeof ROOM3_SHADE)[0];
+    face(r, p, yawToward(1, 0));
+    g.go(p, forward, 2);
+    expect(p.feet.x).toBeLessThan(wallA.minX - BODY_RADIUS + 0.05);
   });
 });
 

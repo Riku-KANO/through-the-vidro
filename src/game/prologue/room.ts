@@ -50,10 +50,10 @@ import {
   ROOM3_EDGE,
   ROOM3_PEDESTAL_N,
   ROOM3_PEDESTAL_S,
+  ROOM3_RAILING,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
   ROOM3_SHADE,
-  ROOM3_STACK,
   ROOM3_TERRACE,
   SHORTCUT_GATE,
   SHORTCUT_SECONDS,
@@ -117,7 +117,7 @@ import {
   SurfaceColliders,
   withMembrane,
 } from './physics';
-import { buildPlaza, FOG_WAY, fogRangeAt } from './plaza';
+import { buildPlaza, fogRangeAt } from './plaza';
 import { buildRoomArt } from './room-art';
 import {
   type AreaGateEvent,
@@ -347,9 +347,9 @@ export interface RoomProbe {
         pedestals: { n: Vec3; s: Vec3 };
         ids: { n: string; s: string; drop: string };
         drop: Vec3;
-        /** S-41: the roof's walls the drop hovers behind, the chimney's stub on the terrace. */
+        /** S-41: the roof's walls the drop hovers behind, the crumbled wall on the lip (表だけ) the edge peeks past. */
         shade: { minX: number; maxX: number; minZ: number; maxZ: number; top: number }[];
-        stack: { at: Vec3; radius: number; top: number };
+        railing: Box;
       };
       /** S-41: the gates between the rooms — where each stands, its half width, which way its leaves swing (z). */
       gates: { id: string; after: string; at: Vec3; halfWidth: number; swing: number }[];
@@ -452,14 +452,14 @@ const APPEAR_SECONDS = 3.5;
 const SHORTCUT_GLOW = 2;
 const SHORTCUT_BAND_WIDTH = 5;
 /**
- * 仮 (S-41; 発案者 2026-10-27: 覗く像のパスで霧の向こうの物（霧の遠端より先）を描かない、玉越しの裏の層の見た目は変えない): how far the
- * peek image reaches — the far end of the way's haze (plaza.ts FOG_WAY), the haze the peek was made in (the workshop and the
- * way; there it is the scene's own far end). In the town S-35 cleared the air to 300 m for the landmarks, and there nothing
- * lies past the haze's far end: what the peek image drew toward the town was the workshop's furniture, the slope and the town's
- * houses 95–200 m off, inside the haze and mostly behind エリア1's houses. The peek image keeps the way's far end; the back
- * layer (all of it within some 60 m of where it can be peeked at) is drawn as before (process/slices/S-41.md).
+ * S-41 (発案者 2026-10-27: 覗く像のパスで霧の向こうの物（霧の遠端より先）を描かない、玉越しの裏の層の見た目は変えない): how far the peek
+ * image reaches — the scene's haze's far end where the body stands (plaza.ts fogRangeAt: 150 m on the way, 300 m in the town,
+ * where S-35 cleared the air for the landmarks). Past it everything is haze: nothing the peek image left out was to be seen. In
+ * the town, though, hardly anything lies past it — what the peek image draws toward the town is the workshop's furniture, the
+ * slope and the town's houses 95–200 m off, inside the haze — so it lowers no draw calls there (判断待ち: the way's far end,
+ * plaza.ts FOG_WAY.far, would: process/slices/S-41.md). Dev: ?peekFar=<m>, the probe's setPeekFar.
  */
-const PEEK_FAR = FOG_WAY.far;
+const peekFarOf = (fogFar: number): number => fogFar;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -678,7 +678,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
           ids: { n: ROOM3_PEDESTAL_N.id, s: ROOM3_PEDESTAL_S.id, drop: ROOM3_DROP.id },
           drop: ROOM3_DROP.at,
           shade: ROOM3_SHADE.map((w) => ({ ...w })),
-          stack: { at: ROOM3_STACK.at, radius: ROOM3_STACK.radius, top: ROOM3_STACK.top },
+          railing: ROOM3_RAILING.box,
         },
         gates: AREA1_GATES.map((g) => ({
           id: g.id,
@@ -831,8 +831,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     antialias: quality.antialias,
     environment: art.environment,
     finish: finishModeFrom(ctx.params),
-    // S-41: the peek image ends where the haze does (PEEK_FAR; dev: ?peekFar=<m>, for measuring)
-    peekFar: () => peekFarOverride ?? Math.min(art.fogRange.far.value, PEEK_FAR),
+    // S-41: the peek image ends where the haze does (peekFarOf; dev: ?peekFar=<m>, for measuring)
+    peekFar: () => peekFarOverride ?? peekFarOf(art.fogRange.far.value),
   });
 
   probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
@@ -1847,7 +1847,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       // renderer.info is reset once per animation frame, so this is the whole frame so far
       probe.drawCalls = renderer.info.render.drawCalls;
       probe.triangles = renderer.info.render.triangles;
-      probe.peekFar.far = peekFarOverride ?? Math.min(art.fogRange.far.value, PEEK_FAR);
+      probe.peekFar.far = peekFarOverride ?? peekFarOf(art.fogRange.far.value);
       probe.peekFar.leftOut = pipeline.farLeftOut;
       probe.peekFar.leftOutBack = pipeline.farLeftOutBack;
       probe.peekFar.keptBack = pipeline.farKeptBack;
