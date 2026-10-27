@@ -104,6 +104,8 @@ interface RoomProbe {
         pedestals: { n: P3; s: P3 };
         ids: { n: string; s: string; drop: string };
         drop: P3;
+        /** S-41: the roof's walls the drop hovers behind. */
+        shade: (Rect & { top: number })[];
       };
       shortcut: { minX: number; maxX: number; topZ: number; footZ: number; gate: Box; seconds: number };
     };
@@ -405,7 +407,8 @@ for (const backend of backends) {
     test.setTimeout(300_000);
     mkdirSync(shotDir, { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto&spawn=area1-court${webgl}`);
+    // (S-41: rooms open in order — 部屋1's drop held taken, as it is by the time one comes to the courtyard)
+    await page.goto(`/?scene=prologue-proto&spawn=area1-court&area1Drop=1${webgl}`);
     const r0 = await waitRoom(
       page,
       "r.ready === true && r.orb === 'hand' && r.area1.state === 'ready'",
@@ -462,7 +465,7 @@ for (const backend of backends) {
     await walkTo(page, stairX, r2.balcony.minZ + 0.6, { within: 0.25 });
     await walkTo(page, r2.drop[0] + 0.5, r2.drop[2], { within: 0.25 });
     await use(page, r2.drop, 'drop', r2.ids.drop);
-    const taken = await waitRoom(page, 'r.areas.area1.taken === 1', 6_000);
+    const taken = await waitRoom(page, 'r.areas.area1.taken === 2', 6_000);
     expect(taken.events).toContain('dropTaken');
     // the lamps toward 部屋3 light (次の部屋の方向)
     await waitRoom(page, 'r.area1.next2 >= 1', 8_000);
@@ -530,6 +533,10 @@ for (const backend of backends) {
     await waitRoom(page, 'r.sphereRadius > 3.99', 5_000);
     const across = await walkTo(page, r3.roofs.n.maxX - 0.4, zN, { within: 0.25 });
     expect(across.position.y).toBeCloseTo(r3.summitY, 1);
+    // (S-41: the drop hovers in the lee of the roof's walls: onto the roof past the northern one, round into its lee)
+    const wallA = r3.shade[0] as Rect & { top: number };
+    await walkTo(page, wallA.minX - 0.5, zN - 0.1, { within: 0.25 });
+    await walkTo(page, r3.drop[0], wallA.maxZ - 0.2, { within: 0.25 });
     await use(page, r3.drop, 'drop', r3.ids.drop);
     await waitRoom(page, 'r.areas.area1.taken === 3', 6_000);
     // watch the light along the ridge to the stairs' top
@@ -548,6 +555,7 @@ for (const backend of backends) {
       fixed.area1.walls['area1-shortcut-gate']?.segments,
     );
     // back over the bridge (fixed); the vidro comes, and the bridge stays
+    await walkTo(page, wallA.minX - 0.5, zN - 0.1, { within: 0.25 });
     const onBridge = await walkTo(page, r3.terrace.minX - 0.9, zN, { within: 0.25 });
     expect(onBridge.position.y).toBeCloseTo(r3.summitY, 1);
     await use(page, r3.pedestals.n, 'pedestal', r3.ids.n);

@@ -271,9 +271,10 @@ export interface RoomProbe {
   fallRescues: number;
   /**
    * S-41: the peek image's far end (metres of view depth), and what the last peek image left out past it — things, and of them
-   * those on the back layer alone (must stay 0: 玉越しの裏の層の見た目は変えない).
+   * those on the back layer alone (must stay 0: 玉越しの裏の層の見た目は変えない) — and the back layer's things past it it drew all
+   * the same.
    */
-  peekFar: { far: number; leftOut: number; leftOutBack: number };
+  peekFar: { far: number; leftOut: number; leftOutBack: number; keptBack: number };
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   /**
@@ -605,7 +606,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     drawCalls: 0,
     triangles: 0,
     fallRescues: 0,
-    peekFar: { far: 0, leftOut: 0, leftOutBack: 0 },
+    peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     autoplay: opts.autopilot
       ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
@@ -1849,6 +1850,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       probe.peekFar.far = peekFarOverride ?? Math.min(art.fogRange.far.value, PEEK_FAR);
       probe.peekFar.leftOut = pipeline.farLeftOut;
       probe.peekFar.leftOutBack = pipeline.farLeftOutBack;
+      probe.peekFar.keptBack = pipeline.farKeptBack;
     },
     resize() {
       pipeline.resize();

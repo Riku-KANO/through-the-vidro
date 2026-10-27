@@ -43,6 +43,9 @@ const BLOOM_RESOLUTION = 0.25;
 /** S-41: the layer channels of a thing on the back layer alone (no surface channel: not shared). */
 const BACK_ONLY = 1 << LAYER_CHANNEL.back;
 const SURFACE = 1 << LAYER_CHANNEL.surface;
+/** Is it on the back layer alone (not shared)? */
+const backOnly = (o: THREE.Object3D): boolean =>
+  (o.layers.mask & BACK_ONLY) === BACK_ONLY && (o.layers.mask & SURFACE) === 0;
 
 export interface PeekPipelineOptions {
   renderer: THREE.WebGPURenderer;
@@ -196,10 +199,13 @@ export class PeekPipeline {
    */
   farLeftOut = 0;
   farLeftOutBack = 0;
+  /** And the things of the back layer alone past the far end that it drew all the same. */
+  farKeptBack = 0;
 
   /**
    * S-41: hides what the peek image does not reach — a thing three would cull by its bounds (frustumCulled), seen by the back
-   * camera's layers, whose bounding sphere lies wholly deeper than `far` along the view. showBeyond() puts them back.
+   * camera's layers, whose bounding sphere lies wholly deeper than `far` along the view — but never the back layer itself
+   * (玉越しの裏の層の見た目は変えない: the prologue's bridge seen from the town stays as it was). showBeyond() puts them back.
    */
   private hideBeyond(far: number): void {
     const bc = this.backCamera;
@@ -208,6 +214,7 @@ export class PeekPipeline {
     // the camera looks down its −Z
     this.forward.set(-(e[8] ?? 0), -(e[9] ?? 0), -(e[10] ?? 0)).normalize();
     const { eye, forward, sphere, beyond } = this;
+    let kept = 0;
     this.opts.scene.traverseVisible((o) => {
       const m = o as THREE.Mesh;
       if (!(m.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine) || !o.frustumCulled) return;
@@ -216,15 +223,18 @@ export class PeekPipeline {
       if (!bounds) return;
       sphere.copy(bounds).applyMatrix4(o.matrixWorld);
       const depth = sphere.center.sub(eye).dot(forward);
-      if (depth - sphere.radius > far) beyond.push(o);
+      if (depth - sphere.radius <= far) return;
+      if (backOnly(o)) kept++;
+      else beyond.push(o);
     });
     let back = 0;
     for (const o of beyond) {
       o.visible = false;
-      if ((o.layers.mask & BACK_ONLY) === BACK_ONLY && (o.layers.mask & SURFACE) === 0) back++;
+      if (backOnly(o)) back++;
     }
     this.farLeftOut = beyond.length;
     this.farLeftOutBack = back;
+    this.farKeptBack = kept;
   }
 
   private showBeyond(): void {
@@ -249,6 +259,7 @@ export class PeekPipeline {
       // S-41: not past the peek image's far end — but on the warm-up (its pipelines made before the first peek), all of it
       const far = this.opts.peekFar?.() ?? Number.POSITIVE_INFINITY;
       if (frame.peek > 0 && !this.warm && far < this.opts.camera.far) this.hideBeyond(far);
+      else this.farLeftOut = this.farLeftOutBack = this.farKeptBack = 0;
       const previous = renderer.getRenderTarget();
       renderer.setRenderTarget(this.backTarget);
       try {
