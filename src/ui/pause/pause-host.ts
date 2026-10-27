@@ -9,6 +9,7 @@ import {
 import { midiToHz } from '../../core/audio/scale';
 import { padCodesPressed } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
+import { TRANSITIONS } from '../flow';
 import type { StringKey } from '../lang';
 import {
   ESC_ECHO_MS,
@@ -28,7 +29,7 @@ import {
   pickItem,
   stepMenu,
 } from './pause-logic';
-import { PauseScreen } from './pause-screen';
+import { PauseScreen, type PauseView } from './pause-screen';
 import type { PausableWorld } from './port';
 
 /**
@@ -66,8 +67,9 @@ export interface PauseProbe {
   drawnWhileHeld: number;
   /** The longest frame (ms) while opening, open, and clearing (closing or leaving). */
   frameMs: { opening: number; open: number; closing: number };
-  /** How far the game's sounds are turned down (0..1). */
+  /** How far the game's sounds are turned down for the pause (0..1), and faded out for the home after タイトルへ (0..1). */
   ducked: number;
+  away: number;
   /** Dev hold (screenshots): stands the opening at this many seconds in; null lets it go on. */
   hold: number | null;
   /** Asks for the pause as the world's input would (tests: the autopilot holds the input). */
@@ -85,6 +87,7 @@ export interface PauseHostOptions {
 }
 
 const MAX_SOUNDS = 40;
+const NO_BUTTONS: ReadonlySet<string> = new Set();
 /** The fallback ping (before the pause's sounds are made): the item tick's D5. */
 const TICK_HZ = midiToHz(74);
 
@@ -105,7 +108,15 @@ export class PauseHost {
   private frozenDrawn = false;
   private needsFrame = false;
   private focusPending = false;
-  private padHeld: ReadonlySet<string> = new Set();
+  private padHeld: ReadonlySet<string> = NO_BUTTONS;
+  private readonly view: PauseView = {
+    up: false,
+    frost: 0,
+    writing: 0,
+    page: 'menu',
+    focused: null,
+    interactive: false,
+  };
   private lastNow = performance.now();
   private mix: PauseMix | null = null;
   private bank: PauseBank = {};
@@ -149,6 +160,7 @@ export class PauseHost {
       drawnWhileHeld: 0,
       frameMs: { opening: 0, open: 0, closing: 0 },
       ducked: 0,
+      away: 0,
       hold: null,
       ask() {
         host.request();
@@ -210,7 +222,8 @@ export class PauseHost {
       this.held = held;
       this.world.setHeld(held);
     }
-    this.pollPad();
+    // the pad is read only while the pause is up (open() reads which buttons are held already)
+    if (held) this.pollPad();
 
     const hold = this.probe.hold;
     if (hold !== null && this.timeline.phase === 'opening') this.timeline.holdAt(hold);
@@ -222,22 +235,23 @@ export class PauseHost {
     this.frozen = (phase === 'opening' || phase === 'open') && this.timeline.timeScale === 0;
     if (!this.frozen) this.frozenDrawn = false;
 
-    // the game's sounds: down with the frost, and kept down on the home after leaving for the title
-    const awayTarget = this.away ? 1 : 0;
-    const step = dt / PAUSE_SECONDS.clear;
-    this.awayAmount =
-      awayTarget > this.awayAmount ? awayTarget : Math.max(awayTarget, this.awayAmount - step);
-    const ducked = Math.max(this.timeline.frost, this.awayAmount);
-    this.mix?.set(ducked);
+    // the game's sounds: down with the frost; after leaving for the title the game's ambience fades out over the dive back
+    // (the home has no room sounds, as when first seen) and comes back once play starts again
+    const awayStep = dt / (this.away ? TRANSITIONS.homeToGame.seconds : PAUSE_SECONDS.clear);
+    this.awayAmount = this.away
+      ? Math.min(1, this.awayAmount + awayStep)
+      : Math.max(0, this.awayAmount - awayStep);
+    this.mix?.set(this.timeline.frost);
+    this.mix?.setAway(this.awayAmount);
 
-    this.screen.render(dt, {
-      up: phase !== 'closed',
-      frost: this.timeline.frost,
-      writing: this.timeline.writing,
-      page: this.menu.page,
-      focused: phase === 'closed' ? null : focusedItem(this.menu),
-      interactive: this.timeline.interactive,
-    });
+    const view = this.view;
+    view.up = phase !== 'closed';
+    view.frost = this.timeline.frost;
+    view.writing = this.timeline.writing;
+    view.page = this.menu.page;
+    view.focused = phase === 'closed' ? null : focusedItem(this.menu);
+    view.interactive = this.timeline.interactive;
+    this.screen.render(dt, view);
     if (this.focusPending && this.timeline.interactive) {
       // after the render: the page's buttons are shown now
       this.focusPending = false;
@@ -254,7 +268,8 @@ export class PauseHost {
     p.frost = this.timeline.frost;
     p.writing = this.timeline.writing;
     p.timeScale = this.timeline.timeScale;
-    p.ducked = ducked;
+    p.ducked = this.timeline.frost;
+    p.away = this.awayAmount;
   }
 
   dispose(): void {
@@ -283,6 +298,8 @@ export class PauseHost {
     this.probe.respondedAt = null;
     if (was === 'closed') this.menu = MENU_START;
     this.focusPending = true;
+    // the buttons held now (the Start that asked for the pause) are not new presses for the pause
+    this.padHeld = this.readPad(this.padHeld);
     this.ring('open');
   }
 
@@ -293,8 +310,11 @@ export class PauseHost {
   }
 
   private leave(): void {
+    const phase = this.timeline.phase;
+    if (phase !== 'opening' && phase !== 'open') return;
+    // the dive back first: if it cannot start now, the pause stays as it is
     if (!this.leaveGame()) return;
-    if (!this.timeline.leave()) return;
+    this.timeline.leave();
     this.probe.left++;
     this.away = true;
     this.ring('leave');
@@ -305,8 +325,8 @@ export class PauseHost {
     const phase = this.timeline.phase;
     if (phase !== 'opening' && phase !== 'open') return;
     if (!this.timeline.interactive) {
-      // Esc / B while the frost still spreads plays it back (遷移のルール 4, 戻る操作)
-      if (command === 'back') this.close();
+      // Esc / B / Start while the frost still spreads plays it back (遷移のルール 4, 戻る操作)
+      if (command === 'back' || command === 'close') this.close();
       return;
     }
     this.apply(stepMenu(this.menu, command), gesture);
@@ -360,12 +380,17 @@ export class PauseHost {
   };
 
   private pollPad(): void {
-    const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
-    const pad = Array.from(pads).find((p): p is Gamepad => p?.connected === true);
-    const held = pad ? padCodesPressed(pad.buttons, this.padHeld) : new Set<string>();
+    const held = this.readPad(this.padHeld);
     const commands = padCommands(this.padHeld, held);
     this.padHeld = held;
     for (const c of commands) this.command(c, false);
+  }
+
+  /** The buttons held on the first connected pad (src/game/input/gamepad.ts codes). */
+  private readPad(previous: ReadonlySet<string>): ReadonlySet<string> {
+    const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
+    return NO_BUTTONS;
   }
 
   private ring(cue: PauseCue, opts: { rate?: number; gain?: number } = {}): void {

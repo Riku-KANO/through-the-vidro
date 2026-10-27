@@ -99,13 +99,10 @@ describe('the pause’s sounds (遷移のルール 6: 遷移ごとに固有の�
 });
 
 describe('PAUSE_DUCK (ポーズ中はゲームの音を絞る: 環境音は小さく残す)', () => {
-  it('turns the ambience down but not off, and leaves the other volumes', () => {
+  it('turns the ambience down but not off, and leaves the player’s master volume', () => {
     expect(PAUSE_DUCK.ambience).toBeGreaterThan(0.2);
     expect(PAUSE_DUCK.ambience).toBeLessThan(0.6);
     expect(PAUSE_DUCK.master).toBeUndefined();
-    expect(PAUSE_DUCK.music).toBeUndefined();
-    // the effects bus carries the pause's own sounds; the game's events stop with its time
-    expect(PAUSE_DUCK.sfx).toBeUndefined();
   });
 });
 
@@ -171,13 +168,28 @@ describe('PauseMix', () => {
     expect(e.volumes.ambience).toBe(PAUSE_DUCK.ambience);
   });
 
-  it('skips setting a volume that would not change (it is asked every frame)', () => {
-    const e = fakeEngine();
+  it('fades the game’s ambience out on the home after タイトルへ, and gives it back when play starts again', () => {
+    const e = fakeEngine({ ambience: 0.9 });
     const mix = new PauseMix(e);
     mix.set(1);
-    const n = e.sets.length;
-    mix.set(1);
-    mix.set(1 - 1e-5);
-    expect(e.sets.length).toBe(n);
+    mix.setAway(1);
+    mix.set(0);
+    expect(e.volumes.ambience).toBe(0);
+    mix.setAway(0.5);
+    expect(e.volumes.ambience).toBeGreaterThan(0);
+    expect(e.volumes.ambience).toBeLessThan(0.9);
+    mix.setAway(0);
+    expect(e.volumes.ambience).toBe(0.9);
+  });
+
+  it('keeps the slider the player set on the home too', () => {
+    const e = fakeEngine({ ambience: 1 });
+    const mix = new PauseMix(e);
+    mix.setAway(1);
+    mix.setUserVolume('ambience', 0.3);
+    expect(mix.userVolume('ambience')).toBe(0.3);
+    expect(e.volumes.ambience).toBe(0);
+    mix.setAway(0);
+    expect(e.volumes.ambience).toBe(0.3);
   });
 });

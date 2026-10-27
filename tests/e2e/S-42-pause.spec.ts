@@ -321,6 +321,12 @@ for (const backend of backends) {
     const holdingAt = await pause(page);
     expect(holdingAt.timeScale, 'part way: the time is slowing, not stopped').toBeGreaterThan(0);
     expect(holdingAt.timeScale).toBeLessThan(1);
+    // and the items being written with a finger (0.4 s of frost, then halfway through the 0.3 s of writing)
+    await page.evaluate(() => {
+      (window.__vidro.sceneProbe as { pause: { hold: number | null } }).pause.hold = 0.55;
+    });
+    await waitPause(page, "q.phase === 'opening' && q.writing > 0.45 && q.writing < 0.55");
+    const writing = await snap('writing');
     await page.evaluate(() => {
       (window.__vidro.sceneProbe as { pause: { hold: number | null } }).pause.hold = null;
     });
@@ -454,9 +460,48 @@ for (const backend of backends) {
     await waitPause(page, "q.page === 'menu' && q.focused === 'title'");
     await padPress(page, PAD.B);
     await waitPause(page, "q.phase === 'closed'", 3_000);
+    // Start closes from the question too (it closes as it opened)
     await padPress(page, PAD.START);
     await waitPause(page, "q.phase === 'open'");
+    await padPress(page, PAD.DOWN);
+    await padPress(page, PAD.A);
+    await waitPause(page, "q.page === 'confirm'");
     await padPress(page, PAD.START);
+    await waitPause(page, "q.phase === 'closed'", 3_000);
+    expect((await pause(page)).left).toBe(0);
+
+    // ---- a double click on タイトルへ does not answer the question it opens (はい is under it, unseen) ----
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'open'");
+    await page.waitForTimeout(350);
+    // where はい will stand: ask once by keyboard to measure it, then go back
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await waitPause(page, "q.page === 'confirm' && q.writing === 1");
+    const yesBox = await page.locator('[data-pause-item="yes"]').boundingBox();
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.page === 'menu' && q.writing === 1");
+    const titleBox = await page.locator('[data-pause-item="title"]').boundingBox();
+    if (!yesBox || !titleBox) throw new Error('no boxes for タイトルへ / はい');
+    const overlap = {
+      x0: Math.max(yesBox.x, titleBox.x),
+      x1: Math.min(yesBox.x + yesBox.width, titleBox.x + titleBox.width),
+      y0: Math.max(yesBox.y, titleBox.y),
+      y1: Math.min(yesBox.y + yesBox.height, titleBox.y + titleBox.height),
+    };
+    if (overlap.x1 > overlap.x0 && overlap.y1 > overlap.y0) {
+      await page.mouse.dblclick((overlap.x0 + overlap.x1) / 2, (overlap.y0 + overlap.y1) / 2);
+      await waitPause(page, "q.page === 'confirm'");
+      await page.waitForTimeout(500);
+      const p = await pause(page);
+      expect(p.left, 'the second click did not leave').toBe(0);
+      expect(p.phase).toBe('open');
+      expect(p.page).toBe('confirm');
+    }
+    // Esc back to the items, Esc out
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.page === 'menu'");
+    await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'closed'", 3_000);
 
     // ---- タイトルへ: asked first (いいえ chosen), Esc goes back, はい leaves through the dive played back ----
@@ -488,8 +533,8 @@ for (const backend of backends) {
     const home = await snap('home-again');
     expect((await pause(page)).phase).toBe('closed');
     expect((await pause(page)).left).toBe(1);
-    // back on the home the game's ambience stays low (the home rings over it)
-    expect((await gate(page)).volumes?.ambience ?? 1).toBeLessThan(VIDRO_VOLUMES.ambience);
+    // back on the home the game's ambience has faded out (the home has no room sounds, as when first seen)
+    await expect.poll(async () => (await gate(page)).volumes?.ambience, { timeout: 2_000 }).toBe(0);
 
     // ---- 「はじめる」 again (the keyboard: the focus is back on it) → playing ----
     await expect(page.locator('[data-item="start"]')).toBeFocused({ timeout: 3_000 });
@@ -519,7 +564,7 @@ for (const backend of backends) {
     expect((await gate(page)).contexts).toBe(1);
 
     // 黒い画面を使わない: every picture of the way is as lit as the landing
-    for (const [name, l] of Object.entries({ opening, open, confirm, leaving, home, again })) {
+    for (const [name, l] of Object.entries({ opening, writing, open, confirm, leaving, home, again })) {
       expect(l.dark, `${name}: no black picture`).toBeLessThan(Math.max(0.35, landed.dark + 0.1));
       expect(l.mean, `${name}: not dark`).toBeGreaterThan(0.04);
     }
@@ -538,12 +583,13 @@ for (const backend of backends) {
     await page.evaluate(() => document.exitPointerLock()).catch(() => {});
   });
 
-  test(`S-42 the pause stops the close's light where it is (asked while the autopilot plays) [${backend}]`, async ({
+  test(`S-42 the pause stops the close's light where it is, and タイトルへ from down in the town (asked while the autopilot plays) [${backend}]`, async ({
     page,
   }) => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
+    mkdirSync(join(root, 'artifacts/S-42'), { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&autoplay=1&debug=1${webgl}`);
     // the moment the light starts across the bridge, ask for the pause as the input would (the autopilot holds it)
     await page.waitForFunction(
       () => {
@@ -572,6 +618,144 @@ for (const backend of backends) {
       a.finale.settle,
       { timeout: 5_000 },
     );
+
+    // ---- タイトルへ from far from the workshop (where the script ends, down in the town): the dive back leaves from there,
+    // arcs up over the town, and the dive in again comes down onto the same place ----
+    await page.waitForFunction(
+      () => !!(window.__vidro.sceneProbe as { room: RoomProbe }).room.autoplay?.done,
+      undefined,
+      { timeout: 150_000 },
+    );
+    const far = await room(page);
+    const shotDir = join(root, 'artifacts/screens/S-42', backend);
+    mkdirSync(shotDir, { recursive: true });
+    const shots: Record<string, { mean: number; dark: number }> = {};
+    const snap = async (name: string): Promise<void> => {
+      shots[name] = await luminance(page, await page.screenshot({ path: join(shotDir, `${name}.png`) }));
+    };
+    await snap('far-play');
+    // the game camera of every frame of the way back and in again (debug=1: the world drawn into the orb's image)
+    await page.evaluate(() => {
+      const w = window as unknown as { __s42Cam?: number[][] };
+      w.__s42Cam = [];
+      const renderer = window.__vidroDebug?.renderer as unknown as { render: (...a: unknown[]) => unknown };
+      const render = renderer.render;
+      renderer.render = (...args: unknown[]) => {
+        const s = args[0] as { isScene?: boolean; children?: unknown[] };
+        const c = args[1] as {
+          isPerspectiveCamera?: boolean;
+          fov?: number;
+          position?: { x: number; y: number; z: number };
+        };
+        const p = window.__vidro.sceneProbe as { transition?: { value: number } | null };
+        // (the home's own camera is the 35-degree one: HOME_COMPOSITION.fovDeg)
+        if (s?.isScene && c?.isPerspectiveCamera && c.fov !== 35 && c.position && p.transition)
+          w.__s42Cam?.push([p.transition.value, c.position.x, c.position.y, c.position.z]);
+        return render.apply(renderer, args);
+      };
+    });
+    await page.evaluate(() => (window.__vidro.sceneProbe as { pause: { ask(): void } }).pause.ask());
+    await waitPause(page, "q.phase === 'open'");
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await waitPause(page, "q.page === 'confirm' && q.writing === 1");
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Enter');
+    for (const [name, below] of [
+      ['far-back-1', 0.97],
+      ['far-back-2', 0.85],
+      ['far-back-3', 0.7],
+      ['far-back-4', 0.5],
+    ] as const) {
+      await waitProbe(
+        page,
+        `p.transition && p.transition.direction === -1 && p.transition.value < ${below}`,
+        5_000,
+      );
+      await snap(name);
+    }
+    await waitProbe(page, "p.screen === 'home' && p.transition === null", 10_000);
+    await expect(page.locator('[data-item="start"]')).toBeFocused({ timeout: 3_000 });
+    await page.keyboard.press('Enter');
+    for (const [name, above] of [
+      ['far-in-1', 0.6],
+      ['far-in-2', 0.8],
+      ['far-in-3', 0.93],
+    ] as const) {
+      await waitProbe(
+        page,
+        `p.transition && p.transition.direction === 1 && p.transition.value > ${above}`,
+        5_000,
+      );
+      await snap(name);
+    }
+    await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.playing", 10_000);
+    await snap('far-again');
+    const again = await room(page);
+    expect(again.position, 'standing where play was left').toEqual(far.position);
+    const path = await page.evaluate(() => (window as unknown as { __s42Cam: number[][] }).__s42Cam);
+    const eyeY = far.position.y + 1.6;
+    const highest = Math.max(...path.map((q) => q[2] ?? 0));
+    writeFileSync(
+      join(root, `artifacts/S-42/far-${backend}.json`),
+      JSON.stringify({ backend, far: far.position, highest, shots, path }, null, 2),
+    );
+    // it rose over the town on the way (not straight through it)
+    expect(highest - eyeY, 'the arc rises well above where play stands').toBeGreaterThan(6);
+    for (const [name, l] of Object.entries(shots)) {
+      expect(l.dark, `${name}: no black picture`).toBeLessThan(0.35);
+      expect(l.mean, `${name}: not dark`).toBeGreaterThan(0.04);
+    }
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-42 the dynamic resolution while paused: each new scale is drawn once, no blank picture [${backend}]`, async ({
+    page,
+  }) => {
+    // A target so low that play scales the picture down; under the pause (nothing drawn: the GPU time is about nothing)
+    // the governor scales it back up step by step (src/core/perf). Each step changes the canvas: the held picture must
+    // be drawn again at it, and the screen must never show an empty canvas. The scales are recorded (S-42 判断待ち).
+    test.setTimeout(150_000);
+    mkdirSync(join(root, 'artifacts/S-42'), { recursive: true });
+    const errors = collectErrors(page);
+    await playThroughHome(page, `&debug=1&gpuTrust=1&dynresTarget=2${webgl}`);
+    const preset = await page.evaluate(() => window.__vidro.renderScale);
+    // play until the governor has scaled the picture down (where the GPU time is trusted; else it keeps the preset)
+    await page
+      .waitForFunction(() => window.__vidro.renderScale < 0.99, undefined, { timeout: 20_000 })
+      .catch(() => undefined);
+    const before = await page.evaluate(() => window.__vidro.renderScale);
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'open'");
+    const scales: number[] = [];
+    const shots: { mean: number; dark: number }[] = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < 9_000) {
+      scales.push(await page.evaluate(() => window.__vidro.renderScale));
+      shots.push(await luminance(page, await page.screenshot()));
+      await page.waitForTimeout(250);
+    }
+    const p = await pause(page);
+    const changes = scales.filter((s, i) => i > 0 && s !== scales[i - 1]).length;
+    writeFileSync(
+      join(root, `artifacts/S-42/dynres-${backend}.json`),
+      JSON.stringify(
+        { backend, preset, before, scales, changes, drawnWhileHeld: p.drawnWhileHeld, shots },
+        null,
+        2,
+      ),
+    );
+    // drawn once when the time stood, and once per new scale at most a few more
+    expect(p.drawnWhileHeld).toBeGreaterThanOrEqual(1 + changes);
+    expect(p.drawnWhileHeld).toBeLessThanOrEqual(3 + 2 * changes);
+    expect(p.heldFrames, 'otherwise held').toBeGreaterThan(100);
+    for (const s of shots) {
+      expect(s.dark, 'no blank picture').toBeLessThan(0.35);
+      expect(s.mean).toBeGreaterThan(0.04);
+    }
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'closed'", 3_000);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });

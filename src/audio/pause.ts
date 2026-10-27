@@ -229,8 +229,9 @@ export function playPauseCue(
 
 /**
  * ポーズ中はゲームの音を絞る: each volume turned down to this share of the player's slider while the pause is all there
- * (環境音は小さく残し: about −16 dB). Not here: the effects bus (the pause's own sounds ride on it; the game's events stop
- * with its time), music (none plays yet), master.
+ * (環境音は小さく残し: about −16 dB). Not the effects bus: the pause's own sounds ride on it. The game's events stop with its
+ * time — no new ones start — but one already ringing rings on (the light's sweep, the gate): the room's sound would have to
+ * follow the time's speed, or the UI have its own bus (S-42 判断待ち 2). Not music (none plays yet) nor master.
  */
 export const PAUSE_DUCK: Readonly<Partial<Record<VolumeChannel, number>>> = { ambience: 0.4 };
 
@@ -241,42 +242,45 @@ export type VolumeTarget = Pick<AudioEngine, 'getVolume' | 'setVolume'>;
 const VOLUME_EPSILON = 1e-3;
 
 /**
- * The pause's turn-down of the game's sounds, on top of the player's volumes: `set(amount)` (0 = none, 1 = the pause all
- * there) every frame. The player's slider is read when the pause starts and given back exactly when it is gone. S-43 (設定は
- * ポーズからも開く): while the pause is up, change a volume through `setUserVolume` so the slider the player set is kept.
+ * 仮 (S-42): back on the home after タイトルへ, the game's ambience fades out to this share (the home has no room sounds, as
+ * when it was first seen) and comes back once play starts again.
+ */
+export const AWAY_DUCK: Readonly<Partial<Record<VolumeChannel, number>>> = { ambience: 0 };
+
+const DUCKED: readonly VolumeChannel[] = [
+  ...new Set([...Object.keys(PAUSE_DUCK), ...Object.keys(AWAY_DUCK)] as VolumeChannel[]),
+];
+
+/**
+ * The pause's turn-down of the game's sounds, on top of the player's volumes: `set(amount)` for the pause (0 = none, 1 = all
+ * there) and `setAway(amount)` for the home after タイトルへ, every frame. The player's slider is read when a turn-down starts
+ * and given back exactly when both are gone. S-43 (設定はポーズからも開く): while one is on, change a volume through
+ * `setUserVolume`, so that the slider the player set is the one given back.
  */
 export class PauseMix {
-  private amountValue = 0;
+  private pause = 0;
+  private away = 0;
   private readonly user: Partial<Record<VolumeChannel, number>> = {};
   private readonly sent: Partial<Record<VolumeChannel, number>> = {};
 
   constructor(private readonly engine: VolumeTarget) {}
 
   get amount(): number {
-    return this.amountValue;
+    return this.pause;
   }
 
   set(amount: number): void {
-    const a = Number.isFinite(amount) ? Math.min(1, Math.max(0, amount)) : 0;
-    if (a === this.amountValue) return;
-    const was = this.amountValue;
-    this.amountValue = a;
-    for (const [ch, duck] of Object.entries(PAUSE_DUCK) as [VolumeChannel, number][]) {
-      if (was === 0) this.user[ch] = this.engine.getVolume(ch);
-      const user = this.user[ch] ?? this.engine.getVolume(ch);
-      if (a === 0) {
-        this.engine.setVolume(ch, user);
-        delete this.user[ch];
-        delete this.sent[ch];
-        continue;
-      }
-      const v = user * (1 - (1 - duck) * a);
-      const last = this.sent[ch];
-      // (the pause all there is always sent: it lands exactly on the turned-down volume)
-      if (last !== undefined && Math.abs(last - v) < VOLUME_EPSILON && a < 1) continue;
-      this.sent[ch] = v;
-      this.engine.setVolume(ch, v);
-    }
+    const a = unit(amount);
+    if (a === this.pause) return;
+    this.pause = a;
+    this.apply();
+  }
+
+  setAway(amount: number): void {
+    const a = unit(amount);
+    if (a === this.away) return;
+    this.away = a;
+    this.apply();
   }
 
   /** The slider the player set (not the turned-down volume). */
@@ -284,16 +288,49 @@ export class PauseMix {
     return this.user[channel] ?? this.engine.getVolume(channel);
   }
 
-  /** Sets the player's slider; while the pause is up the turned-down share stays on top of it. */
+  /** Sets the player's slider; while a turn-down is on, it stays on top of it. */
   setUserVolume(channel: VolumeChannel, value: number): void {
-    const duck = PAUSE_DUCK[channel];
-    if (this.amountValue === 0 || duck === undefined) {
+    if (this.user[channel] === undefined) {
       this.engine.setVolume(channel, value);
       return;
     }
     this.user[channel] = value;
-    const v = value * (1 - (1 - duck) * this.amountValue);
+    const v = value * this.factor(channel);
     this.sent[channel] = v;
     this.engine.setVolume(channel, v);
   }
+
+  private factor(channel: VolumeChannel): number {
+    const pause = 1 - (1 - (PAUSE_DUCK[channel] ?? 1)) * this.pause;
+    const away = 1 - (1 - (AWAY_DUCK[channel] ?? 1)) * this.away;
+    return pause * away;
+  }
+
+  private apply(): void {
+    // the turned-down volumes are sent exactly at the ends (all there, or gone); small steps between are skipped
+    const atEnds = (this.pause === 0 || this.pause === 1) && (this.away === 0 || this.away === 1);
+    for (const ch of DUCKED) {
+      const f = this.factor(ch);
+      const user = this.user[ch];
+      if (f === 1) {
+        if (user !== undefined) {
+          this.engine.setVolume(ch, user);
+          delete this.user[ch];
+          delete this.sent[ch];
+        }
+        continue;
+      }
+      const from = user ?? this.engine.getVolume(ch);
+      this.user[ch] = from;
+      const v = from * f;
+      const last = this.sent[ch];
+      if (last !== undefined && (last === v || (Math.abs(last - v) < VOLUME_EPSILON && !atEnds))) continue;
+      this.sent[ch] = v;
+      this.engine.setVolume(ch, v);
+    }
+  }
+}
+
+function unit(v: number): number {
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
 }

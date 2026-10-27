@@ -101,7 +101,9 @@ import {
   type SpawnName,
   TRIAL_SURFACE_WALL,
   WORKSHOP_ASSET,
+  WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_OBJECTS,
+  WORKSHOP_TOP,
 } from './layout';
 import {
   addRoomColliders,
@@ -439,14 +441,47 @@ const SHORTCUT_BAND_WIDTH = 5;
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
 const FOCUS_SECONDS = 0.2;
-/**
- * S-42: from where on the dive (u) its camera leaves the path for where play stands: the skylight's crossing (dive-path.ts,
- * the moment the home camera passes the orb's surface), on to the eye at its end.
- */
-const LANDING_BLEND_FROM = 0.62;
-function landingBlend(u: number): number {
-  const t = Math.min(1, Math.max(0, (u - LANDING_BLEND_FROM) / (1 - LANDING_BLEND_FROM)));
+/** S-42: a camera pose (where it stands, a point it looks at). */
+type Pose = { pos: THREE.Vector3; target: THREE.Vector3 };
+const smoothSpan = (u: number, from: number, to: number): number => {
+  const t = Math.min(1, Math.max(0, (u - from) / (to - from)));
   return t * t * (3 - 2 * t);
+};
+/**
+ * S-42: moves the dive's camera (`pos`, `target`: its pose at u) toward where play stands (`eye`), so that the dive back from
+ * the pause's タイトルへ leaves from that eye and the dive in again ends there. Returns how far (0..1) it has gone over (the
+ * haze follows it). `landing` is the dive's own end (the landing pose).
+ *  - in the workshop: the dive's own way in through the skylight (from its crossing, u 0.62: dive-path.ts), moved over by
+ *    how far the eye stands from the landing pose. The landing pose itself (the first dive) moves nothing
+ *  - out of it (仮): from above the workshop (u 0.3) the camera leaves the dive in an arc high over the town, reaches the
+ *    eye's column first and comes down onto it, looking level, so it passes through neither the dome nor the town
+ */
+function towardEye(u: number, landing: Pose, eye: Pose, pos: THREE.Vector3, target: THREE.Vector3): number {
+  const inWorkshop =
+    Math.hypot(eye.pos.x, eye.pos.z) < WORKSHOP_FLOOR_RADIUS - 0.4 && eye.pos.y < WORKSHOP_TOP - 1;
+  if (inWorkshop) {
+    const w = smoothSpan(u, 0.62, 1);
+    pos.x += (eye.pos.x - landing.pos.x) * w;
+    pos.y += (eye.pos.y - landing.pos.y) * w;
+    pos.z += (eye.pos.z - landing.pos.z) * w;
+    target.x += (eye.target.x - landing.target.x) * w;
+    target.y += (eye.target.y - landing.target.y) * w;
+    target.z += (eye.target.z - landing.target.z) * w;
+    return w;
+  }
+  const w = smoothSpan(u, 0.3, 1);
+  if (w <= 0) return 0;
+  // over to the eye's column early, down onto it late; the arc rises with the way to go
+  const across = 1 - (1 - w) ** 3;
+  const lift =
+    Math.min(50, Math.max(6, 0.2 * Math.hypot(eye.pos.x - pos.x, eye.pos.z - pos.z))) * Math.sin(Math.PI * w);
+  pos.x += (eye.pos.x - pos.x) * across;
+  pos.z += (eye.pos.z - pos.z) * across;
+  pos.y += (eye.pos.y - pos.y) * w + lift;
+  target.x += (eye.target.x - target.x) * across;
+  target.z += (eye.target.z - target.z) * across;
+  target.y += (eye.target.y - target.y) * w + lift;
+  return w;
 }
 const STRINGS = {
   ja: {
@@ -688,6 +723,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   let clock: number | null = null;
   let held = false;
   const eye = { pos: new THREE.Vector3(), target: new THREE.Vector3(), fog: { near: 0, far: 0 } };
+  const landing: Pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+  dive.pose(1, landing.pos, landing.target);
   const shell: Shell = { camera, probe, events, finale, hints, shortcut, pauses };
   return {
     get scene() {
@@ -710,12 +747,10 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       let near = 18 + away;
       let far = 150 + away * 3;
       // S-42: the dive ends where play stands (back from the pause's タイトルへ, and in again, it passes through that eye
-      // and its haze; the first time that is the landing pose itself)
-      const w = landingBlend(u);
-      if (w > 0) {
+      // and its haze; the first time that is the landing pose itself, and the dive is as it was)
+      if (u > 0) {
         built.eyePose(eye.pos, eye.target, eye.fog);
-        outPos.lerp(eye.pos, w);
-        outTarget.lerp(eye.target, w);
+        const w = towardEye(u, landing, eye, outPos, outTarget);
         near += (eye.fog.near - near) * w;
         far += (eye.fog.far - far) * w;
       }

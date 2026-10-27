@@ -94,7 +94,12 @@ export class PauseScreen {
   private pointerX = Number.NaN;
   private pointerY = Number.NaN;
   /** Last values written to the DOM, by element and property. */
-  private readonly last = new Map<HTMLElement, Map<string, string>>();
+  private readonly last = new Map<HTMLElement, Map<string, number>>();
+  /** The pointer moved since the page shown now came up (clicks on a page shown later wait for it). */
+  private pageMoved = true;
+  /** How far the page shown is written (0..1). */
+  private writing = 0;
+  private readonly noteText: HTMLElement;
 
   constructor(
     root: HTMLElement,
@@ -135,6 +140,7 @@ export class PauseScreen {
     noteText.dataset.part = 'relock';
     noteText.textContent = t('pauseRelock');
     this.note.appendChild(noteText);
+    this.noteText = noteText;
 
     this.pages = { menu, confirm };
     this.lines = { menu: menuLines, confirm: confirmLines };
@@ -145,6 +151,7 @@ export class PauseScreen {
       if (e.clientX === this.pointerX && e.clientY === this.pointerY) return;
       this.pointerX = e.clientX;
       this.pointerY = e.clientY;
+      this.pageMoved = true;
       const button = e.target instanceof Element ? e.target.closest<HTMLElement>('[data-pause-item]') : null;
       this.setHover(this.items.find((i) => i.button === button)?.id ?? null);
     });
@@ -180,9 +187,12 @@ export class PauseScreen {
     if (view.up !== this.wasUp) {
       this.wasUp = view.up;
       this.el.classList.toggle('is-up', view.up);
+      // a page that comes up with the pause takes clicks at once; one shown later, only after a move (see onClick)
+      this.pageMoved = true;
       if (!view.up) {
         this.setHover(null);
-        (document.activeElement as HTMLElement | null)?.blur?.();
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && this.el.contains(active)) active.blur();
       }
     }
     this.setEnabled(view.up && view.interactive);
@@ -193,6 +203,7 @@ export class PauseScreen {
       }
     }
     if (!view.up) return;
+    this.writing = view.writing;
 
     // the breath: spreading from the middle; once it is all there it is not masked any more
     const full = view.frost >= 1;
@@ -201,34 +212,36 @@ export class PauseScreen {
       // the soft edge keeps its width; the solid middle grows out from nothing to past the corners
       const soft = FROST_SOFT * this.halfDiagonal;
       const r = view.frost * (FROST_CORE * this.halfDiagonal + soft);
-      this.set(this.breath, '--r', `${r.toFixed(1)}px`);
-      this.set(this.breath, '--core', `${Math.max(0, r - soft).toFixed(1)}px`);
+      this.set(this.breath, '--r', r, 'px', 1);
+      this.set(this.breath, '--core', Math.max(0, r - soft), 'px', 1);
     }
     this.set(
       this.breath,
       '--blur',
-      `${((BLUR_FROM + (BLUR_TO - BLUR_FROM) * view.frost) * this.blurScale).toFixed(2)}px`,
+      (BLUR_FROM + (BLUR_TO - BLUR_FROM) * view.frost) * this.blurScale,
+      'px',
+      2,
     );
 
     if (view.page !== this.shownPage) {
+      const first = this.shownPage === null;
       this.shownPage = view.page;
       this.pages.menu.hidden = view.page !== 'menu';
       this.pages.confirm.hidden = view.page !== 'confirm';
-      // the item under the pointer went with its page
+      // the item under the pointer went with its page; the new page's items wait for the pointer to move
       this.setHover(null);
+      if (!first) this.pageMoved = false;
     }
     const lines = this.lines[view.page];
-    lines.forEach((l, k) => {
+    for (let k = 0; k < lines.length; k++) {
+      const l = lines[k];
+      if (!l) continue;
       const w = lineWriting(view.writing, k, lines.length);
-      this.set(l.line, '--w', w.toFixed(3));
-      this.set(l.line, '--tip', (w > 0 && w < 1 ? Math.sin(Math.PI * w) ** 0.5 : 0).toFixed(3));
-      this.set(l.tag, '--tag', segment(w, 0, 0.3).toFixed(3));
-    });
-    this.set(
-      this.note.firstElementChild as HTMLElement,
-      '--note',
-      view.page === 'menu' ? view.writing.toFixed(3) : '0',
-    );
+      this.set(l.line, '--w', w, '', 3);
+      this.set(l.line, '--tip', w > 0 && w < 1 ? Math.sin(Math.PI * w) ** 0.5 : 0, '', 3);
+      this.set(l.tag, '--tag', segment(w, 0, 0.3), '', 3);
+    }
+    this.set(this.noteText, '--note', view.page === 'menu' ? view.writing : 0, '', 3);
     for (const i of this.items)
       i.button.classList.toggle('is-focus', view.interactive && i.id === view.focused);
   }
@@ -249,7 +262,11 @@ export class PauseScreen {
       if (this.enabled) this.events.onFocus(id);
     });
     button.addEventListener('click', () => {
-      if (this.enabled) this.events.onPick(id);
+      if (!this.enabled) return;
+      // 確認ダイアログ: a page shown by a click takes no click until the pointer has moved and the page is written — the
+      // second click of a double click on タイトルへ must not land on はい, unseen under it
+      if (!this.pageMoved || this.writing < 1) return;
+      this.events.onPick(id);
     });
     parent.appendChild(button);
     this.items.push(item);
@@ -270,15 +287,17 @@ export class PauseScreen {
     for (const i of this.items) i.button.tabIndex = on ? 0 : -1;
   }
 
-  /** Sets a custom property only when its value changed (most frames change nothing). */
-  private set(el: HTMLElement, prop: string, value: string): void {
+  /** Sets a custom property only when its value changed at the precision written (most frames change nothing). */
+  private set(el: HTMLElement, prop: string, value: number, unit: string, digits: number): void {
     let props = this.last.get(el);
     if (!props) {
       props = new Map();
       this.last.set(el, props);
     }
-    if (props.get(prop) === value) return;
+    const step = 10 ** -digits;
+    const was = props.get(prop);
+    if (was !== undefined && Math.abs(was - value) < step / 2) return;
     props.set(prop, value);
-    el.style.setProperty(prop, value);
+    el.style.setProperty(prop, `${value.toFixed(digits)}${unit}`);
   }
 }

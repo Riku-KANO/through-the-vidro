@@ -265,6 +265,11 @@ describe('stepMenu (キーボード・パッド操作, 戻る操作, 確認ダ�
     expect(s.chosen).toBe('yes');
   });
 
+  it('Start closes the pause from any page (it closes as it opened)', () => {
+    expect(stepMenu(MENU_START, 'close').outcome).toBe('resume');
+    expect(stepMenu({ page: 'confirm', focus: 0 }, 'close').outcome).toBe('resume');
+  });
+
   it('いいえ, Esc or B goes back to the items, on タイトルへ', () => {
     for (const command of ['choose', 'back'] as const) {
       const s = stepMenu({ page: 'confirm', focus: 1 }, command);
@@ -319,7 +324,7 @@ describe('padCommands (ゲームパッド: 十字・A・B、Start でも閉じ�
     expect(padCommands(none, new Set(['PadRight']))).toEqual(['right']);
     expect(padCommands(none, new Set(['PadA']))).toEqual(['choose']);
     expect(padCommands(none, new Set(['PadB']))).toEqual(['back']);
-    expect(padCommands(none, new Set(['PadStart']))).toEqual(['back']);
+    expect(padCommands(none, new Set(['PadStart']))).toEqual(['close']);
   });
 
   it('a held button counts once (the Start that opened the pause does not close it)', () => {

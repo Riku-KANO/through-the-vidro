@@ -163,7 +163,8 @@ export interface PauseMenu {
   focus: number;
 }
 
-export type PauseCommand = 'up' | 'down' | 'left' | 'right' | 'choose' | 'back';
+/** `back` is one step back (Esc / B); `close` leaves the pause from any page (Start: it closes as it opened). */
+export type PauseCommand = 'up' | 'down' | 'left' | 'right' | 'choose' | 'back' | 'close';
 
 export interface PauseStep {
   menu: PauseMenu;
@@ -232,6 +233,8 @@ export function stepMenu(menu: PauseMenu, command: PauseCommand): PauseStep {
       return menu.page === 'confirm'
         ? { menu: { page: 'menu', focus: TITLE_INDEX }, outcome: null, chosen: null, moved: false }
         : { menu, outcome: 'resume', chosen: null, moved: false };
+    case 'close':
+      return { menu, outcome: 'resume', chosen: null, moved: false };
   }
 }
 
@@ -277,7 +280,7 @@ const PAD_COMMANDS: Readonly<Record<string, PauseCommand>> = {
   PadRight: 'right',
   PadA: 'choose',
   PadB: 'back',
-  PadStart: 'back',
+  PadStart: 'close',
 };
 
 /** The commands of the buttons pressed since the last reading (a held button counts once). */
