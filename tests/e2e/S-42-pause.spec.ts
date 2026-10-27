@@ -713,18 +713,16 @@ for (const backend of backends) {
   test(`S-42 the dynamic resolution while paused: each new scale is drawn once, no blank picture [${backend}]`, async ({
     page,
   }) => {
-    // A target so low that play scales the picture down; under the pause (nothing drawn: the GPU time is about nothing)
-    // the governor scales it back up step by step (src/core/perf). Each step changes the canvas: the held picture must
-    // be drawn again at it, and the screen must never show an empty canvas. The scales are recorded (S-42 判断待ち).
+    // A frame-time target so low that the governor (src/core/perf) keeps changing the render scale; it goes on under the
+    // pause, fed the GPU time of frames that draw nothing (seen both up and down, 2026-10-27). Each change resizes the
+    // canvas: the held picture must be drawn again at it, and no picture may be blank. The scales are recorded (S-42 提案).
     test.setTimeout(150_000);
     mkdirSync(join(root, 'artifacts/S-42'), { recursive: true });
     const errors = collectErrors(page);
     await playThroughHome(page, `&debug=1&gpuTrust=1&dynresTarget=2${webgl}`);
     const preset = await page.evaluate(() => window.__vidro.renderScale);
-    // play until the governor has scaled the picture down (where the GPU time is trusted; else it keeps the preset)
-    await page
-      .waitForFunction(() => window.__vidro.renderScale < 0.99, undefined, { timeout: 20_000 })
-      .catch(() => undefined);
+    // a few seconds of play under the low target first (the governor reacts to it)
+    await page.waitForTimeout(3_000);
     const before = await page.evaluate(() => window.__vidro.renderScale);
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'open'");
