@@ -320,22 +320,58 @@ async function changedShare(
 /** What the drop adds to the picture now: its pixels against the same picture with it hidden (share of the region). */
 async function dropPixels(page: Page, region: { x: number; y: number; r: number } | null): Promise<number> {
   const name = 'area1-drop:area1-room3';
-  const a = await page.screenshot();
-  await page.waitForTimeout(120);
-  const again = await page.screenshot();
-  const hid = await page.evaluate(
-    (n) => (window as unknown as { __s41Hide: (n: string, h: boolean) => boolean }).__s41Hide(n, true),
-    name,
+  const hide = (hidden: boolean) =>
+    page.evaluate(
+      ([n, h]) => (window as unknown as { __s41Hide: (n: string, h: boolean) => boolean }).__s41Hide(n, h),
+      [name, hidden] as const,
+    );
+  // shown, hidden, shown, hidden: what changes both times with the drop, and is the same in both shots of it shown and of it
+  // hidden (the motes and the glimmers drift between shots: they change one way, not both)
+  const shots: Buffer[] = [];
+  for (const hidden of [false, true, false, true]) {
+    expect(await hide(hidden), 'the drop found by name').toBe(true);
+    await page.waitForTimeout(150);
+    shots.push(await page.screenshot());
+  }
+  await hide(false);
+  await page.waitForTimeout(100);
+  return page.evaluate(
+    async ([b64s, reg]) => {
+      const read = async (b64: string) => {
+        const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = c.getContext('2d');
+        if (!g) throw new Error('no 2d context');
+        g.drawImage(bmp, 0, 0);
+        return { d: g.getImageData(0, 0, bmp.width, bmp.height).data, w: bmp.width, h: bmp.height };
+      };
+      const [S1, H1, S2, H2] = await Promise.all(b64s.map(read));
+      if (!S1 || !H1 || !S2 || !H2) return 0;
+      const lum = (d: Uint8ClampedArray, i: number) =>
+        (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      let n = 0;
+      let changed = 0;
+      for (let y = 0; y < S1.h; y += 2)
+        for (let x = 0; x < S1.w; x += 2) {
+          if (reg) {
+            const cx = reg.x * S1.w;
+            const cy = reg.y * S1.h;
+            const rr = reg.r * S1.h * 0.9;
+            if ((x - cx) ** 2 + (y - cy) ** 2 > rr * rr) continue;
+          }
+          const i = (y * S1.w + x) * 4;
+          n++;
+          const s1 = lum(S1.d, i);
+          const s2 = lum(S2.d, i);
+          const h1 = lum(H1.d, i);
+          const h2 = lum(H2.d, i);
+          if (Math.abs(s1 - s2) > 0.03 || Math.abs(h1 - h2) > 0.03) continue;
+          if (Math.abs(s1 - h1) > 0.06 && Math.abs(s2 - h2) > 0.06) changed++;
+        }
+      return n > 0 ? changed / n : 0;
+    },
+    [shots.map((b) => b.toString('base64')), region] as const,
   );
-  expect(hid, 'the drop found by name').toBe(true);
-  await page.waitForTimeout(150);
-  const b = await page.screenshot();
-  await page.evaluate(
-    (n) => (window as unknown as { __s41Hide: (n: string, h: boolean) => boolean }).__s41Hide(n, false),
-    name,
-  );
-  await page.waitForTimeout(120);
-  return changedShare(page, a, again, b, region);
 }
 
 for (const backend of backends) {
