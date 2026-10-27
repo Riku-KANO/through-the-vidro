@@ -351,8 +351,12 @@ function shaded(a: Vec3, b: Vec3, withWall: boolean): string[] {
     if (segmentHitsBox(a, b, [w.minX, SUMMIT_Y - 0.05, w.minZ], [w.maxX, w.top, w.maxZ]))
       out.push(`wall ${i}`);
   });
+  // (only as high as it is whole: its top course is broken, a stone in two missing — area1/art.ts crumbled, 0.6 m courses)
   const r = ROOM3_RAILING.box;
-  if (withWall && segmentHitsBox(a, b, r.min, r.max)) out.push('the crumbled wall');
+  const height = r.max[1] - r.min[1];
+  const course = height / Math.max(3, Math.round(height / 0.6));
+  const whole: Vec3 = [r.max[0], r.max[1] - course, r.max[2]];
+  if (withWall && segmentHitsBox(a, b, r.min, whole)) out.push('the crumbled wall');
   return out;
 }
 /** S-41: where on the terrace the body may stand (not in the crumbled wall on the lip, nor on a pedestal's foot). */
@@ -668,11 +672,15 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
     expect(w.min[0]).toBeLessThan(ROOM3_TERRACE.minX + 0.1);
     expect(w.min[2]).toBeLessThanOrEqual(ROOM3_TERRACE.minZ);
     expect(w.max[1] - SUMMIT_Y).toBeGreaterThan(EYE_HEIGHT + 0.5);
+    // whole (its stones all there) up past the eye: only its top course is broken (area1/art.ts crumbled)
+    const course = (w.max[1] - w.min[1]) / Math.max(3, Math.round((w.max[1] - w.min[1]) / 0.6));
+    expect(w.max[1] - course - SUMMIT_Y).toBeGreaterThan(EYE_HEIGHT + 0.1);
     // the south bridge leaves from behind it (cut while the vidro stands on the south pedestal); the north one is clear of it
     expect(ROOM3_BRIDGE_S.min[2]).toBeGreaterThanOrEqual(w.min[2]);
     expect(ROOM3_BRIDGE_S.max[2]).toBeLessThanOrEqual(w.max[2]);
     expect(ROOM3_BRIDGE_N.min[2]).toBeGreaterThan(w.max[2]);
-    // the edge stands just behind it, by the south pedestal, in reach of it (peek, then place)
+    // the edge stands just behind it, by the south pedestal, in reach of it — the pedestal whose vidro takes the wall away, not
+    // the drop's side (判断待ち 1: the edge leads toward the wrong pedestal)
     expect(ROOM3_EDGE[0] - w.max[0]).toBeLessThan(1);
     expect(dist([ROOM3_EDGE[0], SUMMIT_Y + EYE_HEIGHT, ROOM3_EDGE[2]], ROOM3_PEDESTAL_S.orb)).toBeLessThan(
       REACH,

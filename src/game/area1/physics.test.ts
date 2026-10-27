@@ -585,7 +585,7 @@ describe('S-41: the gates’ leaves collide where they are drawn (layout gateLea
   });
 });
 
-describe('S-41: 部屋3 — the drop in the lee of the roof’s walls, the chimney’s stub on the terrace (屋根の陰)', () => {
+describe('S-41: 部屋3 — the drop in the lee of the roof’s walls, the crumbled wall on the lip (屋根の陰)', () => {
   const lipN: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2];
 
   it('the crumbled wall on the lip stops the body; on the south pedestal it is cut: onto the south bridge (S-28), back, it comes', () => {
