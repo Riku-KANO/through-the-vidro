@@ -6,5 +6,12 @@
   "echoes": "Echoes",
   "settings": "Settings",
   "credits": "Credits",
-  "menuLabel": "Home"
+  "menuLabel": "Home",
+  "pauseLabel": "Paused",
+  "pauseResume": "Resume",
+  "pauseTitle": "Back to title",
+  "pauseAsk": "Return to the title?",
+  "pauseYes": "Yes",
+  "pauseNo": "No",
+  "pauseRelock": "After resuming, click the screen to look around again"
 }

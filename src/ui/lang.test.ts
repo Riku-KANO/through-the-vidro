@@ -29,3 +29,17 @@ describe('STRINGS', () => {
     ]).toEqual(['はじめる', 'つづきから', '残響', '設定', 'クレジット']);
   });
 });
+
+describe('STRINGS: the pause (S-42)', () => {
+  it('names its items as in the design (画面ごとの設計: ポーズ — つづける / タイトルへ in this slice)', () => {
+    expect([STRINGS.ja.pauseResume, STRINGS.ja.pauseTitle]).toEqual(['つづける', 'タイトルへ']);
+  });
+
+  it('asks before leaving for the title, with two answers, in both languages', () => {
+    for (const lang of ['ja', 'en'] as const) {
+      const s = STRINGS[lang];
+      for (const key of ['pauseAsk', 'pauseYes', 'pauseNo', 'pauseRelock', 'pauseLabel'] as const)
+        expect(s[key].length, `${lang} ${key}`).toBeGreaterThan(0);
+    }
+  });
+});
