@@ -49,7 +49,7 @@ interface PauseProbe {
   left: number;
   requestedAt: number | null;
   respondedAt: number | null;
-  sounds: { cue: string; at: number }[];
+  sounds: { cue: string; at: number; rang: boolean }[];
   heldFrames: number;
   drawnWhileHeld: number;
   frameMs: { opening: number; open: number; closing: number };
@@ -335,7 +335,12 @@ for (const backend of backends) {
     ).toBeLessThan(100);
     const openSound = opened.sounds.find((s) => s.cue === 'open');
     expect(openSound, 'the opening rang its own glass sound').toBeDefined();
+    expect(openSound?.rang, 'on the page’s engine').toBe(true);
     expect((openSound?.at ?? Number.POSITIVE_INFINITY) - (esc ?? 0)).toBeLessThan(100);
+    const response = {
+      motionMs: (opened.respondedAt ?? 0) - (esc ?? 0),
+      soundMs: (openSound?.at ?? 0) - (esc ?? 0),
+    };
     expect(opened.timeScale).toBe(0);
     expect(opened.frost).toBe(1);
     expect(opened.writing).toBe(1);
@@ -520,7 +525,11 @@ for (const backend of backends) {
     }
     writeFileSync(
       join(root, `artifacts/S-42/pause-${backend}.json`),
-      JSON.stringify({ backend, shots, frames, final: await pause(page), contexts: made, errors }, null, 2),
+      JSON.stringify(
+        { backend, response, shots, frames, final: await pause(page), contexts: made, errors },
+        null,
+        2,
+      ),
     );
     expect(frames.opening, 'the opening makes no long frame').toBeLessThan(150);
     expect(frames.closing, 'the closing makes no long frame').toBeLessThan(150);

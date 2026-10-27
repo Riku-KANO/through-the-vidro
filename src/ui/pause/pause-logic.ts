@@ -1,4 +1,4 @@
-import { glassEase, glassEaseInverse, segment } from '../../core/transition';
+import { glassEase, segment } from '../../core/transition';
 
 /**
  * The pause screen's rules (S-42), pure: no DOM, no GPU, no sound. src/ui/pause/pause-host.ts plays them.
@@ -134,11 +134,6 @@ export class PauseTimeline {
     const s = Math.min(PAUSE_SECONDS.stop + PAUSE_SECONDS.write, Math.max(0, seconds));
     this.frostTime = Math.min(PAUSE_SECONDS.stop, s);
     this.writeValue = Math.max(0, s - PAUSE_SECONDS.stop) / PAUSE_SECONDS.write;
-  }
-
-  /** The seconds into the opening that the frost stands at (for the dev hold). */
-  static secondsAt(frost: number): number {
-    return glassEaseInverse(frost) * PAUSE_SECONDS.stop;
   }
 }
 
