@@ -18,7 +18,6 @@ import {
   area1RimArcs,
   area1SlopeHeight,
   COURT_Y,
-  gateLeaves,
   gatePostOffset,
   HOUSE_ROUND,
   ROOM1_ALLEY,
@@ -271,6 +270,11 @@ export class Area1Gates {
     return this.angles.get(id) ?? 0;
   }
 
+  /** A gate's leaves' colliders (west, east), for the sensors. */
+  leafColliders(id: string): readonly RAPIER.Collider[] {
+    return this.leaves.get(id) ?? [];
+  }
+
   /** Puts a gate's leaves `angle` radians open. Returns whether they moved. */
   sync(id: string, angle: number): boolean {
     if (this.angles.get(id) === angle) return false;
@@ -278,16 +282,21 @@ export class Area1Gates {
     const leaves = this.leaves.get(id);
     if (!g || !leaves) return false;
     this.angles.set(id, angle);
-    const poses = gateLeaves(g, angle);
+    // (layout.ts gateLeaves, written out so a swing allocates nothing: it moves every frame while it opens)
+    const length = g.halfWidth - 2 * AREA1_GATE_POST;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
     for (let i = 0; i < leaves.length; i++) {
       const c = leaves[i] as RAPIER.Collider;
-      const { hinge, dir, length } = poses[i] as (typeof poses)[0];
-      this.at.x = hinge[0] + (dir[0] * length) / 2;
+      const side = i === 0 ? -1 : 1;
+      const dx = -side * cos;
+      const dz = g.swing * sin;
+      this.at.x = g.at[0] + side * length + (dx * length) / 2;
       this.at.y = g.at[1] + AREA1_GATE_LEAF.foot + AREA1_GATE_LEAF.height / 2;
-      this.at.z = hinge[1] + (dir[1] * length) / 2;
+      this.at.z = g.at[2] + (dz * length) / 2;
       c.setTranslation(this.at);
       // the turn about +Y that takes the box's +X onto (dx, 0, dz)
-      const yaw = Math.atan2(-dir[1], dir[0]);
+      const yaw = Math.atan2(-dz, dx);
       this.turn.y = Math.sin(yaw / 2);
       this.turn.w = Math.cos(yaw / 2);
       c.setRotation(this.turn);

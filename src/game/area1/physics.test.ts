@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import * as THREE from 'three';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
@@ -46,6 +47,7 @@ import {
   COURT_Y,
   eastOf,
   eastX,
+  gateLeaves,
   ROOM1_ALLEY,
   ROOM1_DROP,
   ROOM1_PEDESTAL,
@@ -552,6 +554,31 @@ describe('S-41: rooms open in order — the gates in a Rapier world, played with
     const s = g.go(p, sprint, 10);
     expect(s.every((v) => v.grounded)).toBe(true);
     expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+  });
+});
+
+describe('S-41: the gates’ leaves collide where they are drawn (layout gateLeaves, art.ts)', () => {
+  it('each leaf’s box stands over the middle of its leaf, turned along it, at every angle of its swing', () => {
+    const w = createWorld();
+    const gates = new Area1Gates(R, w);
+    for (const angle of [0, 0.4, 1.1, area1GateAngle(1)])
+      for (const g of AREA1_GATES) {
+        gates.sync(g.id, angle);
+        const leaves = gateLeaves(g, angle);
+        gates.leafColliders(g.id).forEach((c, i) => {
+          const leaf = leaves[i] as (typeof leaves)[0];
+          const t = c.translation();
+          // (Rapier keeps 32-bit floats)
+          expect(t.x).toBeCloseTo(leaf.hinge[0] + (leaf.dir[0] * leaf.length) / 2, 4);
+          expect(t.z).toBeCloseTo(leaf.hinge[1] + (leaf.dir[1] * leaf.length) / 2, 4);
+          // its long side (the box's +x) along the leaf
+          const q = c.rotation();
+          const along = new THREE.Vector3(1, 0, 0).applyQuaternion(new THREE.Quaternion(q.x, q.y, q.z, q.w));
+          expect(along.x).toBeCloseTo(leaf.dir[0], 4);
+          expect(along.z).toBeCloseTo(leaf.dir[1], 4);
+        });
+      }
+    gates.dispose();
   });
 });
 
