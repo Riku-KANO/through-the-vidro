@@ -5,6 +5,7 @@
  */
 export {
   type AreaDecl,
+  type AreaGateDecl,
   checkAreas,
   type DropDecl,
   dropsOf,
@@ -23,3 +24,4 @@ export {
   surfaceWallsOf,
 } from './area';
 export { type AreaCount, type DropState, DropTally } from './drops';
+export { gateInto, nextRoom, roomOpen } from './order';

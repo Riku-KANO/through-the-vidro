@@ -10,12 +10,15 @@ import { glassEase, stepTween, type Tween } from '../../layers/tween';
 import {
   type AreaCount,
   type AreaDecl,
+  type AreaGateDecl,
   type DropState,
   DropTally,
   footingOf,
+  nextRoom,
   type PlacedDrop,
   pedestalsOf,
   type RoomDecl,
+  roomOpen,
   surfaceOf,
 } from '../area';
 import { createOrbs, type Orb, type OrbSphere, orbSpheres, placeOn, stepOrbs, takeBack } from '../orb/orbs';
@@ -174,6 +177,12 @@ export type FinaleEvent =
  */
 export type ShortcutEvent = { type: 'settle'; area: string } | { type: 'settled'; area: string };
 
+/**
+ * S-41: an area's gate between its rooms (game/area AreaGateDecl), on its own bus: it starts to open (its room's drop taken, the
+ * drop's light come to it) / is open. Kept off the room's event log like the close's and the shortcut's.
+ */
+export type AreaGateEvent = { type: 'open' | 'opened'; area: string; gate: string };
+
 /** 0..1 of a span of `seconds`, `elapsed` into it; exactly 1 at its end (within float noise of many small steps). */
 export function progressOf(elapsed: number, seconds: number): number {
   if (elapsed >= seconds - 1e-9) return 1;
@@ -217,26 +226,60 @@ export function legFronts(
 }
 
 /**
- * 仮 (S-40): the share of a shortcut's seconds its light takes to get up to speed, and again to come to rest; between them it
- * runs at one pace (S-40 review: on the game's one curve over the whole way it raced the stairs at 29 m/s).
+ * S-41: where the game's one curve (glassEase) is steepest — its x, its value there and its slope (found once, numerically: the
+ * curve is a cubic Bézier, layers/tween.ts).
  */
-export const SHORTCUT_RAMP = 0.18;
+let peakOfGlass: { x: number; y: number; slope: number } | null = null;
+export function glassPeak(): { x: number; y: number; slope: number } {
+  if (peakOfGlass) return peakOfGlass;
+  const h = 1e-5;
+  const slopeAt = (x: number): number => (glassEase(x + h) - glassEase(x - h)) / (2 * h);
+  let best = 0.5;
+  let top = -1;
+  for (let i = 1; i < 2000; i++) {
+    const x = i / 2000;
+    const s = slopeAt(x);
+    if (s > top) {
+      top = s;
+      best = x;
+    }
+  }
+  // (golden-section search on the slope round the best sample)
+  let lo = best - 1 / 2000;
+  let hi = best + 1 / 2000;
+  for (let i = 0; i < 40; i++) {
+    const a = hi - (hi - lo) * 0.618;
+    const b = lo + (hi - lo) * 0.618;
+    if (slopeAt(a) > slopeAt(b)) hi = b;
+    else lo = a;
+  }
+  const x = (lo + hi) / 2;
+  peakOfGlass = { x, y: glassEase(x), slope: slopeAt(x) };
+  return peakOfGlass;
+}
 
 /**
- * S-40: 0..1 → 0..1, the way a shortcut's light runs: easing in over the first `ramp` of the time, at a steady pace, easing out
- * over the last (a trapezoid of speed; the position is its integral). Monotonic, 0 at 0, 1 at 1.
+ * 仮 (S-40, S-41): how long a shortcut's light runs at its one pace between its start and its stop, in spans of the game's one
+ * curve: 3 makes three quarters of its time the steady run (S-40 review: on the game's one curve over the whole way it raced
+ * the stairs at 29 m/s; at this its steady speed is about 1.2 times the mean, as S-40's ramps had it).
  */
-export function steadyEase(u: number, ramp: number = SHORTCUT_RAMP): number {
-  const t = Math.min(1, Math.max(0, u));
-  const r = Math.min(0.5, Math.max(1e-6, ramp));
-  // the steady speed v so that the area under the trapezoid is 1: v (1 − r) = 1
-  const v = 1 / (1 - r);
-  if (t < r) return (v * t * t) / (2 * r);
-  if (t > 1 - r) {
-    const w = 1 - t;
-    return 1 - (v * w * w) / (2 * r);
-  }
-  return (v * r) / 2 + v * (t - r);
+export const SHORTCUT_STEADY_SPAN = 3;
+
+/**
+ * S-40, S-41 (発案者 2026-10-27: 近道の光の出だしと止まりを glassEase に; 遷移のルール5): 0..1 → 0..1, the way a shortcut's light runs —
+ * the game's one curve (glassEase) cut where it is steepest and a steady run at that speed put in between: it starts as slowly
+ * as glassEase starts and comes to rest the way glassEase does (粘りながら止まる), and runs at one pace the rest of the way.
+ * Monotonic, smooth (its speed has no jump), 0 at 0, 1 at 1.
+ */
+export function steadyEase(u: number, span: number = SHORTCUT_STEADY_SPAN): number {
+  const { x: xp, y: yp, slope } = glassPeak();
+  const L = Math.max(0, span);
+  const X = Math.min(1, Math.max(0, u)) * (1 + L);
+  let y: number;
+  if (X <= xp) y = glassEase(X);
+  else if (X <= xp + L) y = yp + slope * (X - xp);
+  else y = glassEase(X - L) + slope * L;
+  return y / (1 + slope * L);
 }
 
 /**
@@ -366,6 +409,17 @@ function crosses(was: number, now: number, at: number): boolean {
 }
 const NONE: readonly string[] = [];
 
+/** S-41: one of an area's gates and how long since its room's drop was taken (null: not yet). */
+interface GateRun {
+  readonly decl: AreaGateDecl;
+  readonly area: string;
+  /** The drop that opens it (its room's). */
+  readonly drop: string | null;
+  elapsed: number | null;
+  /** Dev holds: it does not move on (and says nothing). */
+  held: boolean;
+}
+
 export class PrologueSession {
   readonly events = new EventBus<PrologueEvent>();
   /** S-34: the close (FinaleEvent), apart from `events`. */
@@ -374,6 +428,8 @@ export class PrologueSession {
   readonly hintEvents = new EventBus<HintEvent>();
   /** S-40: the areas' shortcuts settling (ShortcutEvent), apart from the others. */
   readonly shortcutEvents = new EventBus<ShortcutEvent>();
+  /** S-41: the areas' gates between their rooms opening (AreaGateEvent), apart from the others. */
+  readonly gateEvents = new EventBus<AreaGateEvent>();
 
   /** S-36: the rooms played, and what the session asks of them all together. */
   readonly areas: readonly AreaDecl[];
@@ -388,6 +444,9 @@ export class PrologueSession {
   private readonly closeRun: SettleRun | null;
   private readonly drops: DropTally;
   private readonly countsOut: Record<string, AreaCount> = {};
+  /** S-41: every area's gates between its rooms. */
+  private readonly gates: GateRun[] = [];
+  private readonly isTaken = (id: string): boolean => this.drops.state(id) === 'taken';
 
   private orbsValue: readonly Orb[] = createOrbs(0);
   private onBench: boolean;
@@ -424,6 +483,15 @@ export class PrologueSession {
     for (const a of areas)
       if (a.shortcut) this.runs.push(run(a.shortcut.legs, a.shortcut.seconds, { area: a.id }));
     this.drops = new DropTally(areas, DROP_FLIGHT_SECONDS);
+    for (const a of areas)
+      for (const g of a.gates ?? [])
+        this.gates.push({
+          decl: g,
+          area: a.id,
+          drop: a.rooms.find((r) => r.id === g.after)?.drop?.id ?? null,
+          elapsed: null,
+          held: false,
+        });
     this.onBench = options.orbStart === 'bench';
     this.hand = this.onBench ? { progress: 0, target: 0 } : { progress: 1, target: 1 };
     this.filmTween = this.onBench ? { progress: 1, target: 1 } : { progress: 0, target: 0 };
@@ -629,6 +697,29 @@ export class PrologueSession {
   }
 
   /**
+   * S-41: 0..1, linear in time: how far an area's gate is open — from when its room's drop's light has come to it (`opensAt`
+   * after the drop is taken) over the prologue gate's seconds (GATE_OPEN_SECONDS; the room eases it, finale.ts gateAngle).
+   */
+  areaGateProgress(id: string): number {
+    for (const g of this.gates)
+      if (g.decl.id === id)
+        return g.elapsed === null ? 0 : progressOf(g.elapsed - g.decl.opensAt, GATE_OPEN_SECONDS);
+    return 0;
+  }
+
+  /** S-41: the room of an area to play next (game/area nextRoom): the first whose drop waits; its rooms' count when none does. */
+  nextRoom(area: string): number {
+    const a = this.areas.find((q) => q.id === area);
+    return a ? nextRoom(a, this.isTaken) : 0;
+  }
+
+  /** S-41: is the way into an area's room (by its index) open (game/area roomOpen)? */
+  roomOpen(area: string, index: number): boolean {
+    const a = this.areas.find((q) => q.id === area);
+    return !!a && roomOpen(a, index, this.isTaken);
+  }
+
+  /**
    * What the light has fixed, over every way it has run. The light only moves on, so the same number of settled segments
    * is the same set: the lists are made again only when it grows (a few times while the light crosses, not every frame).
    */
@@ -690,16 +781,22 @@ export class PrologueSession {
   holdShortcut(area: string, elapsed: number): void {
     const r = this.runs.find((q) => q.area === area);
     if (!r) return;
-    for (const d of this.drops.drops) if (d.area === area) this.drops.setTaken(d.id);
+    for (const d of this.drops.drops) if (d.area === area) this.holdDropTaken(d.id);
     setElapsed(r, Math.max(0, elapsed));
     r.held = true;
   }
 
   /**
    * Dev holds (the room's ?area1Drop=taken): a drop as if taken long ago — no events, and (unlike holdFinale) not the close.
+   * S-41: the gate its room opens stands open.
    */
   holdDropTaken(id: string): void {
     this.drops.setTaken(id);
+    for (const g of this.gates)
+      if (g.drop === id) {
+        g.elapsed = g.decl.opensAt + GATE_OPEN_SECONDS;
+        g.held = true;
+      }
   }
 
   /** A light drop (the first room's when no id is given) is real (inside a sphere) and can be touched. */
@@ -732,11 +829,24 @@ export class PrologueSession {
       else if (r.area !== null && crosses(was, was + dt, r.seconds))
         this.shortcutEvents.emit({ type: 'settled', area: r.area });
     }
+    // S-41: the gates between an area's rooms: once their room's drop's light has come to them, they swing open
+    for (const g of this.gates) {
+      if (g.elapsed === null || g.held) continue;
+      const was = g.elapsed;
+      g.elapsed = was + dt;
+      const { opensAt } = g.decl;
+      if (crosses(was, g.elapsed, opensAt))
+        this.gateEvents.emit({ type: 'open', area: g.area, gate: g.decl.id });
+      if (crosses(was, g.elapsed, opensAt + GATE_OPEN_SECONDS))
+        this.gateEvents.emit({ type: 'opened', area: g.area, gate: g.decl.id });
+    }
     if (input.feet) this.feetZ = input.feet[2];
     this.pushing = input.pushing ?? false;
     this.stepMembrane(dt);
     for (const id of this.drops.step(dt)) {
       this.events.emit({ type: 'dropTaken' });
+      // S-41: the gate on the way on from its room starts its clock (the drop's light on its way to it)
+      for (const g of this.gates) if (g.drop === id && g.elapsed === null) g.elapsed = 0;
       // S-34: 雫の光が橋を渡って表に定着させ、向こう岸に届くと門が開く (stepFinale) — the settling room's drop only
       // S-40: and once an area's last drop is taken, the light runs along its shortcut home
       const area = this.drops.drop(id)?.area ?? null;

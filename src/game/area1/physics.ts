@@ -6,6 +6,9 @@ import { BackFooting, slab, trimesh, wall } from '../prologue/physics';
 import { sweptSlab } from '../prologue/slope';
 import {
   AREA1,
+  AREA1_GATE_LEAF,
+  AREA1_GATE_POST,
+  AREA1_GATES,
   AREA1_HOUSES,
   AREA1_PLAZA,
   AREA1_RIM,
@@ -15,6 +18,8 @@ import {
   area1RimArcs,
   area1SlopeHeight,
   COURT_Y,
+  gateLeaves,
+  gatePostOffset,
   HOUSE_ROUND,
   ROOM1_ALLEY,
   ROOM2_BALCONY,
@@ -23,6 +28,8 @@ import {
   ROOM2_STAIRS,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
+  ROOM3_SHADE,
+  ROOM3_STACK,
   ROOM3_TERRACE,
   STREET_NORTH_Z,
   STREET_SOUTH_Z,
@@ -175,6 +182,32 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
     ),
   );
   for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
+  // S-41: 部屋3's shade — the roof's walls on the north roof's edge, the chimney's stub on the terrace
+  for (const w of ROOM3_SHADE) {
+    const h = w.top - (SUMMIT_Y - SLAB);
+    descs.push(
+      R.ColliderDesc.cuboid((w.maxX - w.minX) / 2, h / 2, (w.maxZ - w.minZ) / 2).setTranslation(
+        (w.minX + w.maxX) / 2,
+        SUMMIT_Y - SLAB + h / 2,
+        (w.minZ + w.maxZ) / 2,
+      ),
+    );
+  }
+  {
+    const { at, radius, top } = ROOM3_STACK;
+    const h = top - at[1];
+    descs.push(R.ColliderDesc.cylinder(h / 2, radius).setTranslation(at[0], at[1] + h / 2, at[2]));
+  }
+  // S-41: the gates' posts (their leaves turn: Area1Gates)
+  for (const g of AREA1_GATES)
+    for (const side of [-1, 1])
+      descs.push(
+        R.ColliderDesc.cylinder(g.height / 2, AREA1_GATE_POST).setTranslation(
+          g.at[0] + side * gatePostOffset(g),
+          g.at[1] + g.height / 2,
+          g.at[2],
+        ),
+      );
   // the houses that bound them: the same rounded boxes as drawn, from under the floor to their eaves
   for (const h of AREA1_HOUSES) {
     if (!h.collide) continue;
@@ -202,6 +235,70 @@ export function addArea1Colliders(R: typeof RAPIER, world: RAPIER.World): Area1C
       for (const c of colliders) world.removeCollider(c, false);
     },
   };
+}
+
+/**
+ * S-41: the leaves of エリア1's gates between its rooms, as thin boxes turning about their hinges (the same angle as drawn: art.ts),
+ * shut until the session opens them (areaGateProgress → area1GateAngle). Moved in place each time they turn (nothing is
+ * allocated: they turn every frame while they open, as the prologue's GateLeaves).
+ */
+export class Area1Gates {
+  private readonly leaves = new Map<string, RAPIER.Collider[]>();
+  private readonly angles = new Map<string, number>();
+  private readonly at = { x: 0, y: 0, z: 0 };
+  private readonly turn = { x: 0, y: 0, z: 0, w: 1 };
+
+  constructor(
+    R: typeof RAPIER,
+    private readonly world: RAPIER.World,
+  ) {
+    for (const g of AREA1_GATES) {
+      const half = (g.halfWidth - 2 * AREA1_GATE_POST) / 2;
+      this.leaves.set(
+        g.id,
+        [0, 1].map(() =>
+          world.createCollider(
+            R.ColliderDesc.cuboid(half, AREA1_GATE_LEAF.height / 2, AREA1_GATE_LEAF.thickness / 2),
+          ),
+        ),
+      );
+      this.sync(g.id, 0);
+    }
+  }
+
+  /** Radians the gate's leaves have swung from shut. */
+  angle(id: string): number {
+    return this.angles.get(id) ?? 0;
+  }
+
+  /** Puts a gate's leaves `angle` radians open. Returns whether they moved. */
+  sync(id: string, angle: number): boolean {
+    if (this.angles.get(id) === angle) return false;
+    const g = AREA1_GATES.find((q) => q.id === id);
+    const leaves = this.leaves.get(id);
+    if (!g || !leaves) return false;
+    this.angles.set(id, angle);
+    const poses = gateLeaves(g, angle);
+    for (let i = 0; i < leaves.length; i++) {
+      const c = leaves[i] as RAPIER.Collider;
+      const { hinge, dir, length } = poses[i] as (typeof poses)[0];
+      this.at.x = hinge[0] + (dir[0] * length) / 2;
+      this.at.y = g.at[1] + AREA1_GATE_LEAF.foot + AREA1_GATE_LEAF.height / 2;
+      this.at.z = hinge[1] + (dir[1] * length) / 2;
+      c.setTranslation(this.at);
+      // the turn about +Y that takes the box's +X onto (dx, 0, dz)
+      const yaw = Math.atan2(-dir[1], dir[0]);
+      this.turn.y = Math.sin(yaw / 2);
+      this.turn.w = Math.cos(yaw / 2);
+      c.setRotation(this.turn);
+    }
+    return true;
+  }
+
+  dispose(): void {
+    for (const ls of this.leaves.values()) for (const c of ls) this.world.removeCollider(c, false);
+    this.leaves.clear();
+  }
 }
 
 /**

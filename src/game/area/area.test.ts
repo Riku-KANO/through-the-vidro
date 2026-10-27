@@ -3,6 +3,7 @@ import { splitFooting, type Vec3 } from '../../layers/footing';
 import { MAIN_ORB_RADIUS, MATERIALIZE_SECONDS } from '../../layers/materialize';
 import type { SettleSweep } from '../../layers/settle';
 import { cutSurfaceIds, splitSurface } from '../../layers/surface';
+import { glassEase } from '../../layers/tween';
 import { orbSpheres } from '../orb/orbs';
 import { canPickUp, PICKUP_BODY } from '../orb/rules';
 import {
@@ -14,13 +15,17 @@ import {
   PROLOGUE_AREA,
 } from '../prologue/layout';
 import {
+  type AreaGateEvent,
   DROP_FLIGHT_SECONDS,
   FINALE_SECONDS,
   type FinaleEvent,
   finaleFront,
+  GATE_OPEN_SECONDS,
+  glassPeak,
   legFronts,
   PrologueSession,
   SETTLE_SECONDS,
+  SHORTCUT_STEADY_SPAN,
   type ShortcutEvent,
   steadyEase,
 } from '../prologue/session';
@@ -30,7 +35,10 @@ import {
   DropTally,
   dropsOf,
   footingOf,
+  gateInto,
+  nextRoom,
   pedestalsOf,
+  roomOpen,
   surfaceOf,
   surfaceSegments,
 } from '.';
@@ -438,9 +446,33 @@ describe('S-40: a shortcut’s light runs at a steady pace (steadyEase), not rac
       last = v;
     }
     const top = Math.max(...speeds);
-    // its top speed is the steady one (no more than 1 / (1 − ramp) times the mean), where the game's one curve doubles it
+    // its top speed is the steady one (a little over the mean), where the game's one curve has three times the mean
     expect(top).toBeLessThan(1.3);
     expect(speeds.filter((v) => v > top - 1e-6).length).toBeGreaterThan(50);
+  });
+
+  it('S-41: its start and its stop are the game’s one curve’s own (遷移のルール5: ゆっくり始まって粘りながら止まる)', () => {
+    // glassEase's steepest point: the light leaves glassEase's start there and runs on at that speed, then comes into
+    // glassEase's stop from the same speed (the curve cut at its steepest, a steady run put in between)
+    const peak = glassPeak();
+    for (let x = 0.005; x < 0.995; x += 0.005) {
+      const slope = (glassEase(x + 1e-4) - glassEase(x - 1e-4)) / 2e-4;
+      expect(slope).toBeLessThanOrEqual(peak.slope + 1e-3);
+    }
+    const k = 1 + SHORTCUT_STEADY_SPAN;
+    const a = 1 + peak.slope * SHORTCUT_STEADY_SPAN;
+    // the start: glassEase's start, drawn out by k and scaled down by a
+    for (let u = 0; u <= peak.x / k; u += 0.002) expect(steadyEase(u)).toBeCloseTo(glassEase(u * k) / a, 9);
+    // the stop: glassEase's stop (its sticky end) the same way
+    for (let w = 0; w <= (1 - peak.x) / k; w += 0.002)
+      expect(1 - steadyEase(1 - w)).toBeCloseTo((1 - glassEase(1 - w * k)) / a, 9);
+    // no jolt where they meet the steady run: the speed goes on smoothly
+    const speed = (u: number) => (steadyEase(u + 1e-6) - steadyEase(u - 1e-6)) / 2e-6;
+    for (const join of [peak.x / k, 1 - (1 - peak.x) / k])
+      expect(speed(join - 1e-4)).toBeCloseTo(speed(join + 1e-4), 2);
+    // most of its time is the steady run; the stop takes longer than the start (粘りながら止まる)
+    expect(SHORTCUT_STEADY_SPAN / k).toBeGreaterThan(0.6);
+    expect(1 - peak.x).toBeGreaterThan(peak.x);
   });
 
   it('down a way of two legs, its front moves at about one speed from leg to leg', () => {
@@ -485,5 +517,135 @@ describe('S-40: the pickup’s exception is the rule’s (orb/rules PickUpContex
         settled: { surface: wall.map((s) => s.id) },
       }),
     ).toBe(true);
+  });
+});
+
+/*
+ * S-41 部屋は順に開く (発案者 2026-10-27): an area of three rooms in a row along +X, 12 m apart, each a pedestal and a drop; a
+ * gate on the way into the second (opened by the first room's drop) and into the third (by the second's).
+ */
+const ROW_ROOMS = [0, 1, 2].map((i) => ({
+  id: `row-${i}`,
+  pedestals: [{ id: `row-p${i}`, base: [60 + 12 * i, 0, 0] as Vec3, orb: [60 + 12 * i, 1.05, 0] as Vec3 }],
+  drop: { id: `row-d${i}`, at: [61 + 12 * i, 1.2, 0] as Vec3 },
+}));
+const ROW: AreaDecl = {
+  id: 'row',
+  rooms: ROW_ROOMS,
+  gates: [
+    { id: 'row-g1', after: 'row-0', opensAt: 1.5 },
+    { id: 'row-g2', after: 'row-1', opensAt: 1.2 },
+  ],
+};
+const takenOf =
+  (...ids: string[]) =>
+  (id: string): boolean =>
+    ids.includes(id);
+
+function takeRow(s: PrologueSession, i: number): void {
+  const at: Vec3 = [60.4 + 12 * i, 0, 0.6];
+  expect(s.interact({ kind: 'pedestal', id: `row-p${i}` }, at)).toBe('place');
+  run(s, MATERIALIZE_SECONDS + 0.1);
+  expect(s.interact({ kind: 'drop', id: `row-d${i}` }, at)).toBe('touch-drop');
+}
+
+describe('S-41: rooms open in order — the next room is the first whose drop waits (部屋は順に開く)', () => {
+  it('nextRoom: the first room, in order, whose drop is not taken; all taken, past the last', () => {
+    expect(nextRoom(ROW, takenOf())).toBe(0);
+    expect(nextRoom(ROW, takenOf('row-d0'))).toBe(1);
+    expect(nextRoom(ROW, takenOf('row-d0', 'row-d1'))).toBe(2);
+    expect(nextRoom(ROW, takenOf('row-d0', 'row-d1', 'row-d2'))).toBe(3);
+    // a later room's drop taken out of order (a dev hold) does not skip the one before it
+    expect(nextRoom(ROW, takenOf('row-d1'))).toBe(0);
+  });
+
+  it('roomOpen: the first room always; each next once the room before it has given its drop', () => {
+    expect([0, 1, 2].map((i) => roomOpen(ROW, i, takenOf()))).toEqual([true, false, false]);
+    expect([0, 1, 2].map((i) => roomOpen(ROW, i, takenOf('row-d0')))).toEqual([true, true, false]);
+    expect([0, 1, 2].map((i) => roomOpen(ROW, i, takenOf('row-d0', 'row-d1')))).toEqual([true, true, true]);
+    // (a room the area does not have is not open)
+    expect(roomOpen(ROW, 3, takenOf('row-d0', 'row-d1', 'row-d2'))).toBe(false);
+  });
+
+  it('gateInto: the gate on the way into a room is the one its room before opens (none for the first)', () => {
+    expect(gateInto(ROW, 0)).toBeNull();
+    expect(gateInto(ROW, 1)?.id).toBe('row-g1');
+    expect(gateInto(ROW, 2)?.id).toBe('row-g2');
+  });
+
+  it('checkAreas says when the order has a hole: a gate after a room the area does not have, a room with no way in', () => {
+    expect(checkAreas([ROW], MAIN_ORB_RADIUS)).toEqual([]);
+    const unknown: AreaDecl = {
+      ...ROW,
+      gates: [...(ROW.gates ?? []), { id: 'x', after: 'nope', opensAt: 1 }],
+    };
+    expect(checkAreas([unknown], MAIN_ORB_RADIUS)).toContain(
+      'gate "x" opens after room "nope", which area "row" has not',
+    );
+    const hole: AreaDecl = { ...ROW, gates: [ROW.gates?.[0] as NonNullable<AreaDecl['gates']>[0]] };
+    expect(checkAreas([hole], MAIN_ORB_RADIUS)).toContain(
+      'room "row-2" of area "row" has no gate opened by room "row-1" (rooms open in order)',
+    );
+    // (an area without gates — the prologue's, the shortcut's tests' — has all its rooms open)
+    expect(checkAreas([LOOP, PROLOGUE_AREA], MAIN_ORB_RADIUS)).toEqual([]);
+  });
+});
+
+describe('S-41: a gate opens once its room’s drop is taken and that drop’s light has come to it (序章の門と同じ形)', () => {
+  it('shut until then; from `opensAt` after the drop is taken it swings open over the prologue gate’s seconds', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [ROW] });
+    const gates: AreaGateEvent[] = [];
+    s.gateEvents.on((e) => gates.push(e));
+    const log: string[] = [];
+    s.events.on((e) => log.push(e.type));
+    expect(s.areaGateProgress('row-g1')).toBe(0);
+    expect(s.nextRoom('row')).toBe(0);
+    takeRow(s, 0);
+    run(s, DROP_FLIGHT_SECONDS + 0.01);
+    expect(s.dropStateOf('row-d0')).toBe('taken');
+    expect(s.nextRoom('row')).toBe(1);
+    expect(s.roomOpen('row', 1)).toBe(true);
+    // the light on its way to the gate: shut
+    run(s, 1.5 - 0.05);
+    expect(s.areaGateProgress('row-g1')).toBe(0);
+    expect(gates).toEqual([]);
+    run(s, 0.1);
+    expect(gates).toEqual([{ type: 'open', area: 'row', gate: 'row-g1' }]);
+    expect(s.areaGateProgress('row-g1')).toBeGreaterThan(0);
+    expect(s.areaGateProgress('row-g1')).toBeLessThan(0.1);
+    run(s, GATE_OPEN_SECONDS);
+    expect(s.areaGateProgress('row-g1')).toBe(1);
+    expect(gates.map((e) => e.type)).toEqual(['open', 'opened']);
+    // the next gate is still shut; nothing new on the room's own events (S-16's table of sounds)
+    expect(s.areaGateProgress('row-g2')).toBe(0);
+    expect(log.every((t) => ['place', 'dropTouched', 'dropTaken', 'pickup'].includes(t))).toBe(true);
+  });
+
+  it('the second room’s drop opens the second gate, at its own time', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [ROW] });
+    const gates: AreaGateEvent[] = [];
+    s.gateEvents.on((e) => gates.push(e));
+    s.holdDropTaken('row-d0');
+    takeRow(s, 1);
+    run(s, DROP_FLIGHT_SECONDS + 1.2 + 0.05);
+    expect(gates).toEqual([{ type: 'open', area: 'row', gate: 'row-g2' }]);
+    run(s, GATE_OPEN_SECONDS);
+    expect(s.areaGateProgress('row-g2')).toBe(1);
+    expect(s.nextRoom('row')).toBe(2);
+  });
+
+  it('a dev hold: a drop as if taken long ago opens its gate at once, without events', () => {
+    const s = new PrologueSession({ orbStart: 'hand', areas: [ROW] });
+    const gates: AreaGateEvent[] = [];
+    s.gateEvents.on((e) => gates.push(e));
+    s.holdDropTaken('row-d0');
+    expect(s.areaGateProgress('row-g1')).toBe(1);
+    expect(s.areaGateProgress('row-g2')).toBe(0);
+    run(s, 3);
+    expect(gates).toEqual([]);
+    // and the shortcut's hold (every drop of the area taken) opens them all
+    const t = new PrologueSession({ orbStart: 'hand', areas: [{ ...ROW, shortcut: LOOP.shortcut }] });
+    t.holdShortcut('row', 10);
+    expect([t.areaGateProgress('row-g1'), t.areaGateProgress('row-g2')]).toEqual([1, 1]);
   });
 });

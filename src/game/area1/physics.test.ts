@@ -9,6 +9,7 @@ import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController, type PlayerIntent } from '../player/player';
 import {
   bridgeFooting,
+  DROP_REACH,
   GATE_OPEN_DEG,
   MEMBRANE,
   PLAZA,
@@ -27,17 +28,20 @@ import {
 import {
   DROP_FLIGHT_SECONDS,
   FINALE_SECONDS,
+  GATE_OPEN_SECONDS,
   PrologueSession,
   type ShortcutEvent,
 } from '../prologue/session';
 import {
   AREA1,
+  AREA1_GATES,
   AREA1_PLAZA,
   AREA1_RIM,
   AREA1_ROAD,
   AREA1_SLOPE,
   AREA1_STREET,
   AREA1_Y,
+  area1GateAngle,
   area1SlopeHeight,
   COURT_Y,
   eastOf,
@@ -61,6 +65,8 @@ import {
   ROOM3_PEDESTAL_S,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
+  ROOM3_SHADE,
+  ROOM3_STACK,
   ROOM3_TERRACE,
   SHORTCUT_GATE,
   SHORTCUT_SECONDS,
@@ -69,7 +75,7 @@ import {
   shortcutHeight,
   shortcutSegments,
 } from './layout';
-import { addArea1Colliders, area1Footing } from './physics';
+import { Area1Gates, addArea1Colliders, area1Footing } from './physics';
 
 /**
  * S-36: エリア1's way in and its first room in a real Rapier world (Node): the prologue's colliders (the town, its road), エリア1's
@@ -90,7 +96,11 @@ const yawToward = (dx: number, dz: number): number => Math.atan2(-dx, -dz);
 /** Looking east (COMPASS). */
 const EAST_YAW = yawToward(COMPASS.east[0], COMPASS.east[1]);
 
-function world(area1 = true) {
+/**
+ * A world with the prologue's colliders and (`area1`) エリア1's. S-41: its gates between the rooms `open` (the S-40 tests of the
+ * slope and the rooms: as if their drops were taken) or `shut` (as they stand before; `played` opens them with the session).
+ */
+function world(area1 = true, gates: 'open' | 'shut' = 'open') {
   const w = createWorld();
   addRoomColliders(R, w);
   const footing = new BackFooting(R, w, bridgeFooting(), deckSegmentShape);
@@ -98,9 +108,11 @@ function world(area1 = true) {
   // S-40: エリア1's back-layer footing (the courtyard's stair, the bridges, the shortcut) and every surface-only wall of it
   const a1 = area1 ? area1Footing(R, w) : null;
   const wall = area1 ? new SurfaceColliders(R, w, surfaceOf([AREA1])) : null;
+  const gateLeaves = area1 ? new Area1Gates(R, w) : null;
+  if (gates === 'open') for (const g of AREA1_GATES) gateLeaves?.sync(g.id, area1GateAngle(1));
   const allowGround = (x: number, y: number, z: number, c: RAPIER.Collider): boolean =>
     footing.allowGround(x, y, z, c) && (a1?.allowGround(x, y, z, c) ?? true);
-  return { world: w, footing, a1, built, wall, allowGround };
+  return { world: w, footing, a1, built, wall, gates: gateLeaves, gatesShut: gates === 'shut', allowGround };
 }
 
 function body(r: ReturnType<typeof world>, feet: Vec3, yaw: number): PlayerController {
@@ -262,6 +274,9 @@ function played(r: ReturnType<typeof world>, session: PrologueSession) {
     r.wall?.sync(spheres);
     r.a1?.settle(session.settledFooting());
     r.wall?.settle(session.settledSurface());
+    // S-41: the gates between the rooms as the session opens them (in a world where they stand shut)
+    if (r.gatesShut)
+      for (const g of AREA1_GATES) r.gates?.sync(g.id, area1GateAngle(session.areaGateProgress(g.id)));
   };
   const run = (seconds: number) => {
     for (let t = 0; t < seconds - 1e-9; t += DT) tick();
@@ -473,6 +488,116 @@ describe('S-40: 部屋3「煙突の見晴らし」 in a Rapier world, played wit
   });
 });
 
+describe('S-41: rooms open in order — the gates in a Rapier world, played with the session (部屋は順に開く)', () => {
+  const [court, summit] = AREA1_GATES as [(typeof AREA1_GATES)[0], (typeof AREA1_GATES)[0]];
+
+  it('the gate across the slope’s foot stops the body in the street until 部屋1’s drop; its light comes, it opens, up to the landing', () => {
+    const r = world(true, 'shut');
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    const p = body(r, [AREA1_SLOPE.x, AREA1_Y, AREA1_STREET.z], SOUTH_YAW);
+    const before = g.go(p, forward, 4);
+    expect(before.every((q) => q.grounded)).toBe(true);
+    // stopped at the gate's leaves (a body's radius and half a leaf before its line)
+    expect(p.feet.z).toBeGreaterThan(court.at[2] + BODY_RADIUS - 0.05);
+    // 部屋1's drop taken (as if just now): the light comes along the lamps to the keystone, then the leaves swing open
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM1_PEDESTAL.id }, [eastX(114.7), AREA1_Y, -123.6]),
+    ).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    expect(session.interact({ kind: 'drop', id: ROOM1_DROP.id }, [eastX(113.8), AREA1_Y, -119.9])).toBe(
+      'touch-drop',
+    );
+    g.run(DROP_FLIGHT_SECONDS + 0.1);
+    expect(r.gates?.angle(court.id)).toBe(0);
+    const opensAt = AREA1.gates?.[0]?.opensAt ?? 0;
+    g.run(opensAt - 0.2);
+    expect(r.gates?.angle(court.id)).toBe(0);
+    g.run(0.3 + GATE_OPEN_SECONDS);
+    expect(r.gates?.angle(court.id)).toBeCloseTo(area1GateAngle(1), 9);
+    const s = g.go(p, forward, 12);
+    expect(s.every((q) => q.grounded)).toBe(true);
+    expect(p.feet.y).toBeCloseTo(COURT_Y, 1);
+    expect(p.feet.z).toBeLessThan(AREA1_SLOPE.landingFromZ);
+    // the second gate still stands shut
+    expect(r.gates?.angle(summit.id)).toBe(0);
+  });
+
+  it('the gate across the second flight stops the body on the landing until 部屋2’s drop; then up to the summit', () => {
+    const r = world(true, 'shut');
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    session.holdDropTaken(ROOM1_DROP.id);
+    const g = played(r, session);
+    g.tick();
+    expect(r.gates?.angle(court.id)).toBeCloseTo(area1GateAngle(1), 9);
+    const p = body(r, [AREA1_SLOPE.x, COURT_Y, -143.0], SOUTH_YAW);
+    g.go(p, forward, 4);
+    expect(p.feet.z).toBeGreaterThan(summit.at[2] + BODY_RADIUS - 0.05);
+    expect(p.feet.y).toBeLessThan(COURT_Y + 0.5);
+    // nor round it through the courtyard (it stands past the courtyard's opening, against its houses)
+    const q = body(r, [eastX(124.0), COURT_Y, ROOM2_COURT.minZ + 0.5], yawToward(-1, -1));
+    g.go(q, forward, 4);
+    expect(q.feet.z).toBeGreaterThan(summit.at[2]);
+    q.dispose();
+    // 部屋2's drop (held taken as of now: its light on its way)
+    expect(
+      session.interact({ kind: 'pedestal', id: ROOM2_PEDESTAL_B.id }, [eastX(128.6), COURT_Y, -144.6]),
+    ).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    expect(
+      session.interact({ kind: 'drop', id: ROOM2_DROP.id }, [eastX(127.4), ROOM2_BALCONY.y, -141.1]),
+    ).toBe('touch-drop');
+    g.run(DROP_FLIGHT_SECONDS + (AREA1.gates?.[1]?.opensAt ?? 0) + GATE_OPEN_SECONDS + 0.1);
+    expect(r.gates?.angle(summit.id)).toBeCloseTo(area1GateAngle(1), 9);
+    const s = g.go(p, sprint, 10);
+    expect(s.every((v) => v.grounded)).toBe(true);
+    expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+  });
+});
+
+describe('S-41: 部屋3 — the drop in the lee of the roof’s walls, the chimney’s stub on the terrace (屋根の陰)', () => {
+  const lipN: Vec3 = [eastX(113.6), SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2];
+
+  it('the stub stops the body on the terrace; the roof’s walls stop it on the roof (their gap too narrow for it)', () => {
+    const r = world();
+    const [sx, , sz] = ROOM3_STACK.at;
+    const p = body(r, [sx + 2.5, SUMMIT_Y, sz], WEST_YAW);
+    walk(r, p, forward, 3);
+    expect(Math.hypot(p.feet.x - sx, p.feet.z - sz)).toBeGreaterThan(ROOM3_STACK.radius + BODY_RADIUS - 0.05);
+    // placed on the north pedestal: over the bridge and along behind the walls, east into their gap — it holds
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, lipN)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    const [a, b] = ROOM3_SHADE as [(typeof ROOM3_SHADE)[0], (typeof ROOM3_SHADE)[0]];
+    const gapZ = (a.minZ + b.maxZ) / 2;
+    const q = body(r, [a.minX - 1.0, SUMMIT_Y, gapZ], yawToward(1, 0));
+    g.go(q, forward, 3);
+    // (its round side wedges a little into the gap's mouth, its middle never past the walls' face)
+    expect(q.feet.x).toBeLessThan(a.minX - 0.1);
+  });
+
+  it('placed on the north pedestal: over its bridge, round the northern wall to the drop in its lee, and the drop is touched', () => {
+    const r = world();
+    const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
+    const g = played(r, session);
+    expect(session.interact({ kind: 'pedestal', id: ROOM3_PEDESTAL_N.id }, lipN)).toBe('place');
+    g.run(MATERIALIZE_SECONDS + 0.1);
+    const p = body(r, [eastX(114.6), SUMMIT_Y, lipN[2]], WEST_YAW);
+    g.go(p, forward, 3.4);
+    expect(p.feet.y).toBeCloseTo(SUMMIT_Y, 1);
+    // west of the walls, then south toward the drop (it hovers there in their lee)
+    face(r, p, SOUTH_YAW);
+    g.go(p, forward, 1.0);
+    const eye: Vec3 = [p.feet.x, p.feet.y + 1.6, p.feet.z];
+    const [dx, dy, dz] = ROOM3_DROP.at;
+    const d = Math.hypot(dx - eye[0], dy - eye[1], dz - eye[2]);
+    expect(d).toBeLessThan(DROP_REACH);
+    expect(session.dropMaterialized(ROOM3_DROP.id)).toBe(true);
+    expect(session.interact({ kind: 'drop', id: ROOM3_DROP.id }, g.feet(p))).toBe('touch-drop');
+  });
+});
+
 describe('S-40: 近道 — the stairs from the summit’s ridge to the entrance plaza, fixed by the third drop’s light', () => {
   const stairsX = (SHORTCUT_STAIRS.minX + SHORTCUT_STAIRS.maxX) / 2;
 
@@ -501,6 +626,8 @@ describe('S-40: 近道 — the stairs from the summit’s ridge to the entrance 
     const p = body(r, [eastX(114.6), SUMMIT_Y, lip[2]], WEST_YAW);
     g.go(p, forward, 3.0);
     expect(session.interact({ kind: 'drop', id: ROOM3_DROP.id }, g.feet(p))).toBe('touch-drop');
+    // (S-41: that body leaves the world; another walks the way home below — it would stand in its way on the bridge's line)
+    p.dispose();
     g.run(DROP_FLIGHT_SECONDS + 0.1);
     expect(shortcut).toEqual([{ type: 'settle', area: 'area1' }]);
     g.run(SHORTCUT_SECONDS + 0.1);
