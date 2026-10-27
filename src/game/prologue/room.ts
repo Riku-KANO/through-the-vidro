@@ -22,9 +22,11 @@ import { type Area1Art, buildArea1, hazeOf } from '../area1/art';
 import {
   AREA1,
   AREA1_CHIMNEY,
+  AREA1_GATES,
   AREA1_PLAZA,
   AREA1_ROAD,
   AREA1_SLOPE,
+  area1GateAngle,
   area1Ground,
   COURT_Y,
   daylightAt,
@@ -50,6 +52,8 @@ import {
   ROOM3_PEDESTAL_S,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
+  ROOM3_SHADE,
+  ROOM3_STACK,
   ROOM3_TERRACE,
   SHORTCUT_GATE,
   SHORTCUT_SECONDS,
@@ -57,7 +61,7 @@ import {
   SUMMIT_Y,
   TOWN,
 } from '../area1/layout';
-import { type Area1Colliders, addArea1Colliders, area1Footing } from '../area1/physics';
+import { type Area1Colliders, Area1Gates, addArea1Colliders, area1Footing } from '../area1/physics';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
 import type { DiveWorld } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
@@ -113,9 +117,10 @@ import {
   SurfaceColliders,
   withMembrane,
 } from './physics';
-import { buildPlaza, fogRangeAt } from './plaza';
+import { buildPlaza, FOG_WAY, fogRangeAt } from './plaza';
 import { buildRoomArt } from './room-art';
 import {
+  type AreaGateEvent,
   type FinaleEvent,
   finaleFront,
   type HintEvent,
@@ -200,6 +205,12 @@ export interface Area1Probe {
    * not run: before, and once it is through), which leg (0, 1), and its events (session ShortcutEvent).
    */
   shortcut: { settle: number; front: Vec3 | null; leg: number | null; events: string[] };
+  /**
+   * S-41: the room of it to play next (0..3: the first whose drop waits; game/area nextRoom), and its gates between the rooms —
+   * how far each is open (0..1, linear in time), its leaves' angle (radians), and their events ('open', 'opened').
+   */
+  nextRoom: number;
+  gates: Record<string, { progress: number; angle: number; events: string[] }>;
 }
 
 /** What the room publishes on window.__vidro.sceneProbe.room (tests/e2e/S-06-*.spec.ts). */
@@ -258,6 +269,11 @@ export interface RoomProbe {
   drawCalls: number;
   /** Times the fall guard had to put the body back (must stay 0: 落下死はない should hold without it). */
   fallRescues: number;
+  /**
+   * S-41: the peek image's far end (metres of view depth), and what the last peek image left out past it — things, and of them
+   * those on the back layer alone (must stay 0: 玉越しの裏の層の見た目は変えない).
+   */
+  peekFar: { far: number; leftOut: number; leftOutBack: number };
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   /**
@@ -330,7 +346,12 @@ export interface RoomProbe {
         pedestals: { n: Vec3; s: Vec3 };
         ids: { n: string; s: string; drop: string };
         drop: Vec3;
+        /** S-41: the roof's walls the drop hovers behind, the chimney's stub on the terrace. */
+        shade: { minX: number; maxX: number; minZ: number; maxZ: number; top: number }[];
+        stack: { at: Vec3; radius: number; top: number };
       };
+      /** S-41: the gates between the rooms — where each stands, its half width, which way its leaves swing (z). */
+      gates: { id: string; after: string; at: Vec3; halfWidth: number; swing: number }[];
       /** S-40: the shortcut — its stairs (x, top, foot), the gate, how long its light takes. */
       shortcut: { minX: number; maxX: number; topZ: number; footZ: number; gate: Box; seconds: number };
     };
@@ -389,6 +410,8 @@ export interface PrologueRoom extends DiveWorld {
   readonly hints: EventBus<HintEvent>;
   /** S-40: エリア1's shortcut settling (its light starts, is through), apart from the others. */
   readonly shortcut: EventBus<ShortcutEvent>;
+  /** S-41: エリア1's gates between its rooms opening, apart from the others. */
+  readonly gates: EventBus<AreaGateEvent>;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
@@ -427,6 +450,15 @@ const APPEAR_SECONDS = 3.5;
  */
 const SHORTCUT_GLOW = 2;
 const SHORTCUT_BAND_WIDTH = 5;
+/**
+ * 仮 (S-41; 発案者 2026-10-27: 覗く像のパスで霧の向こうの物（霧の遠端より先）を描かない、玉越しの裏の層の見た目は変えない): how far the
+ * peek image reaches — the far end of the way's haze (plaza.ts FOG_WAY), the haze the peek was made in (the workshop and the
+ * way; there it is the scene's own far end). In the town S-35 cleared the air to 300 m for the landmarks, and there nothing
+ * lies past the haze's far end: what the peek image drew toward the town was the workshop's furniture, the slope and the town's
+ * houses 95–200 m off, inside the haze and mostly behind エリア1's houses. The peek image keeps the way's far end; the back
+ * layer (all of it within some 60 m of where it can be peeked at) is drawn as before (process/slices/S-41.md).
+ */
+const PEEK_FAR = FOG_WAY.far;
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -469,6 +501,7 @@ interface Shell {
   finale: EventBus<FinaleEvent>;
   hints: EventBus<HintEvent>;
   shortcut: EventBus<ShortcutEvent>;
+  gates: EventBus<AreaGateEvent>;
 }
 
 /** A rectangle on the ground (x and z). */
@@ -502,6 +535,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   const finale = new EventBus<FinaleEvent>();
   const hints = new EventBus<HintEvent>();
   const shortcut = new EventBus<ShortcutEvent>();
+  const gates = new EventBus<AreaGateEvent>();
   const probe: RoomProbe = {
     ready: false,
     playing: false,
@@ -560,6 +594,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       footing: { segments: footingOf([AREA1]).length, active: 0, settled: 0 },
       motes: 0,
       shortcut: { settle: 0, front: null, leg: null, events: [] },
+      nextRoom: 0,
+      gates: Object.fromEntries(AREA1_GATES.map((g) => [g.id, { progress: 0, angle: 0, events: [] }])),
     },
     orbAt: PEDESTAL_ORB,
     dropAt: DROP,
@@ -569,6 +605,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     drawCalls: 0,
     triangles: 0,
     fallRescues: 0,
+    peekFar: { far: 0, leftOut: 0, leftOutBack: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     autoplay: opts.autopilot
       ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
@@ -639,7 +676,16 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
           pedestals: { n: ROOM3_PEDESTAL_N.orb, s: ROOM3_PEDESTAL_S.orb },
           ids: { n: ROOM3_PEDESTAL_N.id, s: ROOM3_PEDESTAL_S.id, drop: ROOM3_DROP.id },
           drop: ROOM3_DROP.at,
+          shade: ROOM3_SHADE.map((w) => ({ ...w })),
+          stack: { at: ROOM3_STACK.at, radius: ROOM3_STACK.radius, top: ROOM3_STACK.top },
         },
+        gates: AREA1_GATES.map((g) => ({
+          id: g.id,
+          after: g.after,
+          at: g.at,
+          halfWidth: g.halfWidth,
+          swing: g.swing,
+        })),
         shortcut: {
           minX: SHORTCUT_STAIRS.minX,
           maxX: SHORTCUT_STAIRS.maxX,
@@ -672,6 +718,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     finale,
     hints,
     shortcut,
+    gates,
     pose(u, outPos, outTarget) {
       dive.pose(u, outPos, outTarget);
       if (!built) return;
@@ -681,14 +728,16 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built.fogRange.far.value = 150 + away * 3;
     },
     prepare() {
-      building ??= buildRoom(ctx, opts, { camera, probe, events, finale, hints, shortcut }).then((b) => {
-        if (disposed) {
-          b.dispose();
-          return;
-        }
-        built = b;
-        b.setPlaying(playing);
-      });
+      building ??= buildRoom(ctx, opts, { camera, probe, events, finale, hints, shortcut, gates }).then(
+        (b) => {
+          if (disposed) {
+            b.dispose();
+            return;
+          }
+          built = b;
+          b.setPlaying(playing);
+        },
+      );
       return building;
     },
     warm: () => built?.warm(),
@@ -707,13 +756,14 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       finale.clear();
       hints.clear();
       shortcut.clear();
+      gates.clear();
     },
   };
 }
 
 async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Promise<BuiltRoom> {
   const { renderer, canvas, overlay, quality } = ctx;
-  const { camera, probe, events, finale, hints, shortcut } = shell;
+  const { camera, probe, events, finale, hints, shortcut, gates } = shell;
   // the workshop's interior (S-24): modelled in Blender, exported by `pnpm assets`; its furniture collides as its _col.
   // Loaded alongside Rapier, before anything that would need releasing if the file failed to load.
   const [R, workshop] = await Promise.all([
@@ -755,6 +805,15 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     mistFloor: slopeGroundNode(),
   });
   const finaleArt = buildFinale(quality, field, art.scene);
+  // S-41 dev (?peekFar=<m>, or the probe's setPeekFar for the sensors: null for the room's own)
+  let peekFarOverride = holdSeconds(ctx.params.get('peekFar'));
+  Object.defineProperty(probe, 'setPeekFar', {
+    enumerable: false,
+    configurable: true,
+    value: (m: number | null): void => {
+      peekFarOverride = m;
+    },
+  });
   // S-35: the slope down from the gate (and the film in its arch), the central plaza and the town round it
   const slopeArt = buildSlope(quality, field, art.scene);
   const plazaArt = buildPlaza(quality, field, art.scene);
@@ -771,6 +830,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     antialias: quality.antialias,
     environment: art.environment,
     finish: finishModeFrom(ctx.params),
+    // S-41: the peek image ends where the haze does (PEEK_FAR; dev: ?peekFar=<m>, for measuring)
+    peekFar: () => peekFarOverride ?? Math.min(art.fogRange.far.value, PEEK_FAR),
   });
 
   probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
@@ -888,6 +949,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const offShortcut = session.shortcutEvents.on((e) => {
     probe.area1.shortcut.events.push(e.type);
     shortcut.emit(e);
+  });
+  // S-41: エリア1's gates between its rooms on theirs (their sound: sound.ts, the prologue gate's, from each gate)
+  const offGates = session.gateEvents.on((e) => {
+    probe.area1.gates[e.gate]?.events.push(e.type);
+    gates.emit(e);
   });
 
   let playing = false;
@@ -1167,6 +1233,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     colliders: null as Area1Colliders | null,
     /** S-40: each surface-only wall of it (部屋1's, 部屋2's, the shortcut's gate), by id. */
     walls: [] as { id: string; colliders: SurfaceColliders }[],
+    /** S-41: the leaves of its gates between the rooms (their posts are with its colliders). */
+    gates: null as Area1Gates | null,
     /** S-40: what is left to add of its colliders, a step a frame (S-40: 足す作業を数フレームに分ける). */
     pending: [] as (() => void)[],
     warmAt: 0,
@@ -1217,6 +1285,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const area1ColliderSteps = (): (() => void)[] => [
     () => {
       a1.colliders = addArea1Colliders(R, world);
+      // S-41: and its gates' leaves, as open as the session says
+      a1.gates = new Area1Gates(R, world);
+      for (const g of AREA1_GATES) a1.gates.sync(g.id, area1GateAngle(session.areaGateProgress(g.id)));
     },
     () => {
       a1Footing = area1Footing(R, world);
@@ -1351,12 +1422,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     since === null || time - since < NEXT_LIGHTS.first
       ? 0
       : (time - since - NEXT_LIGHTS.first) / NEXT_LIGHTS.each + 1;
-  /** S-40: which way the motes lead: to the first room whose drop waits, or (all taken) down the shortcut. */
-  const roomDrops = [ROOM1_DROP.id, ROOM2_DROP.id, ROOM3_DROP.id];
-  const motesTarget = (): number => {
-    for (let i = 0; i < roomDrops.length; i++) if (session.dropStateOf(roomDrops[i]) !== 'taken') return i;
-    return roomDrops.length;
-  };
+  /**
+   * S-40: which way the motes lead: to the first room whose drop waits, or (all taken) down the shortcut. S-41: the area's order
+   * (game/area nextRoom), which the lamps and the gates follow too.
+   */
+  const motesTarget = (): number => session.nextRoom(AREA1.id);
+  /** S-41: how far each gate is open (0..1) and its leaves' angle, by id (written each frame, read by the art and the probe). */
+  const gateOpen: Record<string, number> = Object.fromEntries(AREA1_GATES.map((g) => [g.id, 0]));
+  const gateAngles: Record<string, number> = Object.fromEntries(AREA1_GATES.map((g) => [g.id, 0]));
   /** エリア1's walls and footing, its lamps toward the next rooms, the motes, its appearance (stage, every frame). */
   const stageArea1 = (dt: number): void => {
     const built = a1.art;
@@ -1376,9 +1449,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       probe.area1.footing.settled = a1Footing.settledCount;
     }
     // 次の部屋の方向が見える: once 部屋1's drop is taken, the lamps up the first flight to the courtyard light one after the other;
-    // once 部屋2's, those up the second flight to the summit (S-40)
-    if (a1.nextSince === null && session.dropStateOf(ROOM1_DROP.id) === 'taken') a1.nextSince = time;
-    if (a1.next2Since === null && session.dropStateOf(ROOM2_DROP.id) === 'taken') a1.next2Since = time;
+    // once 部屋2's, those up the second flight to the summit (S-40). S-41: always toward the next room in the area's order (the
+    // first whose drop waits): a room's lamps light once the rooms up to it have given their drops
+    const next = session.nextRoom(AREA1.id);
+    probe.area1.nextRoom = next;
+    if (a1.nextSince === null && next > 0) a1.nextSince = time;
+    if (a1.next2Since === null && next > 1) a1.next2Since = time;
     const lit1 = litLamps(a1.nextSince);
     const lit2 = litLamps(a1.next2Since);
     built.setNext(lit1, lit2);
@@ -1389,6 +1465,20 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     a1.stage =
       a1.stage < target ? Math.min(target, a1.stage + dt / 2.5) : Math.max(target, a1.stage - dt / 2.5);
     probe.area1.motes = a1.stage;
+    // S-41: the gates between the rooms, as open as the session says: drawn and collided at one angle
+    for (const g of AREA1_GATES) {
+      const progress = session.areaGateProgress(g.id);
+      const angle = area1GateAngle(progress);
+      gateOpen[g.id] = progress;
+      gateAngles[g.id] = angle;
+      a1.gates?.sync(g.id, angle);
+      const p = probe.area1.gates[g.id];
+      if (p) {
+        p.progress = progress;
+        p.angle = angle;
+      }
+    }
+    built.setGates(gateAngles);
     // out of the haze (S-40): from when it was added in view
     if (a1.appearFrom !== null) {
       const u = Math.min(1, (time - a1.appearFrom) / APPEAR_SECONDS);
@@ -1614,7 +1704,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       art.animate(t);
       slopeArt.animate(t);
       plazaArt.animate(t);
-      a1.art?.animate(t, a1.stage, session.shortcutProgress(AREA1.id));
+      a1.art?.animate(t, a1.stage, session.shortcutProgress(AREA1.id), gateOpen);
       let intent = idle;
       let wantPeek = false;
       if (playing) {
@@ -1756,6 +1846,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       // renderer.info is reset once per animation frame, so this is the whole frame so far
       probe.drawCalls = renderer.info.render.drawCalls;
       probe.triangles = renderer.info.render.triangles;
+      probe.peekFar.far = peekFarOverride ?? Math.min(art.fogRange.far.value, PEEK_FAR);
+      probe.peekFar.leftOut = pipeline.farLeftOut;
+      probe.peekFar.leftOutBack = pipeline.farLeftOutBack;
     },
     resize() {
       pipeline.resize();
@@ -1766,10 +1859,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       offFinale();
       offHints();
       offShortcut();
+      offGates();
       session.events.clear();
       session.finaleEvents.clear();
       session.hintEvents.clear();
       session.shortcutEvents.clear();
+      session.gateEvents.clear();
       input.dispose();
       prompt.remove();
       player.dispose();
@@ -1779,6 +1874,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       alive = false;
       for (const w of a1.walls) w.colliders.dispose();
       a1Footing?.dispose();
+      a1.gates?.dispose();
       a1.colliders?.dispose();
       a1.art?.dispose();
       gateLeaves.dispose();

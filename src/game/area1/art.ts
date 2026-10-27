@@ -28,10 +28,13 @@ import type { SurfaceDecl } from '../area';
 import type { MeshData } from '../player/walk-lab-field';
 import { stoneMaterial } from '../prologue/room-art';
 import {
+  AREA1_GATE_LEAF,
+  AREA1_GATES,
   AREA1_GLIMMERS,
   AREA1_HOUSES,
   AREA1_PLAZA,
   AREA1_RIM,
+  AREA1_SHORTCUT,
   AREA1_SLOPE,
   AREA1_STREET,
   AREA1_Y,
@@ -39,6 +42,8 @@ import {
   area1RimArcs,
   COURT_Y,
   eastX,
+  gateKeystone,
+  gatePostOffset,
   HOUSE_ROUND,
   type House,
   MOTE_PATHS,
@@ -64,6 +69,8 @@ import {
   ROOM3_PEDESTAL_S,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
+  ROOM3_SHADE,
+  ROOM3_STACK,
   ROOM3_TERRACE,
   room2StairSegments,
   SHORTCUT_GATE,
@@ -144,10 +151,16 @@ export interface Area1Art {
    */
   setNext(room1: number, room2?: number): void;
   /**
-   * Ambient motion (scene clock, seconds): the motes along MOTE_PATHS (`stage` 0..3: which way they lead, fractional while
-   * they turn), the glimmers (`shortcut` 0..1: the shortcut's light has passed, and its dead ends' glimmers fade).
+   * S-41: turns each gate's leaves `angles[id]` radians open (area1GateAngle; missing: shut), as its colliders turn
+   * (physics.ts Area1Gates).
    */
-  animate(t: number, stage: number, shortcut?: number): void;
+  setGates(angles: Readonly<Record<string, number>>): void;
+  /**
+   * Ambient motion (scene clock, seconds): the motes along MOTE_PATHS (`stage` 0..3: which way they lead, fractional while
+   * they turn), the glimmers (`shortcut` 0..1: the shortcut's light has passed, and its dead ends' glimmers fade; S-41: `gates`
+   * 0..1 by id, how far each gate is open, and the glimmer beyond it fades).
+   */
+  animate(t: number, stage: number, shortcut?: number, gates?: Readonly<Record<string, number>>): void;
   dispose(): void;
 }
 
@@ -183,7 +196,10 @@ const GREY = new THREE.Color(0.5, 0.52, 0.55);
 const RUBBLE = new THREE.Color(0.56, 0.55, 0.53);
 /** Motes along the way, and the glimmers of the back layer at the dead ends (ルール9: 光の揺らぎ). */
 const MOTES = 36;
-const GLIMMERS = 30;
+/** (S-41: five spots now, the gates' two among them) */
+const GLIMMERS = 40;
+/** S-41: the glimmers its light takes away (AREA1_GLIMMERS `until`). */
+const shortcutId = AREA1_SHORTCUT.id;
 /**
  * 仮 (S-36): the halo of a drop — a ball of warm light (linear) round its core, so that its light reads through the vidro against
  * the morning's grey (the core and the shell are the prologue's). Its middle crosses the bloom's threshold a little (光の雫は
@@ -563,6 +579,50 @@ export function* buildArea1(
         ),
       );
     }
+    // S-41 部屋3's shade: the roof's walls carried on above the north roof's edge (屋根の立ち上がり), a brass line along their tops;
+    // the chimney's stub on the terrace (煙突の根元), banded in brass
+    if (zone === 'summit') {
+      for (const w of ROOM3_SHADE) {
+        const h = w.top - (SUMMIT_Y - 0.3);
+        parts.push(
+          bare(new RoundedBoxGeometry(w.maxX - w.minX, h, w.maxZ - w.minZ, 2, 0.08)).translate(
+            (w.minX + w.maxX) / 2,
+            SUMMIT_Y - 0.3 + h / 2,
+            (w.minZ + w.maxZ) / 2,
+          ),
+        );
+        const x = (w.minX + w.maxX) / 2;
+        brassParts.push(
+          rod(
+            new THREE.Vector3(x, w.top - 0.12, w.minZ + 0.06),
+            new THREE.Vector3(x, w.top - 0.12, w.maxZ - 0.06),
+            0.03,
+          ),
+        );
+      }
+      const { at, radius, top } = ROOM3_STACK;
+      parts.push(
+        bare(new THREE.CylinderGeometry(radius, radius * 1.04, top - at[1] + 0.3, 32, 1)).translate(
+          at[0],
+          (at[1] - 0.3 + top) / 2,
+          at[2],
+        ),
+      );
+      // its broken top: a lip, a little wider
+      parts.push(
+        bare(new THREE.CylinderGeometry(radius * 1.1, radius * 1.1, 0.22, 32, 1)).translate(
+          at[0],
+          top - 0.11,
+          at[2],
+        ),
+      );
+      for (const y of [0.9, 2.1])
+        brassParts.push(
+          new THREE.TorusGeometry(radius + 0.012, 0.022, 6, 48)
+            .rotateX(Math.PI / 2)
+            .translate(at[0], at[1] + y, at[2]),
+        );
+    }
     if (parts.length > 0) put(new THREE.Mesh(merged(parts), grey), `area1-houses-${zone}`);
   };
   for (const zone of ['plaza', 'street', 'slope', 'court', 'summit', 'hill'] as const) {
@@ -718,7 +778,9 @@ export function* buildArea1(
     });
     put(new THREE.Mesh(merged(cups), cupMilk), 'area1-pedestal-cups');
 
-    // the lamps toward the next room: wall brackets on the houses, the last of 部屋1's on the balcony's railing post
+    // the lamps toward the next room: wall brackets on the houses, the last of 部屋1's on the balcony's railing post; (S-41)
+    // the gates' keystones among them
+    const keystones = AREA1_GATES.map(gateKeystone);
     const groups = [NEXT_LAMPS_BY_ROOM.room1, NEXT_LAMPS_BY_ROOM.room2];
     for (let group = 0; group < groups.length; group++) {
       const lamps = groups[group] ?? [];
@@ -729,11 +791,53 @@ export function* buildArea1(
         g.setAttribute('lamp', new THREE.Float32BufferAttribute(new Float32Array(count).fill(i), 1));
         g.setAttribute('lampGroup', new THREE.Float32BufferAttribute(new Float32Array(count).fill(group), 1));
         nextGlobes.push(g);
+        // (S-41: a gate's keystone sits in a cup on its arch: gates below)
+        if (keystones.some((k) => k[0] === p[0] && k[1] === p[1] && k[2] === p[2])) continue;
         brassParts.push(
           new THREE.TorusGeometry(0.1, 0.012, 6, 24).rotateX(Math.PI / 2).translate(p[0], p[1] - 0.12, p[2]),
         );
         brassParts.push(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 6).translate(p[0], p[1] - 0.4, p[2]));
       }
+    }
+
+    // S-41: the gates between the rooms (S-34's gate): posts with their hinges' knuckles, an arch, a cup for the keystone
+    for (const g of AREA1_GATES) {
+      const off = gatePostOffset(g);
+      const [x, y, z] = g.at;
+      for (const side of [-1, 1]) {
+        brassParts.push(
+          new THREE.CylinderGeometry(0.07, 0.082, g.height, 12).translate(
+            x + side * off,
+            y + g.height / 2,
+            z,
+          ),
+        );
+        for (const k of [0.32, 1.6])
+          brassParts.push(
+            new THREE.CylinderGeometry(0.034, 0.034, 0.13, 10).translate(
+              x + side * (off - 0.09),
+              y + AREA1_GATE_LEAF.foot + k,
+              z,
+            ),
+          );
+      }
+      const arch = new THREE.TorusGeometry(off, 0.055, 10, 64, Math.PI);
+      arch.scale(1, 0.45, 1);
+      arch.translate(x, y + g.height, z);
+      brassParts.push(arch);
+      const key = gateKeystone(g);
+      brassParts.push(
+        new THREE.LatheGeometry(
+          [
+            [0.0, 0],
+            [0.04, 0],
+            [0.06, 0.035],
+            [0.09, 0.08],
+            [0.085, 0.085],
+          ].map(([u = 0, v = 0]) => new THREE.Vector2(u, v)),
+          24,
+        ).translate(key[0], key[1] - 0.21, key[2]),
+      );
     }
   }
   put(new THREE.Mesh(merged(brassParts), brass), 'area1-brass');
@@ -839,6 +943,51 @@ export function* buildArea1(
       );
     put(new THREE.Mesh(merged(parts), brass), 'area1-shortcut-gate', 'surface');
   }
+  yield;
+
+  // ---- S-41: the gates' leaves (S-34's): brass frames with bars, a rail and a ring; each turns about its hinge (setGates) ----
+  const leafPivots = new Map<string, THREE.Object3D[]>();
+  for (const g of AREA1_GATES) {
+    const length = g.halfWidth - 0.18;
+    const pivots: THREE.Object3D[] = [];
+    for (const side of [-1, 1] as const) {
+      // in the pivot's frame: the hinge at the origin, the leaf running along +x (the pivot turns it: setGates)
+      const parts: THREE.BufferGeometry[] = [];
+      const h = AREA1_GATE_LEAF.height;
+      const bar = (u: number, r: number): void => {
+        parts.push(new THREE.CylinderGeometry(r, r, h, 8).translate(u, h / 2, 0));
+      };
+      bar(0.03, 0.024);
+      bar(length - 0.016, 0.022);
+      for (let i = 1; i < 6; i++) bar((length * i) / 6, 0.014);
+      for (const [y, r] of [
+        [0.08, 0.02],
+        [1.05, 0.022],
+        [h - 0.02, 0.022],
+      ] as const)
+        parts.push(
+          new THREE.CylinderGeometry(r, r, length, 8).rotateZ(Math.PI / 2).translate(length / 2, y, 0),
+        );
+      // 円: a ring between the rail and the top (the two meet as a pair when shut)
+      parts.push(new THREE.TorusGeometry(0.15, 0.013, 8, 40).translate(length * 0.5, 1.7, 0));
+      const leaf = new THREE.Mesh(merged(parts), brass);
+      const pivot = new THREE.Group();
+      pivot.position.set(g.at[0] + side * (g.halfWidth - 0.18), g.at[1] + AREA1_GATE_LEAF.foot, g.at[2]);
+      pivot.add(leaf);
+      put(pivot, `area1-gate-leaf:${g.id}:${side < 0 ? 'west' : 'east'}`);
+      pivots.push(pivot);
+    }
+    leafPivots.set(g.id, pivots);
+  }
+  const turnLeaves = (id: string, angle: number): void => {
+    const g = AREA1_GATES.find((q) => q.id === id);
+    const [west, east] = leafPivots.get(id) ?? [];
+    if (!g || !west || !east) return;
+    // shut, the west leaf runs east (+x) and the east one west; each swings toward `swing` along z (layout.ts gateLeaves)
+    west.rotation.y = -g.swing * angle;
+    east.rotation.y = Math.PI + g.swing * angle;
+  };
+  for (const g of AREA1_GATES) turnLeaves(g.id, 0);
   yield;
 
   // ---- the light drops (裏の層): the prologue's shape and glass, a bright core and a halo of warm light each; in the morning's
@@ -997,6 +1146,19 @@ export function* buildArea1(
       SUMMIT_Y + 2.4,
       SHORTCUT_GATE.box.max[2] + 0.3,
     );
+    // S-41: each gate, its leaves swung either way, its arch and keystone
+    for (const g of AREA1_GATES) {
+      const [x, y, z] = g.at;
+      const top = gateKeystone(g)[1] + 0.2;
+      box(x - g.halfWidth - 0.1, y - 0.3, z - g.halfWidth, x + g.halfWidth + 0.1, top, z + g.halfWidth);
+    }
+    // S-41: 部屋3's shade
+    for (const w of ROOM3_SHADE) box(w.minX, SUMMIT_Y - 0.3, w.minZ, w.maxX, w.top, w.maxZ);
+    {
+      const { at, radius, top } = ROOM3_STACK;
+      const r = radius * 1.1;
+      box(at[0] - r, at[1] - 0.3, at[2] - r, at[0] + r, top, at[2] + r);
+    }
     for (const h of AREA1_HOUSES)
       box(
         h.minX,
@@ -1032,7 +1194,10 @@ export function* buildArea1(
       nextLit.room1.value = Math.max(0, Math.min(NEXT_LAMPS_BY_ROOM.room1.length, room1));
       nextLit.room2.value = Math.max(0, Math.min(NEXT_LAMPS_BY_ROOM.room2.length, room2));
     },
-    animate(t, stage, shortcut = 0) {
+    setGates(angles) {
+      for (const g of AREA1_GATES) turnLeaves(g.id, angles[g.id] ?? 0);
+    },
+    animate(t, stage, shortcut = 0, gates) {
       const last = MOTE_PATHS.length - 1;
       const st = Math.max(0, Math.min(last, stage));
       const from = Math.floor(st);
@@ -1056,7 +1221,10 @@ export function* buildArea1(
           // a slow glimmer drifting up at a dead end (行き止まりの理由: 裏の層の気配); the shortcut's go once its light has passed
           const spot = AREA1_GLIMMERS[s.spot] ?? AREA1_GLIMMERS[0];
           if (!spot) continue;
-          const gone = s.spot === 0 ? 1 : 1 - Math.min(1, Math.max(0, shortcut));
+          // (S-41: what takes each away — the shortcut's light, its gate opening — or nothing)
+          const until = spot.until;
+          const passed = until === undefined ? 0 : until === shortcutId ? shortcut : (gates?.[until] ?? 0);
+          const gone = 1 - Math.min(1, Math.max(0, passed));
           pos.set(
             spot.at[0] + s.side * 0.5 * spot.spread + 0.2 * Math.sin(t * 0.5 + s.wobble),
             spot.at[1] + u * spot.rise + 0.1 * Math.sin(t * 0.9 + s.wobble),

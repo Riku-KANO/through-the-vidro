@@ -6,7 +6,7 @@ import { LayerField } from '../../layers/field';
 import { EYE_HEIGHT, FOV_DEFAULT } from '../player/constants';
 import { SLOPE, slopeHeight } from '../prologue/layout';
 import { type Area1Art, buildArea1, hazeOf } from './art';
-import { SHORTCUT_LEGS } from './layout';
+import { AREA1_GATES, area1GateAngle, gateLeaves, SHORTCUT_LEGS } from './layout';
 
 /**
  * S-36: エリア1 as drawn (area1/art.ts buildArea1), and the boxes the room tests against the view before it adds エリア1 to the
@@ -170,6 +170,39 @@ describe('S-36: エリア1 as drawn, and the boxes the room adds it by', () => {
     });
     expect(mixed).toBeGreaterThan(10);
     expect(art.appear.value).toBe(1);
+    art.dispose();
+  });
+});
+
+describe('S-41: the gates between the rooms as drawn', () => {
+  it('their leaves turn as their colliders do (layout gateLeaves): shut across the way, open along its sides', () => {
+    const art = build();
+    const end = new THREE.Vector3();
+    for (const angle of [0, 0.7, area1GateAngle(1)]) {
+      art.setGates(Object.fromEntries(AREA1_GATES.map((g) => [g.id, angle])));
+      art.root.updateMatrixWorld(true);
+      for (const g of AREA1_GATES) {
+        const leaves = gateLeaves(g, angle);
+        ['west', 'east'].forEach((side, i) => {
+          const leaf = leaves[i] as (typeof leaves)[0];
+          const pivot = art.root.getObjectByName(`area1-gate-leaf:${g.id}:${side}`);
+          expect(pivot, `${g.id} ${side}`).toBeDefined();
+          // its hinge, and its far end (the pivot's local +x, the leaf's length along)
+          end.set(0, 0, 0).applyMatrix4(pivot?.matrixWorld ?? new THREE.Matrix4());
+          expect(end.x).toBeCloseTo(leaf.hinge[0], 6);
+          expect(end.z).toBeCloseTo(leaf.hinge[1], 6);
+          end.set(leaf.length, 0, 0).applyMatrix4(pivot?.matrixWorld ?? new THREE.Matrix4());
+          expect(end.x, `${g.id} ${side} at ${angle}`).toBeCloseTo(
+            leaf.hinge[0] + leaf.dir[0] * leaf.length,
+            6,
+          );
+          expect(end.z, `${g.id} ${side} at ${angle}`).toBeCloseTo(
+            leaf.hinge[1] + leaf.dir[1] * leaf.length,
+            6,
+          );
+        });
+      }
+    }
     art.dispose();
   });
 });
