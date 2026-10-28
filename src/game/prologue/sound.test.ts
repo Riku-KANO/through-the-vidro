@@ -7,6 +7,7 @@ import { isInScale } from '../../core/audio/scale';
 import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
 import {
+  AREA1_GATES,
   AREA1_PLAZA,
   AREA1_SLOPE,
   AREA1_STREET,
@@ -36,7 +37,7 @@ import {
   WORKSHOP,
   WORKSHOP_FLOOR_RADIUS,
 } from './layout';
-import type { FinaleEvent, HintEvent, ShortcutEvent } from './session';
+import type { AreaGateEvent, FinaleEvent, HintEvent, ShortcutEvent } from './session';
 import {
   AREA1_AMBIENCE,
   answer,
@@ -393,6 +394,7 @@ function fakeRoom(): SoundRoom & {
   finale: EventBus<FinaleEvent>;
   hints: EventBus<HintEvent>;
   shortcut: EventBus<ShortcutEvent>;
+  gates: EventBus<AreaGateEvent>;
   probe: FakeRoomProbe;
 } {
   const camera = new THREE.PerspectiveCamera();
@@ -403,6 +405,7 @@ function fakeRoom(): SoundRoom & {
     finale: new EventBus<FinaleEvent>(),
     hints: new EventBus<HintEvent>(),
     shortcut: new EventBus<ShortcutEvent>(),
+    gates: new EventBus<AreaGateEvent>(),
     camera,
     probe: {
       orb: 'hand',
@@ -1418,6 +1421,54 @@ describe('S-40: エリア1’s shortcut settling (近道が定着する音: the 
   });
 });
 
+describe('S-41: エリア1’s gates between its rooms (開く門の音: the prologue gate’s, from each gate)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const withGate = (): SoundBanks => ({
+    ...fakeBanks(),
+    finale: { settle: fakeBuffer('settle', 3.4), gate: fakeBuffer('gate', 3.6) },
+  });
+
+  it('each gate starting to open sounds once, the prologue gate’s sound, from that gate; nothing as it comes to rest', async () => {
+    const r = soundscapeRig(false, withGate);
+    await r.begin();
+    r.frame();
+    for (const g of AREA1_GATES) {
+      const before = r.engine.started.length;
+      r.room.gates.emit({ type: 'open', area: 'area1', gate: g.id });
+      expect(r.engine.started.length).toBe(before + 1);
+      expect(tagOf(r.engine.ctx.sources.at(-1))).toBe('gate');
+      const emitter = r.engine.voiceEmitters.at(-1);
+      expect(emitter?.bus).toBe('sfx');
+      expect(emitter?.position.x).toBeCloseTo(g.at[0], 6);
+      expect(emitter?.position.z).toBeCloseTo(g.at[2], 6);
+      expect(emitter?.position.y).toBeGreaterThan(g.at[1]);
+      r.room.gates.emit({ type: 'opened', area: 'area1', gate: g.id });
+      expect(r.engine.started.length).toBe(before + 1);
+    }
+    const s = r.sound.probe.gates;
+    expect(s.ready).toBe(true);
+    expect(s.played.map((p) => p.gate)).toEqual(AREA1_GATES.map((g) => g.id));
+    expect(s.refused).toEqual([]);
+    expect(s.voicesStarted).toBe(AREA1_GATES.length);
+    // counted apart from the cues (S-16's table): the room's events are as they were
+    expect(r.sound.probe.playedCount).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('before the audio (or its sound) is there, it is refused and never played later', async () => {
+    const r = soundscapeRig(false, withGate);
+    const id = AREA1_GATES[0]?.id ?? '';
+    r.room.gates.emit({ type: 'open', area: 'area1', gate: id });
+    expect(r.sound.probe.gates.refused).toEqual([id]);
+    await r.begin();
+    for (let i = 0; i < 30; i++) r.frame();
+    expect(r.sound.probe.gates.played).toEqual([]);
+    r.sound.dispose();
+  });
+});
+
 /* ---------- S-42: the sounds of the room's time follow its speed (the pause) ---------- */
 
 describe('the sounds of the room’s time stand with it under the pause, and go on with it (S-42, 判断待ち 2 の a)', () => {
@@ -1549,13 +1600,15 @@ describe('the sounds of the room’s time stand with it under the pause, and go 
     await r.begin();
     r.frame();
     const before = r.engine.ctx.sources.length;
-    // every event of the room's buses that sounds (the close, the hints, the shortcut; add a new bus's here)
+    // every event of the room's buses that sounds (the close, the hints, the shortcut, S-41's gates; add a new bus's here)
     playAll(r);
     r.room.finale.emit({ type: 'settled' });
     r.room.finale.emit({ type: 'gateOpened' });
     r.room.shortcut.emit({ type: 'settled', area: 'area1' });
+    for (const g of AREA1_GATES) r.room.gates.emit({ type: 'open', area: 'area1', gate: g.id });
     const long = r.engine.ctx.sources.slice(before).filter((s) => (s.buffer?.duration ?? 0) > 1 && !s.loop);
-    expect(long.map(tagOf).sort()).toEqual([...TAGS].sort());
+    // (エリア1's gates ring the prologue gate's sound)
+    expect(long.map(tagOf).sort()).toEqual([...TAGS, ...AREA1_GATES.map(() => 'gate')].sort());
     expect(r.sound.probe.time.voices).toBe(long.length);
     r.sound.dispose();
   });

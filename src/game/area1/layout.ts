@@ -1,6 +1,7 @@
 import type { Box, FootingSegment, Vec3 } from '../../layers/footing';
 import { splitFooting } from '../../layers/footing';
 import type { SettleSweep } from '../../layers/settle';
+import { glassEase } from '../../layers/tween';
 import type { AreaDecl, PedestalDecl, RoomDecl, ShortcutDecl, SurfaceDecl } from '../area';
 import { COMPASS } from '../area/compass';
 
@@ -321,18 +322,47 @@ export const ROOM3_PEDESTAL_S: PedestalDecl = {
   base: [eastX(113.75), SUMMIT_Y, -165.9],
   orb: [eastX(113.75), SUMMIT_Y + 1.05, -165.9],
 };
-/** 光の雫: on the north roof, just across its bridge. */
+/**
+ * S-41 (発案者 2026-10-27: 部屋3の雫は屋根の陰に置き、谷の端から覗いたときだけ見通せる; どちらの台座に置いた後も雫は見えない): 屋根の立ち上がり —
+ * two walls standing up off the north roof's east edge (the roof house's walls carried on above its flat top), south of where
+ * the north bridge lands, a gap between them. The drop hovers in the lee of the northern one, on the roof behind it: from the
+ * terrace the walls hide it — from its pedestals, from where the slope arrives — but for one steep slant through the gap, which
+ * comes down on the terrace at its south-west corner, by the valley's edge where the south bridge leaves (端). Each a rect on
+ * the ground and its top.
+ */
+export const ROOM3_SHADE: readonly (Rect & { top: number })[] = [
+  { ...rectAt(110.7, 111.2, -161.95, -160.15), top: SUMMIT_Y + 2.4 },
+  { ...rectAt(110.7, 111.2, -164.0, -163.6), top: SUMMIT_Y + 2.4 },
+];
+/**
+ * S-41: 崩れた壁 on the lip (表にだけあるもの, as 部屋1's: 3部屋目は前の2部屋の組み合わせ) — along the terrace's south-west edge, where
+ * the slant through the walls comes down and the south bridge leaves. In the peek image it is not there: from the edge behind
+ * it the drop's light shows across the valley. It stands outside the north pedestal's sphere: with the vidro placed there the
+ * drop is real, but the wall still stands between (置くと先が見えない — 覚えておくしかない). Inside the south pedestal's sphere it
+ * is cut (S-28): placed there, the way onto the south bridge is open.
+ */
+export const ROOM3_RAILING: SurfaceDecl = {
+  id: 'area1-summit-wall',
+  box: boxAt(112.95, 113.3, SUMMIT_Y, SUMMIT_Y + 2.4, -168.4, -165.0),
+};
+/** 光の雫: on the north roof, in the lee of the northern wall (屋根の陰). S-40 had it just across the bridge, in plain sight. */
 export const ROOM3_DROP = {
   id: 'area1-room3',
-  at: [eastX(110.45), SUMMIT_Y + 1.25, -159.4] as Vec3,
+  at: [eastX(110.1), SUMMIT_Y + 1.0, -160.95] as Vec3,
 } as const;
-/** "端": where to peek from — at the terrace's west side between the bridges, both bridges and the drop's roof ahead. */
-export const ROOM3_EDGE: Vec3 = [eastX(115.5), SUMMIT_Y, -163.4];
+/**
+ * "端": where to peek from — on the terrace at its south-west corner, behind the crumbled wall on the lip, where the slant
+ * through the gap between the roof's walls comes down (S-41; S-40's stood between the bridges, both bridges and the drop's
+ * roof ahead).
+ */
+const ROOM3_EDGE_E = 113.85;
+export const ROOM3_EDGE: Vec3 = [eastX(ROOM3_EDGE_E), SUMMIT_Y, -167.55];
 /** 部屋3 as the game's session plays it. */
 export const ROOM3: RoomDecl = {
   id: 'area1-room3',
   pedestals: [ROOM3_PEDESTAL_N, ROOM3_PEDESTAL_S],
   drop: ROOM3_DROP,
+  surface: [ROOM3_RAILING],
   footing: [
     { id: 'area1-bridge-n', segments: splitFooting('area1-bridge-n', ROOM3_BRIDGE_N, 0.4) },
     { id: 'area1-bridge-s', segments: splitFooting('area1-bridge-s', ROOM3_BRIDGE_S, 0.4) },
@@ -417,8 +447,107 @@ export const AREA1_SHORTCUT: ShortcutDecl = {
   surface: [SHORTCUT_GATE],
 };
 
-/** エリア1: its three rooms and the shortcut (S-36 the first room; S-40 the rest). */
-export const AREA1: AreaDecl = { id: 'area1', rooms: [ROOM1, ROOM2, ROOM3], shortcut: AREA1_SHORTCUT };
+/*
+ * S-41 部屋は順に開く (発案者 2026-10-27: 前の部屋の雫で次の部屋への道が開く; 開く見せ方は序章の門と同じ形のルール — 真鍮とガラス、雫の光が
+ * 届いてから開く): a gate across the slope's foot, where it turns off the street, shuts the way to 部屋2 until 部屋1's drop is taken;
+ * a gate across the second flight's foot, just past the courtyard's opening, shuts the way to 部屋3 until 部屋2's is. Brass posts
+ * and an arch, two barred leaves, a milky keystone lamp at its top (S-34's gate). The drop's light comes along the lamps toward
+ * the next room, one after the other; the keystone is one of them, and as it lights, the leaves swing open toward the side you
+ * come from (the level side: the slope rises behind them). Before, through the bars the next place is in sight, and the back
+ * layer glimmers there (行き止まりの理由, ルール9).
+ */
+export interface Area1Gate {
+  readonly id: string;
+  /** The room whose drop opens it. */
+  readonly after: string;
+  /** The middle of its sill on the floor. */
+  readonly at: Vec3;
+  /** Half its width (from the middle to a post's middle), its posts' height. */
+  readonly halfWidth: number;
+  readonly height: number;
+  /** Which way along z its leaves swing open (+1 north, −1 south): toward where you come from. */
+  readonly swing: 1 | -1;
+  /** Its keystone lamp: the index among its room's lamps toward the next room (NEXT_LAMPS_BY_ROOM). */
+  readonly keystone: number;
+}
+/** 仮 (S-41): a post's radius, a leaf's height and how far its foot stands off the floor at its hinge. */
+export const AREA1_GATE_POST = 0.09;
+export const AREA1_GATE_LEAF = { height: 2.4, foot: 0.06, thickness: 0.08 } as const;
+/** 仮 (S-41): degrees the leaves swing (a quarter turn: they lie along the way's sides, clear of the houses). */
+export const AREA1_GATE_OPEN_DEG = 90;
+/** 仮 (S-41; S-36's provisional gate: 3.2 m): the posts' height, up to where the arch springs. */
+const GATE_HEIGHT = 2.9;
+const gateAt = (z: number): Vec3 => [AREA1_SLOPE.x, area1SlopeHeight(z), z];
+export const AREA1_GATES: readonly Area1Gate[] = [
+  {
+    id: 'area1-gate-court',
+    after: ROOM1.id,
+    // just in past where the slope leaves the street (its corners' rounding)
+    at: gateAt(STREET_SOUTH_Z - 0.3),
+    halfWidth: AREA1_SLOPE.halfWidth,
+    height: GATE_HEIGHT,
+    swing: COMPASS.north[1] as 1,
+    keystone: 2,
+  },
+  {
+    id: 'area1-gate-summit',
+    after: ROOM2.id,
+    // just past the courtyard's opening, so the courtyard is no way round it
+    at: gateAt(ROOM2_COURT.minZ - 0.2),
+    halfWidth: AREA1_SLOPE.halfWidth,
+    height: GATE_HEIGHT,
+    swing: COMPASS.north[1] as 1,
+    keystone: 2,
+  },
+];
+/**
+ * S-41: 0..1 (the session's areaGateProgress, linear in time) → the leaves' swing in radians, on the game's one curve (遷移の
+ * ルール5), as the prologue's gate swings (finale.ts gateAngle).
+ */
+export function area1GateAngle(progress: number): number {
+  return ((AREA1_GATE_OPEN_DEG * Math.PI) / 180) * glassEase(Math.min(1, Math.max(0, progress)));
+}
+/** S-41: x of a gate's posts' middles from its middle (each stands against the house at the way's side). */
+export const gatePostOffset = (g: Area1Gate): number => g.halfWidth - AREA1_GATE_POST;
+/**
+ * S-41: a gate's two leaves `angle` radians open: each hinged at the inside of its post, running (shut) toward the middle,
+ * swung toward `swing`. Its hinge (x, z), the unit way it runs from there (x, z) and its length.
+ */
+export function gateLeaves(
+  g: Area1Gate,
+  angle: number,
+): { hinge: [number, number]; dir: [number, number]; length: number }[] {
+  const hinge = g.halfWidth - 2 * AREA1_GATE_POST;
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return [-1, 1].map((side) => ({
+    hinge: [g.at[0] + side * hinge, g.at[2]] as [number, number],
+    dir: [-side * c, g.swing * s] as [number, number],
+    length: hinge,
+  }));
+}
+/** The gate's keystone: on top of its arch (the arch rises a quarter of its width over the posts). */
+export function gateKeystone(g: Area1Gate): Vec3 {
+  return [g.at[0], g.at[1] + g.height + g.halfWidth * 0.45 + 0.17, g.at[2]];
+}
+
+/** 仮: seconds after the drop is taken that the first of the lamps toward the next room lights, and between one and the next. */
+export const NEXT_LIGHTS = { first: 0.6, each: 0.45 } as const;
+/**
+ * S-41: seconds after a room's drop is taken that its lamp `index` (toward the next room) has lit: the drop's light has come to
+ * it (a gate whose keystone it is opens then).
+ */
+export function keystoneLightsAt(index: number): number {
+  return NEXT_LIGHTS.first + index * NEXT_LIGHTS.each;
+}
+
+/** エリア1: its three rooms and the shortcut (S-36 the first room; S-40 the rest), (S-41) opened one after the other. */
+export const AREA1: AreaDecl = {
+  id: 'area1',
+  rooms: [ROOM1, ROOM2, ROOM3],
+  shortcut: AREA1_SHORTCUT,
+  gates: AREA1_GATES.map((g) => ({ id: g.id, after: g.after, opensAt: keystoneLightsAt(g.keystone) })),
+};
 
 /**
  * 工房街の煙突 (空間の可読性と導線 5: 各エリアにも固有の目印): on エリア1's summit, east of where the slope arrives. Where S-35 / S-39 put
@@ -522,7 +651,8 @@ export const AREA1_HOUSES: readonly House[] = [
 
 /**
  * The lamps that light, one after the other, toward the next room once a room's drop is taken (次の部屋の方向が見える): from 部屋1
- * (the alley) up the first flight to 部屋2's courtyard (`room1`), from 部屋2 up the second flight to the summit (`room2`).
+ * (the alley) up the first flight to 部屋2's courtyard (`room1`), from 部屋2 up the second flight to the summit (`room2`). S-41:
+ * the gate on the way is among them (its keystone: Area1Gate.keystone); as the drop's light comes to it, the gate opens.
  */
 export const NEXT_LAMPS_BY_ROOM: Readonly<Record<'room1' | 'room2', readonly Vec3[]>> = {
   room1: [
@@ -530,14 +660,19 @@ export const NEXT_LAMPS_BY_ROOM: Readonly<Record<'room1' | 'room2', readonly Vec
     [eastX(115.3 + 0.45), AREA1_Y + 2.3, STREET_NORTH_Z - 0.3],
     // on the corner where the slope turns off the street, over the street
     [eastX(SLOPE_W - 0.45), AREA1_Y + 2.3, STREET_SOUTH_Z + 0.3],
+    // S-41: the keystone of the gate across the slope's foot
+    gateKeystone(AREA1_GATES[0] as Area1Gate),
     // up the first flight, on the house along its east side
     [eastX(SLOPE_E - 0.3), area1SlopeHeight(-134) + 2.3, -134],
     // the courtyard's corner on the landing: on the balcony's side, hung out over the landing (seen up the first flight)
     [eastX(SLOPE_E - 0.3), COURT_Y + 2.6, ROOM2_BALCONY.minZ + 0.6],
   ],
   room2: [
-    // the second flight's foot, on the courtyard's south house
-    [eastX(SLOPE_E - 0.3), COURT_Y + 2.3, ROOM2_COURT.minZ - 0.4],
+    // S-41: over the courtyard from its south houses, from the balcony's drop toward the landing
+    [eastX(127.6), COURT_Y + 2.4, ROOM2_COURT.minZ + 0.3],
+    [eastX(123.4), COURT_Y + 2.4, ROOM2_COURT.minZ + 0.3],
+    // the keystone of the gate across the second flight's foot
+    gateKeystone(AREA1_GATES[1] as Area1Gate),
     // up the second flight, on its west house
     [eastX(SLOPE_W + 0.3), area1SlopeHeight(-152) + 2.3, -152],
     // the summit, on the house at the terrace's north edge (over the terrace)
@@ -546,8 +681,6 @@ export const NEXT_LAMPS_BY_ROOM: Readonly<Record<'room1' | 'room2', readonly Vec
 };
 /** S-36's name: 部屋1's lamps (toward 部屋2 since S-40). */
 export const NEXT_LAMPS: readonly Vec3[] = NEXT_LAMPS_BY_ROOM.room1;
-/** 仮: seconds after the drop is taken that the first of them lights, and between one and the next. */
-export const NEXT_LIGHTS = { first: 0.6, each: 0.45 } as const;
 
 /** A way through (x, z) points (S-40: as many as its turns need; S-36's first had three, a quadratic's). */
 export type MotePath = readonly (readonly [number, number])[];
@@ -578,7 +711,8 @@ export const MOTE_PATHS: readonly MotePath[] = [
     [eastX(124.0), -143.4],
     [AREA1_SLOPE.x, -146.2],
     [AREA1_SLOPE.x, -157.0],
-    [eastX(116.5), -163.4],
+    // S-41: to the valley's edge, where the slant through the roof's walls falls (端)
+    [eastX(ROOM3_EDGE_E + 0.7), ROOM3_EDGE[2] + 0.4],
   ],
   [
     [eastX(115.5), -159.4],
@@ -618,12 +752,24 @@ export function motePathAt(path: MotePath, u: number, out: [number, number] = [0
 /**
  * 光の揺らぎ (ルール9: 行き止まりには必ず理由を置く — 裏の層の気配): where the back layer glimmers in the air before it is there to
  * walk on: over 部屋3's south roof (the bridge that leads nowhere else), at the shortcut's top over the ridge's edge, and at its
- * foot behind the plaza's gate, drifting up the stairs' line (until the light fixes them). Each a spot and how far it drifts.
+ * foot behind the plaza's gate, drifting up the stairs' line (until the light fixes them); (S-41) behind each gate between the
+ * rooms, up the flight beyond its bars (until it opens). Each a spot, how far it drifts, and what takes it away (the shortcut's
+ * light, a gate opening; none: it stays).
  */
-export const AREA1_GLIMMERS: readonly { at: Vec3; spread: number; rise: number }[] = [
+export const AREA1_GLIMMERS: readonly { at: Vec3; spread: number; rise: number; until?: string }[] = [
   { at: [eastX(108.8), SUMMIT_Y + 0.9, -168.0], spread: 1.4, rise: 1.2 },
-  { at: [eastX(96), SUMMIT_Y - 0.4, ROOM3_ROOF_N.maxZ + 1.4], spread: 1.0, rise: 1.6 },
-  { at: [eastX(96), AREA1_Y + 1.0, -138.6], spread: 1.0, rise: 2.4 },
+  {
+    at: [eastX(96), SUMMIT_Y - 0.4, ROOM3_ROOF_N.maxZ + 1.4],
+    spread: 1.0,
+    rise: 1.6,
+    until: AREA1_SHORTCUT.id,
+  },
+  { at: [eastX(96), AREA1_Y + 1.0, -138.6], spread: 1.0, rise: 2.4, until: AREA1_SHORTCUT.id },
+  ...AREA1_GATES.map((g) => {
+    // a couple of metres past its bars, up the flight
+    const z = g.at[2] - 2.6 * g.swing;
+    return { at: [g.at[0], area1SlopeHeight(z) + 0.9, z] as Vec3, spread: 1.2, rise: 1.8, until: g.id };
+  }),
 ];
 
 /** 床の材質 (S-22): every floor of エリア1 is 石畳, the back layer's stairs and bridges 曇りガラス (as the prologue's). Boxes or a disc. */
@@ -773,8 +919,18 @@ export const AREA1_SPAWNS = {
     [AREA1_SLOPE.x, SUMMIT_Y, AREA1_SLOPE.toZ - 1.2],
     [eastX(108), SUMMIT_Y + 0.6, -163.4],
   ),
-  /** 部屋3's edge (端), between the bridges, looking across the valley (覗いてから置く). */
-  'area1-edge': viewAt(ROOM3_EDGE, [eastX(109.5), SUMMIT_Y + 0.4, -163.4]),
+  /** 部屋3's edge (端), between the bridges, looking across the valley at the gap in the roof's walls (覗いてから置く). */
+  'area1-edge': viewAt(ROOM3_EDGE, ROOM3_DROP.at),
+  /** S-41: in the street before the gate across the slope's foot, looking up the first flight through it to the courtyard. */
+  'area1-gate-court': viewAt(
+    [eastX(121 - 0.3), AREA1_Y, STREET_SOUTH_Z + 2.4],
+    [eastX(SLOPE_E - 0.3), COURT_Y + 1.8, ROOM2_BALCONY.minZ + 0.6],
+  ),
+  /** S-41: on the landing before the gate across the second flight's foot, looking up it to the summit. */
+  'area1-gate-summit': viewAt(
+    [eastX(121 + 0.3), COURT_Y, AREA1_SLOPE.landingFromZ - 0.8],
+    [eastX(SLOPE_W - 0.8), SUMMIT_Y + 1.6, AREA1_SLOPE.toZ - 0.3],
+  ),
   /** The shortcut's top on the north roof, looking down the stairs to the entrance plaza. */
   'area1-shortcut': viewAt([eastX(96), SUMMIT_Y, ROOM3_ROOF_N.maxZ - 0.8], [eastX(96), AREA1_Y + 1, -128]),
   /** The shortcut's foot in the entrance plaza, looking up the stairs to the summit. */

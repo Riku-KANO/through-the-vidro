@@ -75,6 +75,8 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （`tests/e2e/S-30-furnace-colour.spec.ts`）。
 - **部屋の出来事の記録（`room.events` → `probe.events`）に新しい種類を足さない（S-34）。** S-16・S-18 の e2e は記録の名前をすべて音の表と照合し、
   知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`、ヒントの `room.hints`。S-39）。
+- **毎フレーム自分の見え方を決める物を名前で隠して比べるときは、子を隠す（S-41）。** 部屋は雫などの `visible` を毎フレーム決め直すので、
+  e2e が物そのものを隠しても次のフレームで戻る（`tests/e2e/S-41-*` の `hookScene`）。
 - **台本（autoplay）を伸ばしたら、まず `prologue/autopilot.test.ts` で Rapier とセッションに通す（S-40）。** 手の届かない所で押すと、
   ブラウザの通しは待ちの上限（10 分）まで止まる。単体なら数秒で分かる。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
@@ -245,6 +247,16 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   パイプラインを作り終える。透過のガラスは `compileAsync` に入れない（画面と違う大きさの描画先）。three r186 の InstancedMesh は描画
   コンテキストごとに別のシェーダになって裏のコンパイルで温まらない（WebGL2 で初めて描くフレームが 100 ms 超）ので、後から足す物には使わず、
   1つの Mesh にまとめるか頂点を書く。読み込みで描く物に InstancedMesh を足すと、読み込みのフレームが延びる（WebGL2 で 0.5 秒）。
+- **エリアの部屋は順に開く（S-41、発案者の判断 2026-10-27）。** エリアの宣言の `gates`（`AreaGateDecl`: 開ける部屋 `after`、光が届くまでの秒
+  `opensAt`）。順の判定は純粋関数 `nextRoom`・`roomOpen`・`gateInto`（`src/game/area/order.ts`）だけで行い、セッションの門（`gateEvents`、
+  `areaGateProgress`）も部屋の灯りと光の粒もそれに従う。門の出来事は room.events に足さない（別のバス、部屋の `gates`、音は `probe.sound.gates`）。
+  門の要石は次の部屋への灯りの1つ（`keystoneLightsAt`）。`checkAreas` が順の抜け（行き先のない門、光の時間 0）を知らせる。
+- **覗く像の遠端（S-41）。** `PeekPipeline` の `peekFar`: 覗いている間、遠端より先に丸ごとある物を覗く像だけに描かない（平面で切らない、
+  裏の層だけの物は描く、温めは全部描く）。部屋は立っている所の霞の遠端を渡す。遠い物を間引く判定を足すときは裏の層を外さない
+  （`probe.peekFar.leftOutBack` が 0）。
+- **見えないことを確かめる単体は、見える側（覗く像: 共通）と置いた後（共通＋球の外の表だけ）を分けて数える（S-41）。** 表だけの物は
+  覗く像に描かれず、置いた球の中では消える。物陰の試験はそれぞれの見え方の組で、格子の点から雫の中心と縁への視線を数える
+  （`area1/layout.test.ts` の部屋3）。
 - **後から足すエリアを視界の中で足すときは霞から出す（S-40、発案者の判断 2026-10-26）。** エリアの材質に、場面の霧の色（`area1/art.ts`
   `hazeOf`）へ `1 − appear` で混ぜる `outputNode` を最初から付けて裏でコンパイルし（足し算の光は appear を掛ける）、足すときは部品を1つずつ
   表示しながら appear を 0 → 1（3.5 秒）。当たり判定も数フレームに分けて作る。three の霧の作り（`fog()` の第1引数）が変わると `hazeOf` が

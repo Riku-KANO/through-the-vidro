@@ -645,9 +645,10 @@ for (const backend of backends) {
       ['road', 'area1-road', ''],
       ['plaza-chimney', 'area1-plaza', ''],
       ['alley', 'area1-alley', ''],
-      // S-40: the slope's foot, looking up the first flight (S-36's shut gate is gone: the slope goes on to the summit)
+      // S-40: the slope's foot, looking up the first flight (S-41: a step in past the gate across its foot, shut until 部屋1's
+      // drop is taken: tests/e2e/S-41-*)
       ['slope', 'area1-slope', ''],
-      // 部屋1's drop taken (a dev hold): the lamps toward the next room lit up the slope to the shut gate
+      // 部屋1's drop taken (a dev hold): the lamps toward the next room lit up the slope to the courtyard's corner
       ['slope-next', 'area1-slope', '&area1Drop=taken'],
     ] as const) {
       await page.goto(`/?scene=prologue-proto&spawn=${spawn}${extra}${webgl}`);

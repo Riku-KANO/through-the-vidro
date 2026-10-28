@@ -2,8 +2,8 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../layers/footing';
 import { footingOf, surfaceOf } from '../area';
-import { AREA1, AREA1_PLAZA, AREA1_Y, area1Ground } from '../area1/layout';
-import { addArea1Colliders, area1Footing } from '../area1/physics';
+import { AREA1, AREA1_GATES, AREA1_PLAZA, AREA1_Y, area1GateAngle, area1Ground } from '../area1/layout';
+import { Area1Gates, addArea1Colliders, area1Footing } from '../area1/physics';
 import { createWorld, initPhysics } from '../player/physics';
 import { PlayerController } from '../player/player';
 import { Autopilot } from './autopilot';
@@ -41,6 +41,8 @@ describe('S-40: the autopilot’s エリア1 (rooms 1, 2, 3, the shortcut) in a 
     addArea1Colliders(R, world);
     const a1 = area1Footing(R, world);
     const walls = new SurfaceColliders(R, world, surfaceOf([AREA1]));
+    // S-41: the gates between the rooms, shut until each room's drop opens the next (as the room turns them)
+    const gates = new Area1Gates(R, world);
     expect(footingOf([AREA1]).length).toBe(a1.segments.length);
     const session = new PrologueSession({ orbStart: 'hand', areas: [PROLOGUE_AREA, AREA1] });
     session.holdFinale(60);
@@ -98,6 +100,7 @@ describe('S-40: the autopilot’s エリア1 (rooms 1, 2, 3, the shortcut) in a 
       walls.sync(spheres);
       a1.settle(session.settledFooting());
       walls.settle(session.settledSurface());
+      for (const g of AREA1_GATES) gates.sync(g.id, area1GateAngle(session.areaGateProgress(g.id)));
       world.step();
       p.update(DT, order.intent);
       // never under the ground where it stands (落下死はない)
@@ -110,6 +113,8 @@ describe('S-40: the autopilot’s エリア1 (rooms 1, 2, 3, the shortcut) in a 
     expect(session.areaCounts().area1).toEqual({ drops: 3, taken: 3 });
     expect(session.orbPlace).toBe('hand');
     expect(session.shortcutProgress('area1')).toBe(1);
+    // S-41: through both gates, in the area's order
+    for (const g of AREA1_GATES) expect(session.areaGateProgress(g.id)).toBe(1);
     const [cx, , cz] = AREA1_PLAZA.center;
     expect(Math.hypot(p.feet.x - cx, p.feet.z - cz)).toBeLessThan(AREA1_PLAZA.radius);
     expect(p.feet.y).toBeCloseTo(AREA1_Y, 1);

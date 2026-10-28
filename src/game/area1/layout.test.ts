@@ -20,6 +20,10 @@ import { MORNING, WORKSHOP_LIGHTS } from '../prologue/room-art';
 import {
   AREA1,
   AREA1_CHIMNEY,
+  AREA1_GATE_LEAF,
+  AREA1_GATE_OPEN_DEG,
+  AREA1_GATE_POST,
+  AREA1_GATES,
   AREA1_GLIMMERS,
   AREA1_HOUSES,
   AREA1_PLAZA,
@@ -30,6 +34,7 @@ import {
   AREA1_SPAWNS,
   AREA1_STREET,
   AREA1_Y,
+  type Area1Gate,
   area1Ground,
   area1RimArcs,
   area1SlopeHeight,
@@ -38,11 +43,17 @@ import {
   daylightAt,
   eastOf,
   eastX,
+  gateKeystone,
+  gateLeaves,
+  gatePostOffset,
   type House,
+  keystoneLightsAt,
   MOTE_PATHS,
   motePathAt,
   NEXT_LAMPS,
   NEXT_LAMPS_BY_ROOM,
+  type Rect,
+  ROOM1,
   ROOM1_ALLEY,
   ROOM1_DROP,
   ROOM1_PEDESTAL,
@@ -64,8 +75,10 @@ import {
   ROOM3_EDGE,
   ROOM3_PEDESTAL_N,
   ROOM3_PEDESTAL_S,
+  ROOM3_RAILING,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
+  ROOM3_SHADE,
   ROOM3_TERRACE,
   ROOM3_VALLEY,
   room2StairSegments,
@@ -328,6 +341,53 @@ const hidden = (a: Vec3, b: Vec3): string[] =>
 /** Is (x, z) inside a house that stops the body? */
 const blocks = (x: number, z: number) =>
   AREA1_HOUSES.some((h) => h.collide && x >= h.minX && x <= h.maxX && z >= h.minZ && z <= h.maxZ);
+/**
+ * S-41: what of 部屋3's shade stands between two points — the roof's walls (屋根の立ち上がり, both layers: in the peek image too) and,
+ * where it is drawn (`withWall`: not in the peek image, not inside a placed vidro's sphere), the crumbled wall on the lip (表だけ).
+ */
+function shaded(a: Vec3, b: Vec3, withWall: boolean): string[] {
+  const out: string[] = [];
+  ROOM3_SHADE.forEach((w, i) => {
+    if (segmentHitsBox(a, b, [w.minX, SUMMIT_Y - 0.05, w.minZ], [w.maxX, w.top, w.maxZ]))
+      out.push(`wall ${i}`);
+  });
+  // (only as high as it is whole: its top course is broken, a stone in two missing — area1/art.ts crumbled, 0.6 m courses)
+  const r = ROOM3_RAILING.box;
+  const height = r.max[1] - r.min[1];
+  const course = height / Math.max(3, Math.round(height / 0.6));
+  const whole: Vec3 = [r.max[0], r.max[1] - course, r.max[2]];
+  if (withWall && segmentHitsBox(a, b, r.min, whole)) out.push('the crumbled wall');
+  return out;
+}
+/** S-41: where on the terrace the body may stand (not in the crumbled wall on the lip, nor on a pedestal's foot). */
+const standable = (x: number, z: number): boolean =>
+  x > ROOM3_RAILING.box.max[0] + BODY_RADIUS &&
+  ![ROOM3_PEDESTAL_N, ROOM3_PEDESTAL_S].some(
+    (p) => Math.hypot(x - p.base[0], z - p.base[2]) < 0.27 + BODY_RADIUS,
+  );
+/** S-41: the drop's middle and its glow's sides (its core and shell, the bright part of its halo: art.ts). */
+const dropAround = (r = 0.15): Vec3[] => {
+  const [x, y, z] = ROOM3_DROP.at;
+  return [
+    [x, y, z],
+    [x + r, y, z],
+    [x - r, y, z],
+    [x, y, z + r],
+    [x, y, z - r],
+    [x, y + r, z],
+  ];
+};
+/** S-41: does a body standing here (eye or feet: x, z) overlap the roof's walls? */
+const standsInShade = (p: Vec3): boolean =>
+  ROOM3_SHADE.some(
+    (w) =>
+      p[0] > w.minX - BODY_RADIUS &&
+      p[0] < w.maxX + BODY_RADIUS &&
+      p[2] > w.minZ - BODY_RADIUS &&
+      p[2] < w.maxZ + BODY_RADIUS,
+  );
+/** S-41: how near the edge (端) one may stand and see the drop through the gap (metres). */
+const EDGE_ZONE = 1.5;
 /** The walkable points of a tread or a bridge's deck (the body's centre on it, a body's radius in from its sides). */
 function feetOn(seg: Box, step = 0.2): Vec3[] {
   const out: Vec3[] = [];
@@ -524,8 +584,107 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
     expect(
       x >= ROOM3_ROOF_N.minX && x <= ROOM3_ROOF_N.maxX && z >= ROOM3_ROOF_N.minZ && z <= ROOM3_ROOF_N.maxZ,
     ).toBe(true);
-    const stand: Vec3 = [eastX(eastOf(ROOM3_ROOF_N.maxX) - BODY_RADIUS - 0.1), SUMMIT_Y + EYE_HEIGHT, z];
-    expect(dist(stand, ROOM3_DROP.at)).toBeLessThan(DROP_REACH - 0.3);
+    // S-41: from the roof behind the walls (west of the drop), and from just north of it, where the bridge's landing leads
+    for (const stand of [
+      [eastX(eastOf(x) - 0.7), SUMMIT_Y + EYE_HEIGHT, z],
+      [x, SUMMIT_Y + EYE_HEIGHT, (ROOM3_SHADE[0] as Rect).maxZ + BODY_RADIUS + 0.1],
+    ] as Vec3[]) {
+      expect(dist(stand, ROOM3_DROP.at)).toBeLessThan(DROP_REACH - 0.3);
+      expect(standsInShade(stand), `${stand}`).toBe(false);
+    }
+  });
+
+  it('S-41: the drop hovers in the lee of the roof’s walls (屋根の陰): peeking, from the terrace it is seen from the edge alone', () => {
+    const drop = ROOM3_DROP.at;
+    const edgeEye: Vec3 = [ROOM3_EDGE[0], SUMMIT_Y + EYE_HEIGHT, ROOM3_EDGE[2]];
+    // from the edge its middle is in sight through the gap between the walls (覗けば: the crumbled wall is not in the peek image)
+    expect(standable(ROOM3_EDGE[0], ROOM3_EDGE[2])).toBe(true);
+    expect(hidden(edgeEye, drop)).toEqual([]);
+    expect(shaded(edgeEye, drop, false)).toEqual([]);
+    // from anywhere else on the terrace where one can stand, it is not: the roof's walls stand between
+    const seenFrom: string[] = [];
+    let near = 0;
+    const r = BODY_RADIUS;
+    for (let gx = ROOM3_TERRACE.minX + r; gx <= ROOM3_TERRACE.maxX - r; gx += 0.1)
+      for (let gz = ROOM3_TERRACE.minZ + r; gz <= ROOM3_TERRACE.maxZ - r; gz += 0.1) {
+        if (!standable(gx, gz)) continue;
+        const eye: Vec3 = [gx, SUMMIT_Y + EYE_HEIGHT, gz];
+        if (hidden(eye, drop).length > 0 || shaded(eye, drop, false).length > 0) continue;
+        if (Math.hypot(gx - ROOM3_EDGE[0], gz - ROOM3_EDGE[2]) > EDGE_ZONE)
+          seenFrom.push(`(${gx.toFixed(1)}, ${gz.toFixed(1)})`);
+        else near++;
+      }
+    expect(seenFrom).toEqual([]);
+    // (a spot to stand on round the edge, not a single point: S-41 measured about 0.5 m² for the drop's middle)
+    expect(near * 0.01).toBeGreaterThan(0.3);
+  });
+
+  it('S-41: placed on the north pedestal the drop is real, yet from nowhere on the terrace is it seen — the edge too', () => {
+    // the crumbled wall on the lip lies wholly outside the north sphere (it stands, drawn and solid, while the vidro is there)
+    const n = sphereOf(ROOM3_PEDESTAL_N);
+    const w = ROOM3_RAILING.box;
+    const nearest: Vec3 = [
+      Math.min(Math.max(n.center[0], w.min[0]), w.max[0]),
+      Math.min(Math.max(n.center[1], w.min[1]), w.max[1]),
+      Math.min(Math.max(n.center[2], w.min[2]), w.max[2]),
+    ];
+    expect(dist(nearest, n.center)).toBeGreaterThan(MAIN_ORB_RADIUS + 0.05);
+    expect(cutSurfaceIds(surfaceSegments(ROOM3_RAILING), [n])).toEqual([]);
+    const seenFrom: string[] = [];
+    const r = BODY_RADIUS;
+    for (let gx = ROOM3_TERRACE.minX + r; gx <= ROOM3_TERRACE.maxX - r; gx += 0.1)
+      for (let gz = ROOM3_TERRACE.minZ + r; gz <= ROOM3_TERRACE.maxZ - r; gz += 0.1) {
+        if (!standable(gx, gz)) continue;
+        const eye: Vec3 = [gx, SUMMIT_Y + EYE_HEIGHT, gz];
+        for (const p of dropAround())
+          if (hidden(eye, p).length === 0 && shaded(eye, p, true).length === 0) {
+            seenFrom.push(`(${gx.toFixed(1)}, ${gz.toFixed(1)})`);
+            break;
+          }
+      }
+    expect(seenFrom).toEqual([]);
+    // placed on the south one it is not real at all (outside its sphere), and the crumbled wall is cut there (the way onto the
+    // south bridge: S-28)
+    const s = sphereOf(ROOM3_PEDESTAL_S);
+    expect(dist(ROOM3_DROP.at, s.center)).toBeGreaterThan(MAIN_ORB_RADIUS + 1);
+    const segments = surfaceSegments(ROOM3_RAILING);
+    expect(cutSurfaceIds(segments, [s])).toEqual(segments.map((q) => q.id));
+    expect(boxInsideSphere(w, { ...s, radius: MAIN_ORB_RADIUS - 0.25 })).toBe(true);
+  });
+
+  it('S-41: the walls stand on the north roof’s edge south of where the bridge lands, the drop behind the northern one', () => {
+    const [a, b] = ROOM3_SHADE as [Rect & { top: number }, Rect & { top: number }];
+    for (const wall of [a, b]) {
+      expect(wall.maxX).toBeCloseTo(ROOM3_ROOF_N.maxX, 9);
+      expect(wall.minZ).toBeGreaterThanOrEqual(ROOM3_ROOF_N.minZ);
+      expect(wall.top - SUMMIT_Y).toBeGreaterThan(EYE_HEIGHT + 0.5);
+    }
+    expect(a.maxZ).toBeLessThanOrEqual(ROOM3_BRIDGE_N.min[2]);
+    expect(a.minZ).toBeGreaterThan(b.maxZ);
+    expect(ROOM3_DROP.at[0]).toBeLessThan(a.minX - 0.3);
+    expect(ROOM3_DROP.at[2]).toBeGreaterThan(a.minZ);
+    expect(ROOM3_DROP.at[2]).toBeLessThan(a.maxZ);
+  });
+
+  it('S-41: the crumbled wall runs along the lip at the terrace’s south-west, taller than the body; the edge just behind it', () => {
+    const w = ROOM3_RAILING.box;
+    expect(w.max[0]).toBeGreaterThan(ROOM3_TERRACE.minX);
+    expect(w.min[0]).toBeLessThan(ROOM3_TERRACE.minX + 0.1);
+    expect(w.min[2]).toBeLessThanOrEqual(ROOM3_TERRACE.minZ);
+    expect(w.max[1] - SUMMIT_Y).toBeGreaterThan(EYE_HEIGHT + 0.5);
+    // whole (its stones all there) up past the eye: only its top course is broken (area1/art.ts crumbled)
+    const course = (w.max[1] - w.min[1]) / Math.max(3, Math.round((w.max[1] - w.min[1]) / 0.6));
+    expect(w.max[1] - course - SUMMIT_Y).toBeGreaterThan(EYE_HEIGHT + 0.1);
+    // the south bridge leaves from behind it (cut while the vidro stands on the south pedestal); the north one is clear of it
+    expect(ROOM3_BRIDGE_S.min[2]).toBeGreaterThanOrEqual(w.min[2]);
+    expect(ROOM3_BRIDGE_S.max[2]).toBeLessThanOrEqual(w.max[2]);
+    expect(ROOM3_BRIDGE_N.min[2]).toBeGreaterThan(w.max[2]);
+    // the edge stands just behind it, by the south pedestal, in reach of it — the pedestal whose vidro takes the wall away, not
+    // the drop's side (判断待ち 1: the edge leads toward the wrong pedestal)
+    expect(ROOM3_EDGE[0] - w.max[0]).toBeLessThan(1);
+    expect(dist([ROOM3_EDGE[0], SUMMIT_Y + EYE_HEIGHT, ROOM3_EDGE[2]], ROOM3_PEDESTAL_S.orb)).toBeLessThan(
+      REACH,
+    );
   });
 
   it('the valley is no way across but by the bridges: wider than a step’s reach, nothing at the summit’s height in it', () => {
@@ -549,29 +708,25 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
     }
   });
 
-  it('peeking from the edge (端), both bridges and the drop’s roof are in the picture, nothing in the way', () => {
+  it('peeking from the edge (端) both bridges are in sight, nothing in the way; the edge is by the valley’s lip', () => {
     const eye: Vec3 = [ROOM3_EDGE[0], ROOM3_EDGE[1] + EYE_HEIGHT, ROOM3_EDGE[2]];
+    for (const b of [ROOM3_BRIDGE_N, ROOM3_BRIDGE_S]) {
+      // (each bridge where it spans the valley; the north one's landing on the roof is behind the northern wall's corner)
+      const span: Vec3 = [(ROOM3_VALLEY.minX + ROOM3_VALLEY.maxX) / 2, SUMMIT_Y, (b.min[2] + b.max[2]) / 2];
+      expect(hidden(eye, span)).toEqual([]);
+      // (the crumbled wall on the lip is not in the peek image)
+      expect(shaded(eye, span, false)).toEqual([]);
+    }
+    expect(eastOf(ROOM3_EDGE[0]) - eastOf(ROOM3_VALLEY.maxX)).toBeLessThan(1.5);
+    // S-41: at the terrace's south-west, south of the south pedestal, where the slant through the roof's walls comes down
+    expect(ROOM3_EDGE[2]).toBeLessThan(ROOM3_PEDESTAL_S.base[2]);
+    expect(ROOM3_EDGE[2]).toBeGreaterThan(ROOM3_TERRACE.minZ + BODY_RADIUS);
+    // its view looks at the drop (where the slant through the walls falls)
     const v = AREA1_SPAWNS['area1-edge'];
     const cp = Math.cos(v.pitch);
     const look: Vec3 = [-Math.sin(v.yaw) * cp, Math.sin(v.pitch), -Math.cos(v.yaw) * cp];
-    const ends: Vec3[] = [
-      [ROOM3_BRIDGE_N.min[0], SUMMIT_Y, (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2],
-      [ROOM3_BRIDGE_S.min[0], SUMMIT_Y, (ROOM3_BRIDGE_S.min[2] + ROOM3_BRIDGE_S.max[2]) / 2],
-      ROOM3_DROP.at,
-    ];
-    for (const p of ends) {
-      expect(hidden(eye, p)).toEqual([]);
-      const to: Vec3 = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
-      const angle =
-        (Math.acos((to[0] * look[0] + to[1] * look[1] + to[2] * look[2]) / Math.hypot(...to)) * 180) /
-        Math.PI;
-      // inside a 16:9 picture's half width (about 51°), with a margin
-      expect(angle, `${p}`).toBeLessThan(45);
-    }
-    // and the edge is by the terrace's lip, between the two pedestals
-    expect(eastOf(ROOM3_EDGE[0]) - eastOf(ROOM3_VALLEY.maxX)).toBeLessThan(3);
-    expect(ROOM3_EDGE[2]).toBeLessThan(ROOM3_PEDESTAL_N.base[2]);
-    expect(ROOM3_EDGE[2]).toBeGreaterThan(ROOM3_PEDESTAL_S.base[2]);
+    const to: Vec3 = [ROOM3_DROP.at[0] - eye[0], ROOM3_DROP.at[1] - eye[1], ROOM3_DROP.at[2] - eye[2]];
+    expect((to[0] * look[0] + to[1] * look[1] + to[2] * look[2]) / Math.hypot(...to)).toBeCloseTo(1, 6);
   });
 
   it('from nowhere on the roofs across the valley is either pedestal in reach (the vidro cannot be taken there, 原則3)', () => {
@@ -702,9 +857,14 @@ describe('S-40: the way on (ルール5・6・7): lamps, the next place in sight 
     // over the slope, so it is seen up the first flight (S-40: not behind the houses' line)
     expect(Math.abs(corner[0] - AREA1_SLOPE.x)).toBeLessThan(AREA1_SLOPE.halfWidth);
     expect(NEXT_LAMPS).toBe(NEXT_LAMPS_BY_ROOM.room1);
-    // 部屋2's: from the second flight's foot up to the summit, rising
+    // 部屋2's (S-41): from over the courtyard, away from its drop, to the second flight's gate and up to the summit
     const r2 = NEXT_LAMPS_BY_ROOM.room2;
-    for (let i = 1; i < r2.length; i++) expect((r2[i] as Vec3)[2]).toBeLessThan((r2[i - 1] as Vec3)[2]);
+    last = -1;
+    for (const p of r2) {
+      const d = dist(p, ROOM2_DROP.at);
+      expect(d).toBeGreaterThan(last);
+      last = d;
+    }
     expect(Math.abs((r2.at(-1) as Vec3)[2] - AREA1_SLOPE.toZ)).toBeLessThan(1);
     // each hangs out in the open, not inside a house (it is seen)
     for (const p of [...NEXT_LAMPS_BY_ROOM.room1, ...r2])
@@ -743,6 +903,98 @@ describe('S-40: the way on (ルール5・6・7): lamps, the next place in sight 
         );
         expect(deep, `mote at (${x.toFixed(1)}, ${z.toFixed(1)})`).toBe(false);
       }
+  });
+});
+
+describe('S-41: rooms open in order — a gate on the way into 部屋2 and into 部屋3 (部屋は順に開く)', () => {
+  const [court, summit] = AREA1_GATES as [Area1Gate, Area1Gate];
+  const open = (AREA1_GATE_OPEN_DEG * Math.PI) / 180;
+
+  it('is the area’s order: 部屋1’s drop opens the way to 部屋2, 部屋2’s the way to 部屋3 (game/area checks it)', () => {
+    expect(AREA1_GATES.map((g) => g.after)).toEqual([ROOM1.id, ROOM2.id]);
+    expect(AREA1.gates?.map((g) => [g.id, g.after])).toEqual(AREA1_GATES.map((g) => [g.id, g.after]));
+    expect(checkAreas([AREA1], MAIN_ORB_RADIUS)).toEqual([]);
+  });
+
+  it('its keystone is one of its room’s lamps toward the next room: as the drop’s light comes to it, it opens', () => {
+    for (const [g, lamps] of [
+      [court, NEXT_LAMPS_BY_ROOM.room1],
+      [summit, NEXT_LAMPS_BY_ROOM.room2],
+    ] as const) {
+      expect(lamps[g.keystone]).toEqual(gateKeystone(g));
+      const decl = AREA1.gates?.find((q) => q.id === g.id);
+      expect(decl?.opensAt).toBeCloseTo(keystoneLightsAt(g.keystone), 9);
+      // as the prologue's: about a second and a half after the drop is taken (S-34: 1.6 s)
+      expect(decl?.opensAt).toBeGreaterThan(1);
+      expect(decl?.opensAt).toBeLessThan(2);
+    }
+  });
+
+  it('shut, it closes the way from house to house, taller than the body: there is no way past or over it', () => {
+    for (const g of AREA1_GATES) {
+      const [l, r] = gateLeaves(g, 0) as [ReturnType<typeof gateLeaves>[0], ReturnType<typeof gateLeaves>[0]];
+      // the leaves meet in the middle; the posts stand against the houses on either side
+      expect(l.hinge[0] + l.dir[0] * l.length).toBeCloseTo(r.hinge[0] + r.dir[0] * r.length, 9);
+      for (const side of [-1, 1]) {
+        const face = g.at[0] + side * (gatePostOffset(g) + AREA1_GATE_POST + 0.05);
+        expect(blocks(face, g.at[2]), `${g.id} side ${side}`).toBe(true);
+      }
+      expect(AREA1_GATE_LEAF.height).toBeGreaterThan(EYE_HEIGHT + 0.5);
+      expect(AREA1_GATE_LEAF.foot).toBeLessThan(STEP_HEIGHT);
+    }
+  });
+
+  it('the first stands where the slope leaves the street; the second just past the courtyard’s opening (no way round)', () => {
+    expect(court.at[2]).toBeLessThan(STREET_SOUTH_Z);
+    expect(court.at[2]).toBeGreaterThan(STREET_SOUTH_Z - 1);
+    expect(summit.at[2]).toBeLessThan(ROOM2_COURT.minZ);
+    expect(summit.at[2]).toBeGreaterThan(ROOM2_COURT.minZ - 1);
+    // both stand on the slope's floor
+    for (const g of AREA1_GATES) expect(g.at[1]).toBeCloseTo(area1SlopeHeight(g.at[2]), 9);
+  });
+
+  it('open, its leaves lie along the way’s sides, clear of the houses, over the level side: wide open for the body', () => {
+    for (const g of AREA1_GATES) {
+      const leaves = gateLeaves(g, open);
+      for (const leaf of leaves)
+        for (let t = 0.05; t <= leaf.length + 1e-9; t += 0.05) {
+          const x = leaf.hinge[0] + leaf.dir[0] * t;
+          const z = leaf.hinge[1] + leaf.dir[1] * t;
+          expect(blocks(x, z), `${g.id} leaf at (${x.toFixed(2)}, ${z.toFixed(2)})`).toBe(false);
+          // they swing toward where you come from, where the floor is no higher than at the hinge: their foot never in it
+          const floor = area1Ground(x, z) ?? AREA1_Y;
+          expect(floor, `${g.id} floor under the leaf`).toBeLessThanOrEqual(g.at[1] + AREA1_GATE_LEAF.foot);
+        }
+      const [l, r] = leaves as [(typeof leaves)[0], (typeof leaves)[0]];
+      const gap = r.hinge[0] - l.hinge[0] - AREA1_GATE_LEAF.thickness;
+      expect(gap).toBeGreaterThan(2 * (BODY_RADIUS + SKIN) + 1.5);
+    }
+  });
+
+  it('before it opens, the next place is in sight through its bars and the back layer glimmers beyond (ルール6・9)', () => {
+    const eye = (f: Vec3): Vec3 => [f[0], f[1] + EYE_HEIGHT, f[2]];
+    // up the first flight to the courtyard's corner (its lamp); up the second flight to the summit's terrace, and the
+    // chimney (目印) over the houses
+    const v1 = AREA1_SPAWNS['area1-gate-court'];
+    expect(hidden(eye(v1.feet), NEXT_LAMPS_BY_ROOM.room1.at(-1) as Vec3)).toEqual([]);
+    const v2 = AREA1_SPAWNS['area1-gate-summit'];
+    expect(hidden(eye(v2.feet), [AREA1_SLOPE.x, SUMMIT_Y + 1.2, AREA1_SLOPE.toZ - 1.5])).toEqual([]);
+    const top: Vec3 = [AREA1_CHIMNEY.foot[0], TOWN.center[1] + AREA1_CHIMNEY.top, AREA1_CHIMNEY.foot[2]];
+    expect(hidden(eye(v2.feet), top)).toEqual([]);
+    // the views stand before the gates, on the side one comes from
+    for (const [v, g] of [
+      [v1, court],
+      [v2, summit],
+    ] as const)
+      expect((v.feet[2] - g.at[2]) * g.swing).toBeGreaterThan(1);
+    for (const g of AREA1_GATES) {
+      const glimmer = AREA1_GLIMMERS.find((q) => q.until === g.id);
+      expect(glimmer, g.id).toBeDefined();
+      // beyond its bars, a few metres up the flight
+      const beyond = ((glimmer?.at[2] ?? 0) - g.at[2]) * -g.swing;
+      expect(beyond).toBeGreaterThan(1);
+      expect(beyond).toBeLessThan(4);
+    }
   });
 });
 

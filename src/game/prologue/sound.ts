@@ -47,6 +47,7 @@ import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
 import { glassEase } from '../../layers/tween';
 import {
+  AREA1_GATES,
   AREA1_SLOPE,
   AREA1_STREET,
   AREA1_Y,
@@ -84,6 +85,7 @@ import {
 } from './layout';
 import type { RoomProbe } from './room';
 import {
+  type AreaGateEvent,
   type FinaleEvent,
   GATE_OPEN_SECONDS,
   type HintEvent,
@@ -244,6 +246,8 @@ export interface SoundRoom {
   readonly hints?: EventBus<HintEvent>;
   /** S-40: エリア1's shortcut settling, apart from the others. */
   readonly shortcut?: EventBus<ShortcutEvent>;
+  /** S-41: エリア1's gates between its rooms opening, apart from the others. */
+  readonly gates?: EventBus<AreaGateEvent>;
   /** The game camera: the listener, and the frame the hand orb is held in. */
   readonly camera: THREE.Object3D;
   readonly probe: Pick<
@@ -383,6 +387,24 @@ const SHORTCUT_LEVEL = FINALE_LEVELS.settle;
 
 /** The shortcut's sound that played: from where (the light's front), how far from the listener when it started. */
 export interface ShortcutPlayed {
+  at: [number, number, number];
+  distance: number;
+}
+
+/* ---------- S-41: エリア1's gates between its rooms ---------- */
+
+/**
+ * Where a gate's sound stands: the prologue gate's (S-34: the latch, the hinges, the leaves coming to rest), from the middle of
+ * the gate at its hinges' upper knuckles, as GATE_SOUND for the prologue's.
+ */
+export function areaGateSound(id: string): Vec3 | null {
+  const g = AREA1_GATES.find((q) => q.id === id);
+  return g ? [g.at[0], g.at[1] + 1.4, g.at[2]] : null;
+}
+
+/** A gate's sound that played: which gate, from where, how far from the listener when it started. */
+export interface AreaGatePlayed {
+  gate: string;
   at: [number, number, number];
   distance: number;
 }
@@ -820,6 +842,8 @@ export interface SoundProbe {
   readonly whisper: WhisperSoundProbe;
   /** S-40: エリア1's shortcut settling, counted apart from the cues. */
   readonly shortcut: ShortcutSoundProbe;
+  /** S-41: エリア1's gates between its rooms opening, counted apart from the cues. */
+  readonly gates: AreaGateSoundProbe;
   /** S-42: the time's speed the sounds of the room's time follow, and how many of them are playing. */
   readonly time: TimeSoundProbe;
   /** S-22 sensor (not enumerable, so probes copied by the e2e leave it out): renders a sound offline. */
@@ -865,7 +889,20 @@ export interface ShortcutSoundProbe {
   voicesStarted: number;
 }
 
-/** S-42: the sounds of the room's time (the close, the whisper, the shortcut) and the time's speed they follow. */
+/**
+ * S-41: エリア1's gates between its rooms. Each gate starting to open is answered once, as it happens: played (which, from where,
+ * how far), or refused (no audio yet, its sound not loaded, or the engine refused it) and then never played later.
+ */
+export interface AreaGateSoundProbe {
+  /** Its sound (the prologue gate's) is loaded and its emitter placed. */
+  ready: boolean;
+  played: AreaGatePlayed[];
+  refused: string[];
+  /** Voices the engine started for them (the engine's whole count takes them in: engineVoices). */
+  voicesStarted: number;
+}
+
+/** S-42: the sounds of the room's time (the close, the whisper, the shortcut, エリア1's gates) and the speed they follow. */
 export interface TimeSoundProbe {
   /** The speed last followed (1 = as they play; 0 = standing, silent). */
   scale: number;
@@ -1235,6 +1272,37 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   };
   const offShortcut = room.shortcut?.on(playShortcut) ?? null;
 
+  // S-41: エリア1's gates between its rooms, once the close's sounds are loaded (the gate's is theirs); from each gate
+  let gateEmitter: Emitter | null = null;
+  const gateLog = { played: [] as AreaGatePlayed[], refused: [] as string[], voices: 0 };
+  const playAreaGate = (event: AreaGateEvent): void => {
+    if (disposed || event.type !== 'open') return;
+    const where = areaGateSound(event.gate);
+    const buffer = finale?.banks.gate;
+    if (!engine || !gateEmitter || !buffer || !where) {
+      gateLog.refused.push(event.gate);
+      return;
+    }
+    follow();
+    gateEmitter.setPosition({ x: where[0], y: where[1], z: where[2] });
+    const level = FINALE_LEVELS.gate;
+    const emitter = gateEmitter;
+    const before = engine.snapshot().voicesStarted;
+    // S-42: a sound of the room's time (it stands with the pause)
+    const started = engine.startVoice({ level, emitter }, playTimed(buffer, level));
+    gateLog.voices += engine.snapshot().voicesStarted - before;
+    if (!started) {
+      gateLog.refused.push(event.gate);
+      return;
+    }
+    gateLog.played.push({
+      gate: event.gate,
+      at: [where[0], where[1], where[2]],
+      distance: Math.hypot(where[0] - ear.x, where[1] - ear.y, where[2] - ear.z),
+    });
+  };
+  const offGates = room.gates?.on(playAreaGate) ?? null;
+
   /** The engine is there (its own, or handed over): place the emitters in the room. */
   const attach = (e: AudioEngine): void => {
     engine = e;
@@ -1266,7 +1334,10 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         if (banks.finale) {
           const settle = e.createEmitter('sfx', settleAt);
           const gate = e.createEmitter('sfx', { x: GATE_SOUND[0], y: GATE_SOUND[1], z: GATE_SOUND[2] });
-          live.push(settle, gate);
+          // S-41: and エリア1's gates (the same sound, from wherever the gate opening stands)
+          const first = areaGateSound(AREA1_GATES[0]?.id ?? '') ?? GATE_SOUND;
+          gateEmitter = e.createEmitter('sfx', { x: first[0], y: first[1], z: first[2] });
+          live.push(settle, gate, gateEmitter);
           finale = { banks: banks.finale, settle, gate };
         }
         // S-39: the vidro's whisper, from where it stands
@@ -1491,6 +1562,14 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         voicesStarted: shortcutLog.voices,
       };
     },
+    get gates(): AreaGateSoundProbe {
+      return {
+        ready: gateEmitter !== null && finale !== null,
+        played: [...gateLog.played],
+        refused: [...gateLog.refused],
+        voicesStarted: gateLog.voices,
+      };
+    },
     get time(): TimeSoundProbe {
       return { scale: timeScale, voices: timed.size };
     },
@@ -1540,6 +1619,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
       finale = null;
       offHints?.();
       offShortcut?.();
+      offGates?.();
+      gateEmitter = null;
       whisper = null;
       subscribed = false;
       stopListening();
