@@ -8,6 +8,8 @@ const ARC_TO_DEG = 142;
 const ARC_RADIUS = 1.3; // × orb radius on screen
 /** Time a chosen drop stays sunk before it rises again (細部の振る舞い: 選ぶと弾けずに沈み込む). */
 const PRESS_SECONDS = 0.38;
+/** The drops' fade when the settings open over the home and close again (styles.ts .vd-home.is-veiled, S-43). */
+const UNVEIL_SECONDS = 0.3;
 
 export interface MenuLayout {
   /** Orb centre and radius on screen, in CSS pixels. */
@@ -53,6 +55,8 @@ export class HomeMenu {
   /** Focus moved by a hover, which already answered with its own sound. */
   private quietFocus = false;
   private veiled = false;
+  /** Seconds left of the drops' coming back after the settings closed. */
+  private unveiling = 0;
 
   constructor(
     root: HTMLElement,
@@ -140,6 +144,19 @@ export class HomeMenu {
     if (!on) this.hoverIndex = -1;
   }
 
+  /** Moves the focus as an arrow key would (the pad's 十字, S-43). */
+  moveFocus(key: string): void {
+    if (!this.interactive) return;
+    const next = nextFocus(this.focusIndex, key, this.drops.length);
+    if (next !== this.focusIndex) this.drops[next]?.el.focus({ preventScroll: true });
+  }
+
+  /** Chooses the focused drop as a click would (the pad's A, S-43). */
+  chooseFocused(): void {
+    if (!this.interactive) return;
+    this.drops[this.focusIndex]?.el.click();
+  }
+
   focusItem(item: HomeItem): void {
     const d = this.drops.find((x) => x.id === item);
     d?.el.focus({ preventScroll: true });
@@ -173,9 +190,17 @@ export class HomeMenu {
     if (on === this.veiled) return;
     this.veiled = on;
     this.el.classList.toggle('is-veiled', on);
+    // they come back the way they went (戻るときは、来たときの動きを逆再生する): the same fade, for its length only (the
+    // drops' appearing is set per frame and must not lag behind a transition)
+    this.unveiling = on ? 0 : UNVEIL_SECONDS;
+    this.el.classList.toggle('is-unveiling', !on);
   }
 
   update(dt: number, layout: MenuLayout): void {
+    if (this.unveiling > 0) {
+      this.unveiling -= dt;
+      if (this.unveiling <= 0) this.el.classList.remove('is-unveiling');
+    }
     if (!this.measured) {
       const first = this.drops[0];
       if (first) {

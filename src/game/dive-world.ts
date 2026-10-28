@@ -61,4 +61,8 @@ export interface WorldSettings {
   invertY: boolean;
   /** Language of the world's own words (the prompts). */
   lang: 'ja' | 'en';
+  /** The UI's text size (×1, ×1.2, ×1.4) for the world's own words (the prompts: アクセシビリティ). */
+  textScale: number;
+  /** コントラスト強化: the world's own frosted labels (the prompts) denser, their edges brighter. */
+  contrast: boolean;
 }

@@ -117,6 +117,12 @@ describe('worldSettingsOf (the world takes them in its own terms)', () => {
     expect(w.lang).toBe('en');
   });
 
+  it('passes the text size and the contrast on for the world’s own words (the prompts)', () => {
+    expect(worldSettingsOf(ja).textScale).toBe(1);
+    expect(worldSettingsOf({ ...ja, textSize: 'larger' }).textScale).toBe(TEXT_SCALE.larger);
+    expect(worldSettingsOf({ ...ja, contrast: true }).contrast).toBe(true);
+  });
+
   it('turns the sensitivity (×) into radians per pixel of the mouse', () => {
     expect(worldSettingsOf(ja).mouseSensitivity).toBeCloseTo(MOUSE_RADIANS_PER_PIXEL, 12);
     expect(worldSettingsOf({ ...ja, mouseSensitivity: 2 }).mouseSensitivity).toBeCloseTo(

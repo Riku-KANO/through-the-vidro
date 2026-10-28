@@ -426,7 +426,7 @@ export interface PrologueRoom extends DiveWorld {
   setHeld(held: boolean): void;
   /** S-42: asks for the mouse lock again (inside the click or key press that resumes). */
   relock(): void;
-  /** S-43: the player's settings (視野角, 覗く, マウスの感度, 上下の反転, the prompts' language), at once. */
+  /** S-43: the player's settings (視野角, 覗く, マウスの感度, 上下の反転; the prompt's language, size, contrast), at once. */
   applySettings(settings: WorldSettings): void;
 }
 
@@ -1875,6 +1875,12 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       input.settings.invertY = s.invertY;
       player.settings = { fovDeg: s.fovDeg };
       text = STRINGS[s.lang];
+      // the prompt's frosted label follows the UI's text size and contrast (アクセシビリティ)
+      prompt.style.fontSize = `calc(max(18px, 1.85vh) * ${s.textScale})`;
+      prompt.style.background = s.contrast ? 'rgba(16,22,30,.62)' : 'rgba(255,255,255,.14)';
+      prompt.style.border = s.contrast
+        ? '2px solid rgba(255,255,255,.82)'
+        : '1px solid rgba(255,255,255,.28)';
     },
     eyePose(outPos, outTarget, outFog) {
       const e = player.eye;

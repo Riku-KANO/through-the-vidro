@@ -34,6 +34,25 @@ export function nextFocus(index: number, key: string, count: number): number {
 }
 
 /**
+ * ゲームパッド on the home (細部の振る舞い: マウスなしでもすべての画面を操作できる, S-43): 十字 moves between the drops as the
+ * arrows do (`nextFocus`), A chooses. The other buttons do nothing here.
+ */
+export function padMenuKey(code: string): 'ArrowUp' | 'ArrowDown' | 'choose' | null {
+  switch (code) {
+    case 'PadUp':
+    case 'PadLeft':
+      return 'ArrowUp';
+    case 'PadDown':
+    case 'PadRight':
+      return 'ArrowDown';
+    case 'PadA':
+      return 'choose';
+    default:
+      return null;
+  }
+}
+
+/**
  * サウンドデザイン > 音階の統一: D major pentatonic, and the menu drops rise from top to bottom.
  * Index 0 is D5; each step goes to the next note of the scale (D E F# A B, then D6 ...).
  */

@@ -421,6 +421,7 @@ describe('AudioGate: the player’s volumes (設定 > 音: 全体・効果音・
     r.gate.setVolume('ui', 0.2);
     expect(engine.sliders.master).toBe(0.4);
     expect(engine.extra.ui).toBe(0.2);
+    expect(r.gate.probe.uiBus).toBe(0.2);
     expect(r.gate.probe.sliders).toEqual({ ...VIDRO_VOLUMES, master: 0.4, ambience: 0.3, ui: 0.2 });
     r.gate.dispose();
   });

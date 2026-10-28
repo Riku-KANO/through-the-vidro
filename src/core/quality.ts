@@ -101,6 +101,11 @@ export interface QualityPort {
   readonly choice: QualityChoice;
   /** The preset in use (自動's pick, once it has measured). */
   readonly level: QualityLevel;
+  /**
+   * The preset the scene was made with. Switched in place, a scene changes what it can (the shell: the render scale) and
+   * keeps the rest as it was made until it is made again; while `level` differs from this, part of the preset waits.
+   */
+  readonly sceneLevel: QualityLevel;
   request(choice: QualityChoice): void;
   /** The scene takes presets in place, and says when its picture stands still. Returns the detach. */
   attach(scene: QualityScene): () => void;

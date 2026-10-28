@@ -49,6 +49,8 @@ export interface PanelView {
   values: Settings;
   /** The line telling that nothing can be kept: 0..1 shown. */
   notice: number;
+  /** The preset in use is not the one the scene was made with: part of it waits for the next time (S-43). */
+  qualityLater: boolean;
 }
 
 interface RowParts {
@@ -119,6 +121,11 @@ export class SettingsPanel {
   private readonly back: HTMLButtonElement;
   private readonly keys: HTMLElement;
   private readonly notice: HTMLElement;
+  /** Under 品質: 「一部は次に開いたときから変わります」 (only while it is so). */
+  private readonly qualityLater: HTMLElement;
+  /** What the rows were last written for. */
+  private drawnFocus: HTMLElement | null | undefined = undefined;
+  private drawnValues: Settings | null = null;
   private shownTab = -1;
   private enabled = false;
   private hoverEl: HTMLElement | null = null;
@@ -144,6 +151,11 @@ export class SettingsPanel {
     this.glass.dataset.part = 'glass';
     this.body = document.createElement('div');
     this.body.className = 'vd-settings__body';
+    this.qualityLater = document.createElement('p');
+    this.qualityLater.className = 'vd-settings__hint';
+    this.qualityLater.dataset.part = 'quality-later';
+    this.qualityLater.textContent = t('setQualityLater');
+    this.qualityLater.hidden = true;
 
     const strip = document.createElement('div');
     strip.className = 'vd-settings__tabs';
@@ -174,6 +186,7 @@ export class SettingsPanel {
       page.hidden = true;
       SETTINGS_ROWS[tab].forEach((row, rowIndex) => {
         page.appendChild(this.makeRow(t, row, { tab: tabIndex, row: rowIndex }));
+        if (row === 'quality') page.appendChild(this.qualityLater);
       });
       this.body.appendChild(page);
       this.pages.push({ tab, el: page });
@@ -239,6 +252,7 @@ export class SettingsPanel {
     this.back.textContent = t('setBack');
     this.keys.textContent = t('setKeys');
     this.notice.textContent = t('setCannotSave');
+    this.qualityLater.textContent = t('setQualityLater');
   }
 
   /** Moves the browser's focus onto the focused tab or row (screen readers and Tab follow). */
@@ -286,7 +300,12 @@ export class SettingsPanel {
         tb.el.setAttribute('aria-selected', String(i === view.focus.tab));
       });
     }
+    this.qualityLater.hidden = !view.qualityLater;
     const focused = view.interactive ? this.elementOf(view.focus) : null;
+    // the rows are written only when what they show changed (the values are replaced on every change, never edited)
+    if (focused === this.drawnFocus && view.values === this.drawnValues) return;
+    this.drawnFocus = focused;
+    this.drawnValues = view.values;
     for (const tb of this.tabs) tb.el.classList.toggle('is-focus', tb.el === focused);
     for (const parts of this.rows.values()) {
       parts.el.classList.toggle('is-focus', parts.el === focused);

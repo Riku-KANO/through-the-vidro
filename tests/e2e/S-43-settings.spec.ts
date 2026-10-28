@@ -79,6 +79,7 @@ interface GateProbe {
   voicesStarted: number;
   volumes: Record<string, number> | null;
   sliders: { master: number; sfx: number; ambience: number; music: number; ui: number };
+  uiBus: number | null;
 }
 interface SoundProbe {
   voicesStarted: number;
@@ -329,6 +330,7 @@ for (const backend of backends) {
     mkdirSync(join(root, 'artifacts/S-43'), { recursive: true });
     const errors = collectErrors(page);
     await countContexts(page);
+    await fakePad(page);
     await toHome(page, webgl);
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
     expect((await settings(page)).phase).toBe('closed');
@@ -487,6 +489,20 @@ for (const backend of backends) {
     // the language is still English, and back to Japanese for the next test's sake is not needed (a new page)
     await page.keyboard.press('Escape');
     await waitSettings(page, "q.phase === 'closed'", 2_000);
+    await waitProbe(page, "p.focused === 'settings'");
+
+    // ---- the pad on the home (マウスなしでもすべての画面を操作できる): 十字 between the drops, A opens, B closes ----
+    await padPress(page, PAD.DOWN);
+    await waitProbe(page, "p.focused === 'credits'");
+    await padPress(page, PAD.UP);
+    await waitProbe(page, "p.focused === 'settings'");
+    await padPress(page, PAD.A);
+    await waitSettings(page, "q.phase === 'open' && q.opened === 3 && q.from === 'home'");
+    await padPress(page, PAD.RB);
+    await waitSettings(page, "q.tab === 'controls'");
+    await padPress(page, PAD.B);
+    await waitSettings(page, "q.phase === 'closed'", 2_000);
+    await waitProbe(page, "p.focused === 'settings' && p.screen === 'home'");
 
     expect(await contexts(page)).toHaveLength(1);
     const g = await gate(page);
@@ -561,6 +577,11 @@ for (const backend of backends) {
       Math.hypot(atLow.position.x - before.position.x, atLow.position.z - before.position.z),
     ).toBeLessThan(0.01);
     expect(atLow.time, 'the time stands').toBe(stood);
+    // the scene was made at 中: part of 低 waits for the next time, and the panel says so under 品質
+    await expect(page.locator('[data-ui="settings"] [data-part="quality-later"]')).toBeVisible();
+    expect(await page.locator('[data-ui="settings"] [data-part="quality-later"]').textContent()).toBe(
+      '一部は次に開いたときから変わります',
+    );
 
     // ---- 視野角: 70 → 80 — the camera now, drawn again while the time stands ----
     await page.keyboard.press('ArrowDown');
@@ -600,6 +621,7 @@ for (const backend of backends) {
     expect(g1.sliders.master).toBeCloseTo(g0.sliders.master - 0.05, 6);
     expect(g1.sliders.ambience).toBeCloseTo(g0.sliders.ambience - 0.1, 6);
     expect(g1.sliders.ui).toBeCloseTo(0.8, 6);
+    expect(g1.uiBus, 'the engine’s UI bus took it').toBeCloseTo(0.8, 6);
     expect(g1.sliders.sfx).toBe(g0.sliders.sfx);
     expect(g1.volumes?.master).toBeCloseTo(g1.sliders.master, 6);
     // the ambience as the mix plays it: the player's slider, under the pause's turn-down
@@ -633,6 +655,17 @@ for (const backend of backends) {
     await waitPause(page, "q.yielded === false && q.phase === 'open'");
     await padPress(page, PAD.B);
     await waitPause(page, "q.phase === 'closed'", 3_000);
+    // Esc twice in a row over the pause's settings: the pane shrinks away, and the second Esc goes one more step back —
+    // the game (it is not lost while the pane closes)
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'open'");
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await waitSettings(page, "q.phase === 'open' && q.from === 'pause'");
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await waitSettings(page, "q.phase === 'closed'", 2_000);
+    await waitPause(page, "q.phase === 'closed' && q.yielded === false", 3_000);
 
     // ---- back in play: the game as it was, at 低, with the new field of view and the toggled peek ----
     const after = await room(page);
@@ -748,10 +781,16 @@ for (const backend of backends) {
     await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowRight');
     await waitSettings(page, "q.values.lang === 'en'");
+    // 文字の大きさ 大, コントラスト強化 オン
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowRight');
+    await waitSettings(page, "q.values.textSize === 'large' && q.values.contrast === true");
     const kept = await settings(page);
     expect(kept.persistent).toBe(true);
     expect(kept.saves.refused).toBe(0);
-    expect(kept.saves.kept).toBeGreaterThanOrEqual(3);
+    expect(kept.saves.kept).toBeGreaterThanOrEqual(5);
 
     await page.reload();
     await waitProbe(page, 'p.load.ready === true', 90_000);
@@ -764,6 +803,9 @@ for (const backend of backends) {
     expect(back.values.quality).toBe('high');
     expect(back.values.fov).toBe(90);
     expect(back.values.lang).toBe('en');
+    expect(back.values.textSize).toBe('large');
+    expect(back.values.contrast).toBe(true);
+    expect(await page.locator('.vd-root').evaluate((r) => r.classList.contains('vd-contrast'))).toBe(true);
     expect(await page.locator('[data-ui="loading-start"]').textContent()).toContain('Begin');
     await page.locator('[data-ui="loading-start"]').click();
     await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
@@ -775,6 +817,15 @@ for (const backend of backends) {
       60_000,
     );
     expect((await room(page)).fov, 'the dive ends at the chosen field of view').toBeCloseTo(90, 2);
+    // the game's own frosted label (the prompt) follows the text size and the contrast too (720 p: 18 px × 1.2)
+    const prompt = await page.locator('[data-ui="prompt"]').evaluate((p) => {
+      const cs = getComputedStyle(p);
+      return { fontPx: Number.parseFloat(cs.fontSize), border: cs.borderTopWidth };
+    });
+    expect(prompt.fontPx).toBeCloseTo(18 * 1.2, 0);
+    expect(prompt.border).toBe('2px');
+    // made at 高 and playing at 高: nothing waits for the next time
+    expect((await shell(page)).quality).toBe('high');
     expect((await shell(page)).errors ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });

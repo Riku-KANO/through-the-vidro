@@ -52,6 +52,8 @@ export interface AudioGateProbe {
   readonly volumes: Record<VolumeChannel, number> | null;
   /** The player's sliders (設定 > 音: 全体・効果音・環境音・UI), also before the engine is made (S-43). */
   readonly sliders: Record<UiVolumeChannel, number>;
+  /** The UI bus's volume as the engine has it (null before the press). */
+  readonly uiBus: number | null;
 }
 
 /** The bus of the UI's own sounds, beside the effects (設定 > 音: UI の音量, S-43). */
@@ -135,6 +137,9 @@ export class AudioGate {
       },
       get sliders() {
         return { ...gate.sliders };
+      },
+      get uiBus() {
+        return gate.eng ? gate.eng.getBusVolume(UI_BUS) : null;
       },
       get voicesStarted() {
         return gate.eng?.snapshot().voicesStarted ?? 0;
@@ -289,9 +294,9 @@ export class AudioGate {
   }
 
   /**
-   * A drop's sound (M0 stand-in), on the engine's effects bus: it follows the master and sfx volumes and sounds in
-   * the engine's space. A short sine with an inharmonic partial, so hover and transitions answer within 0.1 s
-   * (UIの原則 3). Nothing rings before the press, and nothing is kept for later.
+   * A drop's sound (M0 stand-in), on the engine's UI bus (S-43): it follows the master and the UI's volume (not the
+   * effects') and sounds in the engine's space. A short sine with an inharmonic partial, so hover and transitions answer
+   * within 0.1 s (UIの原則 3). Nothing rings before the press, and nothing is kept for later.
    */
   ping(hz: number, gain = 0.05, seconds = 0.9): void {
     if (this.disposed) return;

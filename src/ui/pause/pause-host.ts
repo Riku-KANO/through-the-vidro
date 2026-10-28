@@ -231,11 +231,16 @@ export class PauseHost {
   }
 
   /** The settings opened from the pause have closed: the items are written again, on 設定 (来たときの動きの逆再生). */
-  settingsClosed(): void {
+  settingsClosed(back = false): void {
     if (!this.yielded) return;
     this.yielded = false;
     // the button that closed them (B) is held now: not a new press for the pause
     this.padHeld = this.readPad(this.padHeld);
+    if (back) {
+      // Esc / B pressed again while the panel shrank: one more step back — the game
+      this.close();
+      return;
+    }
     this.timeline.rewrite();
     this.focusPending = true;
   }

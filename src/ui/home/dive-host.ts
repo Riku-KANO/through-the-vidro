@@ -6,6 +6,7 @@ import { qualityPortOf } from '../../core/quality';
 import type { SandboxScene, SceneContext } from '../../core/scene';
 import { segment } from '../../core/transition';
 import type { DiveWorld } from '../../game/dive-world';
+import { padCodesPressed } from '../../game/input/gamepad';
 import { AudioGate } from '../audio-gate';
 import { AUTOPLAY, parsePauseSpec } from '../autoplay';
 import { ScreenFlow, TRANSITIONS } from '../flow';
@@ -22,7 +23,7 @@ import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './chore
 import { createLensUniforms } from './lens';
 import { createMembrane } from './membrane';
 import { HomeMenu } from './menu';
-import { HOME_ITEMS, menuPitchHz } from './menu-logic';
+import { HOME_ITEMS, menuPitchHz, padMenuKey } from './menu-logic';
 import { createMist } from './mist';
 import { createHomeOrb } from './orb';
 
@@ -48,6 +49,14 @@ export interface HomeDiveOptions {
 }
 
 const TILT_SMOOTH_SECONDS = 0.4;
+const NO_BUTTONS: ReadonlySet<string> = new Set();
+
+/** The buttons held on the first connected pad (src/game/input/gamepad.ts codes). */
+function readPad(previous: ReadonlySet<string>): ReadonlySet<string> {
+  const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
+  return NO_BUTTONS;
+}
 
 export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDiveOptions): SandboxScene {
   const { renderer, overlay, params } = ctx;
@@ -148,9 +157,11 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     },
     onLayout: () => menu.invalidate(),
     onPicture: () => pause?.redraw(),
-    onClosed: (from) => {
-      if (from === 'pause') pause?.settingsClosed();
+    onClosed: (from, back) => {
+      // (from the home, a second Esc has nowhere further back to go)
+      if (from === 'pause') pause?.settingsClosed(back);
       else if (flow.screen === 'home' && !flow.transition) menu.focusItem('settings');
+      homePad = null;
     },
   });
 
@@ -330,6 +341,8 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   let phaseStart = performance.now();
   let firstFrameDrawn = false;
   let playing = false;
+  /** The pad's buttons held at the last reading on the home; null when the home did not read it (S-43). */
+  let homePad: ReadonlySet<string> | null = null;
 
   const phaseOf = (): PhaseName => (flow.transition ? (flow.transition.spec.id as PhaseName) : flow.screen);
 
@@ -511,10 +524,25 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         });
       }
       loadingWasSeen = loadingSeen;
-      // the drops step aside while the settings are open over the home
+      // the drops step aside while the settings are open over the home (and come back as the panel shrinks); the keys and
+      // the pad are the panel's until it has closed
       const homeSettings = settings.isUp && flow.screen === 'home';
-      menu.setVeiled(homeSettings);
+      menu.setVeiled(settings.covering && flow.screen === 'home');
       menu.setInteractive(interactiveHome && !homeSettings);
+      // S-43: the pad on the home (マウスなしでもすべての画面を操作できる): 十字 between the drops, A chooses
+      if (interactiveHome && !homeSettings) {
+        const held = readPad(homePad ?? NO_BUTTONS);
+        // the first reading only notes what is held (a button held from before is not a new press)
+        if (homePad) {
+          for (const code of held) {
+            if (homePad.has(code)) continue;
+            const key = padMenuKey(code);
+            if (key === 'choose') menu.chooseFocused();
+            else if (key) menu.moveFocus(key);
+          }
+        }
+        homePad = held;
+      } else homePad = null;
       orb.group.updateMatrixWorld();
       orbCenter.setFromMatrixPosition(orb.group.matrixWorld);
       outerCam.updateMatrixWorld();

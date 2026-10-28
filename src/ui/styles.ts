@@ -76,6 +76,7 @@ const CSS = `
 .vd-home { position: absolute; inset: 0; margin: 0; padding: 0; }
 /* the settings are open over the home (S-43): the drops step aside under the panel */
 .vd-home.is-veiled .vd-drop > * { opacity: 0; transition: opacity 0.25s ${UI_TOKENS.ease}; }
+.vd-home.is-unveiling .vd-drop > * { transition: opacity 0.25s ${UI_TOKENS.ease}; }
 
 /* ---- pause (S-42): a breath of frost from the middle, the items written on it with a finger ----
    No ancestor of a frosted part may have opacity, a filter or a mask: it would cut the frost off from the backdrop. */
@@ -146,6 +147,8 @@ const CSS = `
    The pane (glass) is the only frosted part: the body over it is revealed by a clip-path and holds no backdrop filter. */
 .vd-settings { position: absolute; top: 50%; right: max(4vw, 16px); transform: translateY(-50%);
   width: min(calc(100vw - 32px), max(30em, 38vw)); visibility: hidden; pointer-events: none; --open: 0; }
+/* 英語版: the words run longer (札は文字の長さに合わせて伸びる): a wider pane keeps the tabs on one line */
+.vd-root:lang(en) .vd-settings { width: min(calc(100vw - 32px), max(37em, 44vw)); }
 .vd-settings.is-up { visibility: visible; }
 .vd-settings.is-interactive { pointer-events: auto; }
 .vd-settings__glass { position: absolute; inset: 0; border-radius: 1.3em; background: rgba(255, 255, 255, 0.13);
@@ -212,9 +215,15 @@ const CSS = `
 .vd-settings__keys { opacity: 0.78; }
 .vd-settings__notice { position: absolute; left: 50%; top: calc(100% + 0.7em); transform: translateX(-50%); margin: 0;
   padding: 0.3em 1.1em 0.34em; border-radius: 999px; white-space: nowrap; opacity: var(--notice, 0);
-  background: rgba(44, 34, 24, 0.42); border: 1px solid rgba(255, 236, 204, 0.4);
-  -webkit-backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.7); backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.7); }
+  background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 244, 226, 0.5);
+  -webkit-backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.62); backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.62); }
 .vd-settings__notice[hidden] { display: none; }
+/* under 品質, while part of the preset waits for the next time */
+.vd-settings__hint { margin: -0.1em 0.8em 0.2em; opacity: 0.82; text-align: right; }
+.vd-settings__hint[hidden] { display: none; }
+/* a frosted tag reached by Tab (the 戻る button): lit like a focused row */
+.vd-settings button.vd-settings__chip:focus-visible { border-color: rgba(255, 240, 214, 0.75);
+  box-shadow: 0 0 16px rgba(255, 222, 160, 0.5); }
 
 /* ---- コントラスト強化 (アクセシビリティ, S-43): the glass's edges thicker and brighter, the frost behind the text denser ---- */
 .vd-root.vd-contrast { text-shadow: 0 1px 3px rgba(8, 12, 18, 0.7); }
@@ -230,6 +239,9 @@ const CSS = `
 .vd-contrast .vd-settings__row.is-focus, .vd-contrast .vd-settings button.vd-settings__tab.is-focus {
   border: 2px solid rgba(255, 240, 214, 0.95); }
 .vd-contrast .vd-settings__groove { background: rgba(255, 255, 255, 0.3); box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7); }
+/* the chosen tag is told by its shape too (色だけに頼らない): a second ring, a brighter fill */
+.vd-contrast .vd-settings button.vd-settings__option.is-chosen { background: rgba(255, 244, 222, 0.42);
+  border-color: rgba(255, 236, 190, 1); box-shadow: 0 0 0 2px rgba(16, 22, 30, 0.9), 0 0 0 4px rgba(255, 236, 190, 0.95); }
 `;
 
 /** Injects the shared stylesheet once and returns a root element for one screen set. */

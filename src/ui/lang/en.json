@@ -25,6 +25,7 @@
   "setQualityLow": "Low",
   "setQualityMid": "Medium",
   "setQualityHigh": "High",
+  "setQualityLater": "Some of it changes the next time the game opens",
   "setFov": "Field of view",
   "setPeek": "Peek",
   "setPeekHold": "Hold",

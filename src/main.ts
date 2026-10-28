@@ -133,10 +133,11 @@ const SWITCH_TIMEOUT_MS = 15_000;
 
 const params = parseParams(window.location.search);
 // S-43: the URL's ?quality (a dev and sensor switch) wins; else the preset the player chose in the settings, kept in the
-// browser; else mid. The saved choice is read only for a scene (the scene list keeps nothing).
+// browser; else mid. The saved choice is read only for a scene (the scene list keeps nothing), and never for a bench
+// (計測は固定のプリセットで: a 自動 kept from playing must not switch presets in the middle of a measurement).
 const startPreset = startQuality({
   url: params.raw.has('quality') ? { level: params.quality, auto: params.autoQuality } : null,
-  saved: params.scene ? readSavedQuality(browserStorage) : null,
+  saved: params.scene && params.benchSeconds === null ? readSavedQuality(browserStorage) : null,
 });
 const probe: VidroProbe = {
   status: 'booting',
@@ -281,27 +282,38 @@ async function main(): Promise<void> {
 
   // S-43: the scene's side of the quality (a scene that takes presets in place attaches itself through the port)
   let attached: QualityScene | null = null;
+  /** The preset the current scene instance was made with (an in-place switch leaves it). */
+  let sceneLevel: QualityLevel = startPreset.level;
   /** Set once the governor exists: the player's choice of quality (the settings). */
   let requestQuality: ((choice: QualityChoice) => void) | null = null;
   let pendingChoice: QualityChoice | null = null;
-  const qualityPort: QualityPort = {
+  /**
+   * The port handed to the scene instance of `generation`: one made late (a quality switch overtook it, and it is
+   * disposed unseen) cannot attach over the live one.
+   */
+  const portFor = (generation: number): QualityPort => ({
     get choice() {
       return probe.qualityChoice;
     },
     get level() {
       return probe.quality;
     },
+    get sceneLevel() {
+      return sceneLevel;
+    },
     request(choice) {
+      if (generation !== sceneGeneration) return;
       if (requestQuality) requestQuality(choice);
       else pendingChoice = choice;
     },
     attach(scene) {
+      if (generation !== sceneGeneration) return () => undefined;
       attached = scene;
       return () => {
         if (attached === scene) attached = null;
       };
     },
-  };
+  });
 
   /** Creates (or recreates, for a quality switch) the scene with a whole preset. A late result is discarded. */
   const createScene = async (level: QualityLevel): Promise<void> => {
@@ -324,7 +336,7 @@ async function main(): Promise<void> {
       quality: QUALITY_PRESETS[level],
       qualityLevel: level,
       params: params.raw,
-      qualityPort,
+      qualityPort: portFor(generation),
     };
     const next = await mod.default(sceneContext);
     if (generation !== sceneGeneration) {
@@ -333,6 +345,7 @@ async function main(): Promise<void> {
       return;
     }
     sandbox = next;
+    sceneLevel = level;
     probe.quality = level;
     probe.sceneInstances++;
     extras.quality = probe.qualityDecision ? `auto→${level}` : level;

@@ -91,8 +91,11 @@ export interface SettingsHostOptions {
   onLayout(): void;
   /** Something in the picture changed (the pause holds a picture: it must be drawn again). */
   onPicture(): void;
-  /** The panel has closed (shrunk away) — back to where it came from. */
-  onClosed(from: SettingsFrom): void;
+  /**
+   * The panel has closed (shrunk away) — back to where it came from. `back`: Esc / B was pressed again while it shrank, one
+   * more step back there (from the pause: back to the game).
+   */
+  onClosed(from: SettingsFrom, back: boolean): void;
 }
 
 const MAX_SOUNDS = 40;
@@ -127,6 +130,10 @@ export class SettingsHost {
   private readonly abort = new AbortController();
   private readonly offReady: () => void;
   private readonly timers = new Set<number>();
+  /** A change in effect but not kept yet (a slider being dragged). */
+  private unsaved = false;
+  /** Esc / B pressed again while the panel shrinks: one more step back, once it has closed. */
+  private pendingBack = false;
 
   constructor(opts: SettingsHostOptions) {
     this.opts = opts;
@@ -182,6 +189,12 @@ export class SettingsHost {
     return this.timeline.phase !== 'closed';
   }
 
+  /** The panel stands over the screen behind (spreading or open; not while it shrinks away). */
+  get covering(): boolean {
+    const p = this.timeline.phase;
+    return p === 'opening' || p === 'open';
+  }
+
   /** Opens the panel over the home or the pause. */
   open(from: SettingsFrom): void {
     if (!this.timeline.open()) return;
@@ -201,6 +214,9 @@ export class SettingsHost {
   close(): void {
     if (!this.timeline.close()) return;
     this.probe.closed++;
+    this.pendingBack = false;
+    // a slider let go of while it closes (Esc during a drag) is kept as it took effect
+    if (this.unsaved) this.keep(this.values, null);
     this.ringPane('close');
   }
 
@@ -222,18 +238,22 @@ export class SettingsHost {
     else this.timeline.update(dt);
     if (was !== 'closed' && this.timeline.phase === 'closed') {
       const from = this.from;
+      const back = this.pendingBack;
       this.from = null;
-      if (from) this.opts.onClosed(from);
+      this.pendingBack = false;
+      if (from) this.opts.onClosed(from, back);
     }
     this.noticeLeft = Math.max(0, this.noticeLeft - dt);
     const shown = NOTICE_SECONDS - this.noticeLeft;
     const notice = this.noticeLeft <= 0 ? 0 : Math.min(1, shown / NOTICE_FADE, this.noticeLeft / NOTICE_FADE);
+    const q = this.opts.quality;
     this.panel.render(dt, {
       open: this.timeline.value,
       interactive: this.timeline.interactive,
       focus: this.focus,
       values: this.values,
       notice,
+      qualityLater: q !== null && q.level !== q.sceneLevel,
     });
     if (this.focusPending && this.timeline.interactive) {
       this.focusPending = false;
@@ -268,8 +288,12 @@ export class SettingsHost {
   private command(command: PanelCommand): void {
     if (!this.isUp) return;
     if (!this.timeline.interactive) {
-      // Esc / B while it still spreads plays it back (遷移のルール 4, 戻る操作)
-      if (command === 'back') this.close();
+      // Esc / B while it still spreads plays it back (遷移のルール 4, 戻る操作); a second one while it shrinks is the next
+      // step back, handed to where it came from once it has closed (to the pause: back to the game)
+      if (command === 'back') {
+        if (this.timeline.phase === 'closing') this.pendingBack = true;
+        else this.close();
+      }
       return;
     }
     this.take(stepPanel(this.focus, this.values, command));
@@ -325,7 +349,7 @@ export class SettingsHost {
         this.lastSlideRing = this.elapsed;
         this.ring('tick', { rate: this.rateOfValue(row), gain: 0.7 });
       }
-    } else if (done) this.commit(this.values, row, true);
+    } else if (done && this.unsaved) this.keep(this.values, row);
   }
 
   /** A change takes effect at once (変更は即時反映) and is kept (unless a slider is still being dragged). */
@@ -358,14 +382,22 @@ export class SettingsHost {
       case 'textSize':
       case 'contrast':
         this.applyDisplay();
+        // the world's own words too (the prompt's frosted label)
+        o.world.applySettings?.(worldSettingsOf(next));
         o.onLayout();
         break;
     }
-    if (!persist) return;
+    if (persist) this.keep(next, row);
+    else this.unsaved = true;
+  }
+
+  /** Keeps the settings in effect (`row`: the one just changed, if any). */
+  private keep(next: Settings, row: SettingsRow | null): void {
+    this.unsaved = false;
+    const store = this.opts.store;
     // the quality is kept only once chosen here (until then the shell's: the URL's, or mid)
-    const kept = o.store.settings;
-    const quality = row === 'quality' ? next.quality : kept.quality;
-    const r = o.store.save({ ...next, quality });
+    const quality = row === 'quality' ? next.quality : store.settings.quality;
+    const r = store.save({ ...next, quality });
     if (r.saved) this.probe.saves.kept++;
     else this.probe.saves.refused++;
     if (r.notify) {
@@ -387,8 +419,14 @@ export class SettingsHost {
     // Enter / Space would also click the focused button, the arrows scroll
     e.preventDefault();
     if (e.repeat && (command === 'choose' || command === 'back')) return;
-    // Enter on the 戻る button
-    if (command === 'choose' && document.activeElement?.closest('[data-settings-back]')) command = 'back';
+    // on the 戻る button (reached by Tab): Enter goes back, ↑ returns to the lit row; the other moves do nothing there
+    if (document.activeElement?.closest('[data-settings-back]')) {
+      if (command === 'choose') command = 'back';
+      else if (command === 'up') {
+        this.focusPending = true;
+        return;
+      } else if (command !== 'back' && command !== 'prevTab' && command !== 'nextTab') return;
+    }
     this.command(command);
   };
 

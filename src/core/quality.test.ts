@@ -51,6 +51,7 @@ describe('the scene’s quality port (S-43)', () => {
     const port: QualityPort = {
       choice: 'mid',
       level: 'mid',
+      sceneLevel: 'mid',
       request: () => undefined,
       attach: () => () => undefined,
     };

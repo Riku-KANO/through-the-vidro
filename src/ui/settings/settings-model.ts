@@ -109,5 +109,7 @@ export function worldSettingsOf(s: Settings): WorldSettings {
     mouseSensitivity: mouseSensitivityFor(s.mouseSensitivity),
     invertY: s.invertY,
     lang: s.lang,
+    textScale: TEXT_SCALE[s.textSize],
+    contrast: s.contrast,
   };
 }

@@ -25,6 +25,7 @@
   "setQualityLow": "低",
   "setQualityMid": "中",
   "setQualityHigh": "高",
+  "setQualityLater": "一部は次に開いたときから変わります",
   "setFov": "視野角",
   "setPeek": "覗く",
   "setPeekHold": "長押し",
