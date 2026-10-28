@@ -6,7 +6,7 @@ import * as THREE from 'three/webgpu';
 import { ownBackdropImage } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
-import { LAYER_CHANNEL, viewMask } from '../../layers/layers';
+import { LAYER_CHANNEL, peekStandInMask, viewMask } from '../../layers/layers';
 import { OrbComposite, type OrbFrame } from './orb-composite';
 
 /**
@@ -47,6 +47,52 @@ const SURFACE = 1 << LAYER_CHANNEL.surface;
 const backOnly = (o: THREE.Object3D): boolean =>
   (o.layers.mask & BACK_ONLY) === BACK_ONLY && (o.layers.mask & SURFACE) === 0;
 
+/**
+ * S-44 (発案者 2026-10-28; 空間の可読性と導線 5: 常に見える目印 — 灯塔、工房街の煙突、水路の雫塔、温室のドーム): marks `o` and what hangs
+ * under it as the landmark `name`, so the peek image draws it however far it is (`peekFar`). Call it once the thing is built.
+ */
+export function markLandmark(o: THREE.Object3D, name: string): void {
+  o.traverse((c) => {
+    c.userData.landmark = name;
+  });
+}
+/** S-44: the landmark `o` is part of (its own mark, or for a peek stand-in made after it was marked, its owner's), or null. */
+export function landmarkOf(o: THREE.Object3D): string | null {
+  const own = o.userData.landmark;
+  if (typeof own === 'string') return own;
+  // (LayerField hangs a transmissive mesh's peek stand-in under it, on the peek-only layer alone)
+  const owner = o.layers.mask === peekStandInMask() ? o.parent : null;
+  const mark = owner?.userData.landmark;
+  return typeof mark === 'string' ? mark : null;
+}
+
+/**
+ * S-41, S-44: what the peek image does with `o` against its far end `far` (metres of view depth from `eye` down the unit
+ * `forward`, as the haze measures): `near` — its bounding sphere reaches nearer, drawn whole (nothing is cut at a plane);
+ * `out` — wholly past it, left out; `back` — past it but on the back layer alone, drawn (玉越しの裏の層の見た目は変えない);
+ * `landmark` — past it but a landmark, drawn; `skip` — not a thing three culls by its bounds (not a mesh, points or line, or
+ * not frustumCulled, or without bounds), never left out. `sphere` is scratch.
+ */
+export type PeekFarVerdict = 'near' | 'out' | 'back' | 'landmark' | 'skip';
+export function peekFarVerdict(
+  o: THREE.Object3D,
+  eye: THREE.Vector3,
+  forward: THREE.Vector3,
+  far: number,
+  sphere: THREE.Sphere = new THREE.Sphere(),
+): PeekFarVerdict {
+  const m = o as THREE.Mesh;
+  if (!(m.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine) || !o.frustumCulled)
+    return 'skip';
+  const bounds = (m as THREE.InstancedMesh).boundingSphere ?? m.geometry?.boundingSphere;
+  if (!bounds) return 'skip';
+  sphere.copy(bounds).applyMatrix4(o.matrixWorld);
+  const depth = sphere.center.sub(eye).dot(forward);
+  if (depth - sphere.radius <= far) return 'near';
+  if (backOnly(o)) return 'back';
+  return landmarkOf(o) !== null ? 'landmark' : 'out';
+}
+
 export interface PeekPipelineOptions {
   renderer: THREE.WebGPURenderer;
   scene: THREE.Scene;
@@ -62,7 +108,8 @@ export interface PeekPipelineOptions {
   /**
    * S-41 (発案者 2026-10-27: 覗く像のパスで霧の向こうの物を描かない): how far the peek image reaches (metres of view depth), read each
    * frame while peeking. A thing that lies wholly beyond it is not drawn into the peek image (a thing reaching nearer is drawn
-   * whole: nothing is cut at a plane). Without it, everything the main camera would draw.
+   * whole: nothing is cut at a plane) — but the back layer's things and (S-44) the landmarks (markLandmark) are. Without it,
+   * everything the main camera would draw.
    */
   peekFar?: () => number;
 }
@@ -201,11 +248,14 @@ export class PeekPipeline {
   farLeftOutBack = 0;
   /** And the things of the back layer alone past the far end that it drew all the same. */
   farKeptBack = 0;
+  /** S-44: and the landmarks' things past the far end that it drew all the same (常に見える目印). */
+  farKeptLandmarks = 0;
 
   /**
    * S-41: hides what the peek image does not reach — a thing three would cull by its bounds (frustumCulled), seen by the back
-   * camera's layers, whose bounding sphere lies wholly deeper than `far` along the view — but never the back layer itself
-   * (玉越しの裏の層の見た目は変えない: the prologue's bridge seen from the town stays as it was). showBeyond() puts them back.
+   * camera's layers, whose bounding sphere lies wholly deeper than `far` along the view (peekFarVerdict) — but never the back
+   * layer itself (玉越しの裏の層の見た目は変えない: the prologue's bridge seen from the town stays as it was), nor (S-44) a landmark.
+   * showBeyond() puts them back.
    */
   private hideBeyond(far: number): void {
     const e = this.backCamera.matrixWorld.elements;
@@ -214,6 +264,7 @@ export class PeekPipeline {
     this.forward.set(-(e[8] ?? 0), -(e[9] ?? 0), -(e[10] ?? 0)).normalize();
     this.far = far;
     this.kept = 0;
+    this.keptLandmarks = 0;
     this.opts.scene.traverseVisible(this.visitBeyond);
     let back = 0;
     for (const o of this.beyond) {
@@ -223,22 +274,19 @@ export class PeekPipeline {
     this.farLeftOut = this.beyond.length;
     this.farLeftOutBack = back;
     this.farKeptBack = this.kept;
+    this.farKeptLandmarks = this.keptLandmarks;
   }
 
   /** hideBeyond's walk over the scene (one function made once: the peek image is drawn every frame while peeking). */
   private far = 0;
   private kept = 0;
+  private keptLandmarks = 0;
   private readonly visitBeyond = (o: THREE.Object3D): void => {
-    const m = o as THREE.Mesh;
-    if (!(m.isMesh || (o as THREE.Points).isPoints || (o as THREE.Line).isLine) || !o.frustumCulled) return;
     if (!o.layers.test(this.backCamera.layers)) return;
-    const bounds = (m as THREE.InstancedMesh).boundingSphere ?? m.geometry?.boundingSphere;
-    if (!bounds) return;
-    this.sphere.copy(bounds).applyMatrix4(o.matrixWorld);
-    const depth = this.sphere.center.sub(this.eye).dot(this.forward);
-    if (depth - this.sphere.radius <= this.far) return;
-    if (backOnly(o)) this.kept++;
-    else this.beyond.push(o);
+    const verdict = peekFarVerdict(o, this.eye, this.forward, this.far, this.sphere);
+    if (verdict === 'back') this.kept++;
+    else if (verdict === 'landmark') this.keptLandmarks++;
+    else if (verdict === 'out') this.beyond.push(o);
   };
 
   private showBeyond(): void {
@@ -263,7 +311,7 @@ export class PeekPipeline {
       // S-41: not past the peek image's far end — but on the warm-up (its pipelines made before the first peek), all of it
       const far = this.opts.peekFar?.() ?? Number.POSITIVE_INFINITY;
       if (frame.peek > 0 && !this.warm && far < this.opts.camera.far) this.hideBeyond(far);
-      else this.farLeftOut = this.farLeftOutBack = this.farKeptBack = 0;
+      else this.farLeftOut = this.farLeftOutBack = this.farKeptBack = this.farKeptLandmarks = 0;
       const previous = renderer.getRenderTarget();
       renderer.setRenderTarget(this.backTarget);
       try {

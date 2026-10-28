@@ -120,7 +120,7 @@ import {
   SurfaceColliders,
   withMembrane,
 } from './physics';
-import { buildPlaza, fogRangeAt } from './plaza';
+import { buildPlaza, FOG_WAY, fogRangeAt } from './plaza';
 import { buildRoomArt } from './room-art';
 import {
   type AreaGateEvent,
@@ -277,9 +277,9 @@ export interface RoomProbe {
   /**
    * S-41: the peek image's far end (metres of view depth), and what the last peek image left out past it — things, and of them
    * those on the back layer alone (must stay 0: 玉越しの裏の層の見た目は変えない) — and the back layer's things past it it drew all
-   * the same.
+   * the same; S-44: and the landmarks' (常に見える目印).
    */
-  peekFar: { far: number; leftOut: number; leftOutBack: number; keptBack: number };
+  peekFar: { far: number; leftOut: number; leftOutBack: number; keptBack: number; keptLandmarks: number };
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   /**
@@ -467,14 +467,13 @@ const APPEAR_SECONDS = 3.5;
 const SHORTCUT_GLOW = 2;
 const SHORTCUT_BAND_WIDTH = 5;
 /**
- * S-41 (発案者 2026-10-27: 覗く像のパスで霧の向こうの物（霧の遠端より先）を描かない、玉越しの裏の層の見た目は変えない): how far the peek
- * image reaches — the scene's haze's far end where the body stands (plaza.ts fogRangeAt: 150 m on the way, 300 m in the town,
- * where S-35 cleared the air for the landmarks). Past it everything is haze: nothing the peek image left out was to be seen. In
- * the town, though, hardly anything lies past it — what the peek image draws toward the town is the workshop's furniture, the
- * slope and the town's houses 95–200 m off, inside the haze — so it lowers no draw calls there (判断待ち: the way's far end,
- * plaza.ts FOG_WAY.far, would: process/slices/S-41.md). Dev: ?peekFar=<m>, the probe's setPeekFar.
+ * S-41, S-44 (発案者 2026-10-28: 覗く像の遠端は 150m、ただし目印は遠くても描く): how far the peek image reaches — the way's haze's far
+ * end (plaza.ts FOG_WAY.far, 150 m), never past the haze where the body stands (fogRangeAt: 150 m on the way, 300 m in the town).
+ * In the town that leaves out the workshop's furniture, the slope and the town's houses 150–300 m off, inside the haze; the
+ * landmarks (plaza.ts markLandmark: the lighthouse, エリア1's chimney, the drop towers, the greenhouse) and the back layer are
+ * drawn however far (PeekPipeline). Dev: ?peekFar=<m>, the probe's setPeekFar.
  */
-const peekFarOf = (fogFar: number): number => fogFar;
+const peekFarOf = (fogFar: number): number => Math.min(fogFar, FOG_WAY.far);
 /** 仮: how long the one-line controls hint stays while the mouse is free. */
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
@@ -721,7 +720,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     drawCalls: 0,
     triangles: 0,
     fallRescues: 0,
-    peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0 },
+    peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0, keptLandmarks: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     autoplay: opts.autopilot
       ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
@@ -2042,6 +2041,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       probe.peekFar.leftOut = pipeline.farLeftOut;
       probe.peekFar.leftOutBack = pipeline.farLeftOutBack;
       probe.peekFar.keptBack = pipeline.farKeptBack;
+      probe.peekFar.keptLandmarks = pipeline.farKeptLandmarks;
     },
     resize() {
       pipeline.resize();

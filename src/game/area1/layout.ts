@@ -295,68 +295,98 @@ export const ROOM2: RoomDecl = {
  * two roofs, the north one long — a ridge running west to where the shortcut's stairs go down to the entrance plaza — the south
  * one short (a dead end, its reason a glimmer of the back layer: ルール9). Two bridges of the back layer cross the valley, one
  * to each (裏の橋が左右に分かれて架かり), and on the terrace a pedestal by each (台座は左右の屋根に1つずつ): each pedestal's sphere
- * holds its own bridge and none of the other's. The drop hovers on the north roof just across its bridge: inside the north
- * pedestal's sphere, outside the south one's. Placed, the vidro cannot peek — so you peek first, from the edge (the lip
- * between the bridges), and remember which bridge goes on to the drop. Placed on the wrong one, you walk out to an empty roof
- * and back, and pick the vidro up (原則3: 罰がない).
+ * holds its own bridge and none of the other's. The drop hovers on the north roof across its bridge: inside the north
+ * pedestal's sphere, outside the south one's. Placed, the vidro cannot peek — so you peek first, from the lookout at the
+ * valley's front, and remember which bridge goes on to the drop. Placed on the wrong one, you walk out to an empty roof and
+ * back, and pick the vidro up (原則3: 罰がない).
+ *
+ * S-44 (発案者 2026-10-28: 雫を見通せる端を広い見晴らし台にして、北と南の台座から同じくらいの所（谷の正面）に置く; 台地に着いた人が探さ
+ * なくても目に入る; どちらの台座に置いた後も、台地のどこからも雫は見えない): the pedestals and their bridges stand at the terrace's two
+ * ends (it runs 2.4 m further south than S-40's), and between them, at the valley's front, the lookout (見晴らし台): a deck out
+ * over the lip between two walls, a railing across its end — the north wall crumbled (表だけ, as 部屋1's), the south one whole.
+ * Why so: placed on the north pedestal the drop is real, and nothing can hide it from a spot inside that sphere but what is
+ * there in both layers (which hides it from the peek too); so the lookout lies outside both spheres, and between it and the
+ * drop stands what is on the surface alone and outside the north sphere — its crumbled wall, gone from the peek image, there
+ * (no sphere reaches it) once placed. On the north roof a shelter (屋根の立ち上がり: two walls at the roof's corner) hides the drop
+ * from the terrace but for a slot that looks onto the lookout; the lookout's whole south wall and the fallen stones at its
+ * north wall's foot (low, where nobody stands) keep the slant through the slot from the rest of the terrace. Worked out on the
+ * terrace's 0.1 m grid (area1/layout.test.ts).
  */
 
 /** The summit's terrace (頂): where the slope arrives (its north edge), down to the valley's lip (its west edge). */
-export const ROOM3_TERRACE: Rect = rectAt(113.0, 121 + 1.6, -168.4, AREA1_SLOPE.toZ);
+export const ROOM3_TERRACE: Rect = rectAt(113.0, 121 + 1.6, -170.8, AREA1_SLOPE.toZ);
 /** The valley between the roofs (east–west span): nothing walkable in it. */
 export const ROOM3_VALLEY = xSpan(111.2, 113.0);
 /** Across the valley: the north roof (a ridge on west to the shortcut's top) and the south roof (a dead end). */
 export const ROOM3_ROOF_N: Rect = rectAt(94.4, 111.2, -164.0, -158.7);
-export const ROOM3_ROOF_S: Rect = rectAt(106.4, 111.2, -170.0, -166.0);
+export const ROOM3_ROOF_S: Rect = rectAt(106.4, 111.2, -171.8, -167.4);
 /** The two bridges of the back layer, each from 0.3 m onto the terrace to 0.3 m onto its roof, `width` across. */
-export const ROOM3_BRIDGE_N: Box = boxAt(110.9, 113.3, SUMMIT_Y - 0.3, SUMMIT_Y, -160.1, -158.7);
-export const ROOM3_BRIDGE_S: Box = boxAt(110.9, 113.3, SUMMIT_Y - 0.3, SUMMIT_Y, -168.1, -166.7);
-/** The pedestals by each bridge, on the terrace, just in from the lip. */
+export const ROOM3_BRIDGE_N: Box = boxAt(110.9, 113.3, SUMMIT_Y - 0.3, SUMMIT_Y, -161.2, -159.8);
+export const ROOM3_BRIDGE_S: Box = boxAt(110.9, 113.3, SUMMIT_Y - 0.3, SUMMIT_Y, -169.6, -168.2);
+/** The pedestals by each bridge, on the terrace, just in from the lip: S-44 at its two ends, the bridges between. */
 export const ROOM3_PEDESTAL_N: PedestalDecl = {
   id: 'area1-summit-n',
-  base: [eastX(113.75), SUMMIT_Y, -160.9],
-  orb: [eastX(113.75), SUMMIT_Y + 1.05, -160.9],
+  base: [eastX(113.75), SUMMIT_Y, -159.1],
+  orb: [eastX(113.75), SUMMIT_Y + 1.05, -159.1],
 };
 export const ROOM3_PEDESTAL_S: PedestalDecl = {
   id: 'area1-summit-s',
-  base: [eastX(113.75), SUMMIT_Y, -165.9],
-  orb: [eastX(113.75), SUMMIT_Y + 1.05, -165.9],
+  base: [eastX(113.75), SUMMIT_Y, -170.2],
+  orb: [eastX(113.75), SUMMIT_Y + 1.05, -170.2],
 };
 /**
- * S-41 (発案者 2026-10-27: 部屋3の雫は屋根の陰に置き、谷の端から覗いたときだけ見通せる; どちらの台座に置いた後も雫は見えない): 屋根の立ち上がり —
- * two walls standing up off the north roof's east edge (the roof house's walls carried on above its flat top), south of where
- * the north bridge lands, a gap between them. The drop hovers in the lee of the northern one, on the roof behind it: from the
- * terrace the walls hide it — from its pedestals, from where the slope arrives — but for one steep slant through the gap, which
- * comes down on the terrace at its south-west corner, by the valley's edge where the south bridge leaves (端). Each a rect on
- * the ground and its top.
+ * S-41, S-44 (屋根の陰): the shelter at the north roof's corner, north of where the north bridge lands — the roof house's walls
+ * carried on above its flat top: one on the roof's edge (east) from there to the roof's north edge, one across between the drop
+ * and the bridge's landing (south). The drop hovers in their lee; between their ends a slot looks out south-east, onto the
+ * lookout. Each a rect on the ground and its top.
  */
 export const ROOM3_SHADE: readonly (Rect & { top: number })[] = [
-  { ...rectAt(110.7, 111.2, -161.95, -160.15), top: SUMMIT_Y + 2.4 },
-  { ...rectAt(110.7, 111.2, -164.0, -163.6), top: SUMMIT_Y + 2.4 },
+  { ...rectAt(110.9, 111.2, -159.79, -158.7), top: SUMMIT_Y + 2.4 },
+  { ...rectAt(109.4, 110.5, -159.75, -159.55), top: SUMMIT_Y + 2.4 },
 ];
 /**
- * S-41: 崩れた壁 on the lip (表にだけあるもの, as 部屋1's: 3部屋目は前の2部屋の組み合わせ) — along the terrace's south-west edge, where
- * the slant through the walls comes down and the south bridge leaves. In the peek image it is not there: from the edge behind
- * it the drop's light shows across the valley. It stands outside the north pedestal's sphere: with the vidro placed there the
- * drop is real, but the wall still stands between (置くと先が見えない — 覚えておくしかない). Inside the south pedestal's sphere it
- * is cut (S-28): placed there, the way onto the south bridge is open.
+ * S-44 見晴らし台: the lookout at the valley's front, between the bridges, about as far from either pedestal and outside both their
+ * spheres. `floor`: where one stands, between its walls, from the deck's end out over the valley (its railing across, 柵) to its
+ * way in on the terrace (east). `wallS`: its south wall, whole (both layers), from its way in out past the deck's end. `heap`: the fallen stones at its north wall's foot on
+ * the lip (both layers, low: the eye sees over them; nobody stands there). `rail`: the railing across the deck's end.
+ * `lamps`: its two lamps on brass posts, their milky globes' middles — one rising from the end of its south wall out past the
+ * railing (its edge), one from the end of its crumbled wall by its way in (the walls hold the body off the posts) (S-44 review: from where the slope arrives the railing is behind the crumbled wall — whole up past
+ * the eye, as it must be to hide the drop — the lamps stand over the walls and mark the lookout from there: 探さなくても目に入る;
+ * neither stands where one looks from it toward the drop: north-west).
+ */
+const LOOKOUT_FLOOR = rectAt(112.4, 116.0, -165.95, -163.55);
+export const ROOM3_LOOKOUT = {
+  floor: LOOKOUT_FLOOR,
+  wallS: boxAt(112.0, 116.0, SUMMIT_Y, SUMMIT_Y + 2.4, -166.35, -165.95),
+  heap: boxAt(113.0, 113.7, SUMMIT_Y, SUMMIT_Y + 0.8, -163.15, -161.9),
+  rail: { height: 1.0, thickness: 0.06 },
+  lamps: [
+    [LOOKOUT_FLOOR.minX - 0.2, SUMMIT_Y + 3.2, LOOKOUT_FLOOR.minZ - 0.2],
+    [LOOKOUT_FLOOR.maxX - 0.2, SUMMIT_Y + 3.2, LOOKOUT_FLOOR.maxZ + 0.2],
+  ] as readonly Vec3[],
+} as const;
+/**
+ * S-41, S-44: 崩れた壁 (表にだけあるもの, as 部屋1's: 3部屋目は前の2部屋の組み合わせ) — the lookout's north wall, from its way in out over
+ * the valley past the deck's end (broken off there). In the peek image it is not there: from the lookout the drop shows past
+ * it, through the shelter's slot across the valley. It lies outside both pedestals' spheres: with the vidro placed on the north
+ * one the drop is real, but the wall still stands between (置くと先が見えない — 覚えておくしかない).
  */
 export const ROOM3_RAILING: SurfaceDecl = {
   id: 'area1-summit-wall',
-  box: boxAt(112.95, 113.3, SUMMIT_Y, SUMMIT_Y + 2.4, -168.4, -165.0),
+  box: boxAt(111.75, 116.0, SUMMIT_Y, SUMMIT_Y + 2.4, -163.55, -163.15),
 };
-/** 光の雫: on the north roof, in the lee of the northern wall (屋根の陰). S-40 had it just across the bridge, in plain sight. */
+/** 光の雫: on the north roof, in the lee of the shelter at its corner (屋根の陰). */
 export const ROOM3_DROP = {
   id: 'area1-room3',
-  at: [eastX(110.1), SUMMIT_Y + 1.0, -160.95] as Vec3,
+  at: [eastX(110.35), SUMMIT_Y + 1.0, -159.1] as Vec3,
 } as const;
-/**
- * "端": where to peek from — on the terrace at its south-west corner, behind the crumbled wall on the lip, where the slant
- * through the gap between the roof's walls comes down (S-41; S-40's stood between the bridges, both bridges and the drop's
- * roof ahead).
- */
-const ROOM3_EDGE_E = 113.85;
-export const ROOM3_EDGE: Vec3 = [eastX(ROOM3_EDGE_E), SUMMIT_Y, -167.55];
+/** "端": where to peek from — on the lookout, its view's start (S-41's stood at the terrace's south-west corner). */
+const ROOM3_EDGE_E = 113.5;
+export const ROOM3_EDGE: Vec3 = [
+  eastX(ROOM3_EDGE_E),
+  SUMMIT_Y,
+  (ROOM3_LOOKOUT.floor.minZ + ROOM3_LOOKOUT.floor.maxZ) / 2,
+];
 /** 部屋3 as the game's session plays it. */
 export const ROOM3: RoomDecl = {
   id: 'area1-room3',
@@ -425,7 +455,15 @@ export const SHORTCUT_GATE: SurfaceDecl = {
  */
 export const SHORTCUT_LEGS: readonly SettleSweep[] = [
   {
-    box: boxAt(94.2, 113.5, SUMMIT_Y - 0.6, SUMMIT_Y + 2.4, -160.8, SHORTCUT_STAIRS.topZ),
+    // (S-44: the north bridge lands further south, by the shelter at the roof's corner)
+    box: boxAt(
+      94.2,
+      113.5,
+      SUMMIT_Y - 0.6,
+      SUMMIT_Y + 2.4,
+      ROOM3_BRIDGE_N.min[2] - 0.2,
+      SHORTCUT_STAIRS.topZ,
+    ),
     direction: [COMPASS.west[0], 0, COMPASS.west[1]],
   },
   {
@@ -623,14 +661,14 @@ export const AREA1_HOUSES: readonly House[] = [
   house('court', 128.0, 133.6, -150.6, ROOM2_COURT.minZ, 8.2),
   house('court', SLOPE_E, 129.0, AREA1_SLOPE.toZ, -150.6, SUMMIT_H + 1.8),
   // the summit: east of the terrace, the house under the chimney, south of the terrace
-  house('summit', SLOPE_E, 131.0, -170.0, AREA1_SLOPE.toZ, SUMMIT_H + 1.8),
+  house('summit', SLOPE_E, 131.0, ROOM3_TERRACE.minZ - 1.6, AREA1_SLOPE.toZ, SUMMIT_H + 1.8),
   house('summit', 131.0, 139.0, -162.0, -154.0, SUMMIT_H + 1.6, false),
-  house('summit', 113.0, SLOPE_E, -173.0, ROOM3_TERRACE.minZ, SUMMIT_H + 1.8),
+  house('summit', 113.0, SLOPE_E, ROOM3_TERRACE.minZ - 4.6, ROOM3_TERRACE.minZ, SUMMIT_H + 1.8),
   // across the valley: the north roof (the ridge) and the south roof, walked on (flat, a floor on top); the houses round them
   house('summit', 94.4, 111.2, ROOM3_ROOF_N.minZ, ROOM3_ROOF_N.maxZ, SUMMIT_H - 0.05, true, 'flat'),
   house('summit', 106.4, 111.2, ROOM3_ROOF_S.minZ, ROOM3_ROOF_S.maxZ, SUMMIT_H - 0.05, true, 'flat'),
   house('summit', 88.0, 94.4, -166.0, -156.0, SUMMIT_H + 2.4),
-  house('summit', 94.4, 106.0, -170.0, ROOM3_ROOF_N.minZ, SUMMIT_H - 2.2, false),
+  house('summit', 94.4, 106.0, ROOM3_ROOF_S.minZ, ROOM3_ROOF_N.minZ, SUMMIT_H - 2.2, false),
   house('summit', 97.8, 106.0, ROOM3_ROOF_N.maxZ, -151.0, SUMMIT_H - 4.8, false),
   house('summit', 106.0, 112.6, ROOM3_ROOF_N.maxZ, -152.0, SUMMIT_H - 4.2, false),
   // down the hill beside the shortcut's stairs (they pass between)
@@ -711,8 +749,9 @@ export const MOTE_PATHS: readonly MotePath[] = [
     [eastX(124.0), -143.4],
     [AREA1_SLOPE.x, -146.2],
     [AREA1_SLOPE.x, -157.0],
-    // S-41: to the valley's edge, where the slant through the roof's walls falls (端)
-    [eastX(ROOM3_EDGE_E + 0.7), ROOM3_EDGE[2] + 0.4],
+    // S-44: round the lookout's walls to its way in, and in onto it (端)
+    [eastX(eastOf(ROOM3_LOOKOUT.floor.maxX) + 1.0), ROOM3_EDGE[2]],
+    [eastX(ROOM3_EDGE_E + 0.3), ROOM3_EDGE[2]],
   ],
   [
     [eastX(115.5), -159.4],
@@ -757,7 +796,7 @@ export function motePathAt(path: MotePath, u: number, out: [number, number] = [0
  * light, a gate opening; none: it stays).
  */
 export const AREA1_GLIMMERS: readonly { at: Vec3; spread: number; rise: number; until?: string }[] = [
-  { at: [eastX(108.8), SUMMIT_Y + 0.9, -168.0], spread: 1.4, rise: 1.2 },
+  { at: [eastX(108.8), SUMMIT_Y + 0.9, (ROOM3_ROOF_S.minZ + ROOM3_ROOF_S.maxZ) / 2], spread: 1.4, rise: 1.2 },
   {
     at: [eastX(96), SUMMIT_Y - 0.4, ROOM3_ROOF_N.maxZ + 1.4],
     spread: 1.0,
@@ -812,6 +851,8 @@ export const AREA1_FLOOR_ZONES: readonly FloorZoneDecl[] = [
   { name: 'area1-court', material: 'stone', box: ROOM2_COURT },
   { name: 'area1-balcony', material: 'stone', box: ROOM2_BALCONY },
   { name: 'area1-summit', material: 'stone', box: ROOM3_TERRACE },
+  // S-44: the lookout's deck out over the lip
+  { name: 'area1-lookout', material: 'stone', box: ROOM3_LOOKOUT.floor },
   { name: 'area1-bridge-n', material: 'frosted', box: zoneBox(ROOM3_BRIDGE_N) },
   { name: 'area1-bridge-s', material: 'frosted', box: zoneBox(ROOM3_BRIDGE_S) },
   { name: 'area1-roof-n', material: 'stone', box: ROOM3_ROOF_N },
@@ -863,6 +904,8 @@ export const AREA1_KEEP_OUT: readonly Rect[] = [
   rectAt(78, 131, -150, -106),
   rectAt(112, 131, -162, -126),
   rectAt(86, 131, -169.8, -145),
+  // S-44: the summit's terrace and the south roof run further south (short of the street's chimneys east of the terrace)
+  rectAt(86, 123, ROOM3_ROOF_S.minZ - 0.8, -169.8),
   rectAt(122, 133.4, -153, -130),
 ];
 
@@ -879,7 +922,8 @@ function viewAt(feet: Vec3, at: Vec3): { feet: Vec3; yaw: number; pitch: number 
  * 見る位置 (?spawn=…): on the road where the sky moves toward morning, in the entrance plaza looking up at the chimney, before
  * 部屋1's alley (the wall and the pedestal ahead), before its wall looking at the drop behind it; (S-40) at the slope's foot
  * looking up the first flight, at 部屋2's courtyard and before each of its pedestals, at the summit where the slope arrives, at
- * 部屋3's edge (both bridges ahead), at the shortcut's top looking down to the plaza, and at its foot in the plaza.
+ * 部屋3's edge (S-44: on the lookout, the drop's way ahead), at the shortcut's top looking down to the plaza, and at its foot in
+ * the plaza.
  */
 export const AREA1_SPAWNS = {
   'area1-road': {
@@ -914,12 +958,15 @@ export const AREA1_SPAWNS = {
   'area1-court-a': viewAt([eastX(132.0), COURT_Y, -145.6], ROOM2_DROP.at),
   /** Before 台座 B, looking at where the drop hovers behind the wall. */
   'area1-court-b': viewAt([eastX(128.2), COURT_Y, -145.0], ROOM2_DROP.at),
-  /** 部屋3: where the slope arrives on the summit, the valley and the roofs across it ahead (west). */
+  /**
+   * 部屋3: where the slope arrives on the summit, the valley and the roofs across it ahead (west); S-44: the lookout at the
+   * valley's front in the middle of the picture (its railing at the deck's end).
+   */
   'area1-summit': viewAt(
     [AREA1_SLOPE.x, SUMMIT_Y, AREA1_SLOPE.toZ - 1.2],
-    [eastX(108), SUMMIT_Y + 0.6, -163.4],
+    [ROOM3_LOOKOUT.floor.minX, SUMMIT_Y + 0.6, ROOM3_EDGE[2]],
   ),
-  /** 部屋3's edge (端), between the bridges, looking across the valley at the gap in the roof's walls (覗いてから置く). */
+  /** 部屋3's edge (端; S-44: on the lookout), looking across the valley at the shelter's slot (覗いてから置く). */
   'area1-edge': viewAt(ROOM3_EDGE, ROOM3_DROP.at),
   /** S-41: in the street before the gate across the slope's foot, looking up the first flight through it to the courtyard. */
   'area1-gate-court': viewAt(

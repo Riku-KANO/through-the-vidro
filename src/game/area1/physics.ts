@@ -25,6 +25,8 @@ import {
   ROOM2_COURT,
   ROOM2_RAIL,
   ROOM2_STAIRS,
+  ROOM3_LOOKOUT,
+  ROOM3_RAILING,
   ROOM3_ROOF_N,
   ROOM3_ROOF_S,
   ROOM3_SHADE,
@@ -92,6 +94,30 @@ export function balconyRails(): { at: [number, number]; along: readonly [number,
     },
   ];
 }
+
+/**
+ * S-44: 部屋3's lookout railing (brass, shared) as a thin wall across its deck's end over the valley, from its south wall to its
+ * north wall (art.ts draws the same line).
+ */
+export function lookoutRail(): { at: [number, number]; along: readonly [number, number]; length: number } {
+  const f = ROOM3_LOOKOUT.floor;
+  return {
+    at: [f.minX + ROOM3_LOOKOUT.rail.thickness / 2, (f.minZ + f.maxZ) / 2],
+    along: COMPASS.north,
+    length: f.maxZ - f.minZ,
+  };
+}
+/**
+ * S-44: the lookout's deck — the stub out over the valley's lip under its floor and its walls (the terrace's slab holds the
+ * rest): x and z, its top the summit's floor, `depth` deep (art.ts draws the same).
+ */
+export const LOOKOUT_DECK = {
+  minX: ROOM3_RAILING.box.min[0],
+  maxX: ROOM3_TERRACE.minX + OVERLAP,
+  minZ: ROOM3_LOOKOUT.wallS.min[2],
+  maxZ: ROOM3_RAILING.box.max[2],
+  depth: 0.45,
+} as const;
 
 /** Every static collider of エリア1 (but the back-layer footing and the surface-only walls). */
 export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
@@ -180,7 +206,7 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
     ),
   );
   for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
-  // S-41: 部屋3's shade — the roof's walls on the north roof's edge (its crumbled wall on the lip is surface-only: SurfaceColliders)
+  // S-41, S-44: 部屋3's shade — the shelter's walls at the north roof's corner (the lookout's crumbled wall is surface-only)
   for (const w of ROOM3_SHADE) {
     const h = w.top - (SUMMIT_Y - SLAB);
     descs.push(
@@ -190,6 +216,31 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
         (w.minZ + w.maxZ) / 2,
       ),
     );
+  }
+  // S-44: 部屋3's lookout — its deck out over the lip, its railing across the deck's end, its whole south wall and the fallen
+  // stones at its north wall's foot (its crumbled north wall is surface-only: SurfaceColliders)
+  {
+    const d = LOOKOUT_DECK;
+    descs.push(
+      R.ColliderDesc.cuboid((d.maxX - d.minX) / 2, d.depth / 2, (d.maxZ - d.minZ) / 2).setTranslation(
+        (d.minX + d.maxX) / 2,
+        SUMMIT_Y - d.depth / 2,
+        (d.minZ + d.maxZ) / 2,
+      ),
+    );
+    const r = lookoutRail();
+    const rail = ROOM3_LOOKOUT.rail;
+    descs.push(wall(R, r.at, r.along, r.length, SUMMIT_Y - 0.05, rail.height + 0.05, rail.thickness));
+    for (const b of [ROOM3_LOOKOUT.wallS, ROOM3_LOOKOUT.heap]) {
+      const bottom = SUMMIT_Y - SLAB;
+      descs.push(
+        R.ColliderDesc.cuboid(
+          (b.max[0] - b.min[0]) / 2,
+          (b.max[1] - bottom) / 2,
+          (b.max[2] - b.min[2]) / 2,
+        ).setTranslation((b.min[0] + b.max[0]) / 2, (bottom + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2),
+      );
+    }
   }
   // S-41: the gates' posts (their leaves turn: Area1Gates)
   for (const g of AREA1_GATES)

@@ -104,8 +104,10 @@ interface RoomProbe {
         pedestals: { n: P3; s: P3 };
         ids: { n: string; s: string; drop: string };
         drop: P3;
-        /** S-41: the roof's walls the drop hovers behind. */
+        /** S-41: the roof's walls the drop hovers behind (S-44: the shelter on the north roof's corner). */
         shade: (Rect & { top: number })[];
+        /** S-44: the lookout's crumbled north wall (its south wall mirrors it about the edge). */
+        railing: Box;
       };
       shortcut: { minX: number; maxX: number; topZ: number; footZ: number; gate: Box; seconds: number };
     };
@@ -510,12 +512,20 @@ for (const backend of backends) {
     await lookAt(page, [r3.terrace.minX - 6, r3.summitY + 1.4, zN]);
     const atLip = (await pushUntilStopped(page, 'KeyW')).at(-1) as RoomProbe;
     expect(atLip.position.x).toBeGreaterThan(r3.terrace.minX - 0.45);
-    // peek from the edge (端) toward the drop's bridge
+    // peek from the edge (端; S-44: the lookout, between its walls: round them by its way in, east of them)
+    const way = r3.railing.max[0] + 0.7;
+    const northOf = r3.railing.max[2] + 0.6;
+    // (its south wall mirrors the north one about the edge's line: the probe gives the north one, room.ts not widened for it)
+    const southOf = 2 * r3.edge[2] - r3.railing.max[2] - 0.6;
+    await walkTo(page, way, northOf, { within: 0.3 });
+    await walkTo(page, way, r3.edge[2], { within: 0.3 });
     await walkTo(page, r3.edge[0], r3.edge[2], { within: 0.25 });
     await lookAt(page, r3.drop);
     const peek = await peekShot(page, join(shotDir, 'summit-edge-peek.png'));
     expect(peek.drawCalls).toBeLessThanOrEqual(BUDGET.drawCalls);
     // the wrong one first: the south pedestal, over its bridge to an empty roof (no drop to touch), back, picked up
+    await walkTo(page, way, r3.edge[2], { within: 0.3 });
+    await walkTo(page, way, southOf, { within: 0.3 });
     await walkTo(page, lipX, zS, { within: 0.25 });
     await use(page, r3.pedestals.s, 'pedestal', r3.ids.s);
     await waitRoom(page, 'r.sphereRadius > 3.99', 5_000);
@@ -528,15 +538,16 @@ for (const backend of backends) {
     await use(page, r3.pedestals.s, 'pedestal', r3.ids.s);
     await waitRoom(page, "r.orb === 'hand' && r.sphereRadius === 0", 5_000);
     // the north one: over its bridge to the drop — the third: the shortcut's light runs
+    await walkTo(page, way, southOf, { within: 0.3 });
+    await walkTo(page, way, northOf, { within: 0.3 });
     await walkTo(page, lipX, zN, { within: 0.25 });
     await use(page, r3.pedestals.n, 'pedestal', r3.ids.n);
     await waitRoom(page, 'r.sphereRadius > 3.99', 5_000);
     const across = await walkTo(page, r3.roofs.n.maxX - 0.4, zN, { within: 0.25 });
     expect(across.position.y).toBeCloseTo(r3.summitY, 1);
-    // (S-41: the drop hovers in the lee of the roof's walls: onto the roof past the northern one, round into its lee)
-    const wallA = r3.shade[0] as Rect & { top: number };
-    await walkTo(page, wallA.minX - 0.5, zN - 0.1, { within: 0.25 });
-    await walkTo(page, r3.drop[0], wallA.maxZ - 0.2, { within: 0.25 });
+    // (S-44: the drop hovers in the lee of the shelter on the roof's corner: by its slot where the bridge lands)
+    const [wallA, wallB] = r3.shade as [Rect & { top: number }, Rect & { top: number }];
+    await walkTo(page, wallA.minX - 0.15, wallB.minZ - 0.4, { within: 0.2 });
     await use(page, r3.drop, 'drop', r3.ids.drop);
     await waitRoom(page, 'r.areas.area1.taken === 3', 6_000);
     // watch the light along the ridge to the stairs' top
