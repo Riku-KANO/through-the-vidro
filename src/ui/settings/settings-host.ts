@@ -55,7 +55,6 @@ export interface SettingsProbe {
   tab: SettingsTab;
   /** The focused row, null on the tab strip. */
   row: SettingsRow | null;
-  hovered: string | null;
   /** The settings as shown and in effect (the quality as the shell has it). */
   values: Settings;
   /** False once the browser refused to keep them. */
@@ -72,6 +71,8 @@ export interface SettingsProbe {
   sounds: { cue: string; at: number; rang: boolean }[];
   /** The longest frame (ms) while opening, open, and closing. */
   frameMs: { opening: number; open: number; closing: number };
+  /** Dev hold (screenshots): stands the opening at this many seconds in; null lets it go on. The only field a test writes. */
+  hold: number | null;
 }
 
 export interface SettingsHostOptions {
@@ -149,7 +150,6 @@ export class SettingsHost {
       from: null,
       tab: SETTINGS_TABS[0],
       row: null,
-      hovered: null,
       values: v,
       persistent: opts.store.persistent,
       notices: 0,
@@ -160,6 +160,7 @@ export class SettingsHost {
       respondedAt: null,
       sounds: [],
       frameMs: { opening: 0, open: 0, closing: 0 },
+      hold: null,
     };
     // the kept settings take effect from the start (the language was read by the host before any screen was made)
     for (const ch of ['master', 'sfx', 'ambience', 'ui'] as const) opts.gate.setVolume(ch, v.volumes[ch]);
@@ -214,8 +215,11 @@ export class SettingsHost {
     this.recordFrame(now);
     this.elapsed += dt;
     const was = this.timeline.phase;
-    if (this.isUp && this.timeline.interactive) this.pollPad();
-    this.timeline.update(dt);
+    // the pad only while the panel is up (open() read which buttons were held already)
+    if (this.isUp) this.pollPad();
+    const hold = this.probe.hold;
+    if (hold !== null && this.timeline.phase === 'opening') this.timeline.holdAt(hold);
+    else this.timeline.update(dt);
     if (was !== 'closed' && this.timeline.phase === 'closed') {
       const from = this.from;
       this.from = null;

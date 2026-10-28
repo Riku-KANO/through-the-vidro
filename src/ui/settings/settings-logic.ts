@@ -404,6 +404,12 @@ export class PanelTimeline {
     return true;
   }
 
+  /** Dev hold (screenshots): stands the opening at this many seconds in. */
+  holdAt(seconds: number): void {
+    if (this.phaseValue !== 'opening') return;
+    this.t = Math.min(PANEL_SECONDS, Math.max(0, seconds));
+  }
+
   update(dt: number): void {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
     if (this.phaseValue === 'opening') {

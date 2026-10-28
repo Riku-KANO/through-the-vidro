@@ -337,9 +337,22 @@ for (const backend of backends) {
     await waitProbe(page, "p.focused === 'start'");
     for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown');
     await waitProbe(page, "p.focused === 'settings'");
+    // held half way through the opening for a picture of the pane spreading sideways (the probe's hold)
+    await page.evaluate(() => {
+      (window.__vidro.sceneProbe as { settings: { hold: number | null } }).settings.hold = 0.15;
+    });
     await markKey(page);
     await page.keyboard.press('Enter');
-    await waitSettings(page, "q.phase === 'opening' || q.phase === 'open'");
+    await waitSettings(page, "q.phase === 'opening' && q.open > 0.3");
+    await page.waitForTimeout(200);
+    await page.screenshot({ path: join(shotDir, 'home-opening.png') });
+    const spreading = await page.locator('[data-ui="settings"] [data-part="glass"]').boundingBox();
+    const full = await page.locator('[data-ui="settings"]').boundingBox();
+    expect(spreading?.width ?? 0, 'part way: narrower than the pane').toBeLessThan((full?.width ?? 0) * 0.8);
+    expect(spreading?.height, 'spreading sideways: as high as the pane').toBeCloseTo(full?.height ?? 0, 0);
+    await page.evaluate(() => {
+      (window.__vidro.sceneProbe as { settings: { hold: number | null } }).settings.hold = null;
+    });
     await waitSettings(page, "q.phase === 'open'", 3_000);
     const opened = await settings(page);
     const pressed = await keyAt(page);
@@ -462,8 +475,8 @@ for (const backend of backends) {
     await waitProbe(page, "p.focused === 'settings'");
     const closed = await settings(page);
     expect(closed.sounds.some((s) => s.cue === 'close' && s.rang)).toBe(true);
-    // the open and close make no long frame (headless, as S-42: a generous bound)
-    expect(closed.frameMs.opening).toBeLessThan(100);
+    // the close makes no long frame (headless, as S-42: a generous bound; the opening here waited for a screenshot, the
+    // pause's test measures it)
     expect(closed.frameMs.closing).toBeLessThan(100);
     // and the drops take the keys again: down to クレジット, up to 設定, Enter opens it again
     await page.keyboard.press('ArrowDown');
@@ -649,10 +662,24 @@ for (const backend of backends) {
     const s2 = await sound(page);
     expect(g2.voicesStarted).toBe(g2.uiVoices + s2.voicesStarted + s2.footsteps.voicesStarted);
     const p = await pause(page);
+    // the pane's opening and closing make no long frame (パネルの開閉で長いフレームを作らない; headless: a generous bound)
+    const frames = (await settings(page)).frameMs;
+    expect(frames.opening).toBeLessThan(100);
+    expect(frames.closing).toBeLessThan(100);
     writeFileSync(
       join(root, `artifacts/S-43/pause-${backend}.json`),
       JSON.stringify(
-        { backend, before, after, shell0, low, pauseLook, drawnWhileHeld: p.drawnWhileHeld, gate: g2 },
+        {
+          backend,
+          before,
+          after,
+          shell0,
+          low,
+          pauseLook,
+          drawnWhileHeld: p.drawnWhileHeld,
+          gate: g2,
+          frames,
+        },
         null,
         2,
       ),

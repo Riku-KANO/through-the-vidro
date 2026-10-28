@@ -273,6 +273,16 @@ describe('PanelTimeline (トランジション設計: 設定パネル — 曇り
     expect(t.phase).toBe('open');
   });
 
+  it('can be held part way through the opening (screenshots), and goes on from there', () => {
+    const t = new PanelTimeline();
+    t.open();
+    t.holdAt(0.15);
+    expect(t.value).toBeCloseTo(glassEase(0.5), 6);
+    expect(t.phase).toBe('opening');
+    run(t, 0.16);
+    expect(t.phase).toBe('open');
+  });
+
   it('does not close what is closed, nor open what is open', () => {
     const t = new PanelTimeline();
     expect(t.close()).toBe(false);
