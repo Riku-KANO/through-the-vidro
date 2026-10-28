@@ -68,11 +68,29 @@ export interface ShortcutDecl {
   readonly surface?: readonly SurfaceDecl[];
 }
 
+/**
+ * S-41 部屋は順に開く (発案者 2026-10-27: 前の部屋の雫で次の部屋への道が開く): a gate on the way into a room, opened by the drop of the
+ * room before it — the way the prologue's gate opens (S-34: once the drop's light has come to it, it swings open). Its look and
+ * colliders are the area's (area1/art.ts, physics.ts); the session says how far it is open (game/prologue/session.ts).
+ */
+export interface AreaGateDecl {
+  readonly id: string;
+  /** The room whose drop opens it (the way on to the room after it). */
+  readonly after: string;
+  /** Seconds after that drop is taken that its light has come to the gate, and the gate starts to open. */
+  readonly opensAt: number;
+}
+
 export interface AreaDecl {
   readonly id: string;
   readonly rooms: readonly RoomDecl[];
   /** S-40: its shortcut home, fixed by the light once its last drop is taken. */
   readonly shortcut?: ShortcutDecl;
+  /**
+   * S-41: the gates between its rooms, in order (none: every room open from the start, as the prologue's one room). With any,
+   * every room after the first has one, opened by the room before it (checkAreas).
+   */
+  readonly gates?: readonly AreaGateDecl[];
 }
 
 /** A drop with the area and room it belongs to. */
@@ -154,7 +172,9 @@ export function roomOfDrop(areas: readonly AreaDecl[], dropId: string): RoomDecl
  * What is wrong with a set of areas, as messages (none: all is well): ids that repeat (areas, rooms, pedestals, drops,
  * walls, footing), a drop out of every pedestal's sphere of `reach` (it could never be touched: 光の雫は覗いて見つけ、置いて
  * 実体化させてから触れて回収する), a sweep of settling light (a room's, a shortcut's legs) whose box cuts a footing or surface-only
- * segment of its area in two (its drawing would settle where its collider never does: S-34 review, layers/settle.ts).
+ * segment of its area in two (its drawing would settle where its collider never does: S-34 review, layers/settle.ts), and (S-41)
+ * a hole in the order its rooms open in: a gate after a room the area has not, a room after the first with no gate opened by
+ * the room before it (when the area has gates at all).
  */
 export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] {
   const problems: string[] = [];
@@ -198,6 +218,26 @@ export function checkAreas(areas: readonly AreaDecl[], reach: number): string[] 
       );
       if (!inSome) problems.push(`drop "${r.drop.id}" lies outside every sphere of room "${r.id}"`);
     }
+    // S-41: the order its rooms open in
+    const gates = a.gates ?? [];
+    for (const g of gates) {
+      once('gate', g.id);
+      const at = a.rooms.findIndex((r) => r.id === g.after);
+      if (at < 0) problems.push(`gate "${g.id}" opens after room "${g.after}", which area "${a.id}" has not`);
+      else if (at === a.rooms.length - 1)
+        problems.push(`gate "${g.id}" opens after the last room of area "${a.id}": it leads to no room`);
+      // (its events and its sound come as its clock crosses the moment: a moment at its start is never crossed)
+      if (!(g.opensAt > 0))
+        problems.push(`gate "${g.id}" opens at ${g.opensAt} s: its light must take some time`);
+    }
+    if (gates.length > 0)
+      for (let i = 1; i < a.rooms.length; i++) {
+        const before = a.rooms[i - 1] as RoomDecl;
+        if (!gates.some((g) => g.after === before.id))
+          problems.push(
+            `room "${(a.rooms[i] as RoomDecl).id}" of area "${a.id}" has no gate opened by room "${before.id}" (rooms open in order)`,
+          );
+      }
   }
   return problems;
 }

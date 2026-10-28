@@ -20,6 +20,7 @@ import {
   ROOM3_DROP,
   ROOM3_EDGE,
   ROOM3_PEDESTAL_N,
+  ROOM3_SHADE,
   SHORTCUT_STAIRS,
   SUMMIT_Y,
   TOWN,
@@ -130,6 +131,9 @@ function area1Script(): Step[] {
   const stairX = (ROOM2_STAIRS.minX + ROOM2_STAIRS.maxX) / 2;
   const bridgeZ = (ROOM3_BRIDGE_N.min[2] + ROOM3_BRIDGE_N.max[2]) / 2;
   const stairsX = (SHORTCUT_STAIRS.minX + SHORTCUT_STAIRS.maxX) / 2;
+  // S-41: the northern of the roof's walls (the drop hovers in its lee), and a spot on the roof west of it, by the bridge
+  const wallA = ROOM3_SHADE[0] as (typeof ROOM3_SHADE)[0];
+  const behindWall = eastX(eastOf(wallA.minX) - 0.5);
   return [
     {
       kind: 'walk',
@@ -205,7 +209,8 @@ function area1Script(): Step[] {
     { kind: 'walk', name: 'walk-landing', to: [AREA1_SLOPE.x, -144.0], within: 0.4 },
     { kind: 'walk', name: 'walk-flight2', to: [AREA1_SLOPE.x, AREA1_SLOPE.toZ - 1.0], within: 0.4 },
     { kind: 'walk', name: 'walk-edge', to: [ROOM3_EDGE[0], ROOM3_EDGE[2]], within: 0.3 },
-    { kind: 'peek', name: 'peek-valley', at: [eastX(110.6), SUMMIT_Y + 0.6, -162.6], seconds: 2.4 },
+    // S-41: from the edge, through the gap in the roof's walls, the drop in their lee (覗いたときだけ見通せる)
+    { kind: 'peek', name: 'peek-valley', at: ROOM3_DROP.at, seconds: 2.4 },
     { kind: 'walk', name: 'walk-pedestal-n', to: [eastX(114.6), bridgeZ], within: 0.3 },
     { kind: 'look', name: 'look-pedestal-n', at: ROOM3_PEDESTAL_N.orb, seconds: 0.8 },
     {
@@ -216,6 +221,9 @@ function area1Script(): Step[] {
       linger: 0.6,
     },
     { kind: 'walk', name: 'walk-bridge-n', to: [eastX(110.8), bridgeZ], within: 0.3 },
+    // S-41: onto the roof past the northern wall's end, round into its lee where the drop hovers
+    { kind: 'walk', name: 'walk-roof', to: [behindWall, bridgeZ - 0.1], within: 0.3 },
+    { kind: 'walk', name: 'walk-lee', to: [ROOM3_DROP.at[0], wallA.maxZ - 0.2], within: 0.25 },
     { kind: 'use', name: 'touch-drop3', at: ROOM3_DROP.at, until: (s) => s.taken >= 4, linger: 0.4 },
     // the third drop: its light runs over the bridge and along the ridge, then down the shortcut — watch it go
     {
@@ -224,6 +232,7 @@ function area1Script(): Step[] {
       at: [stairsX, SUMMIT_Y - 1, SHORTCUT_STAIRS.topZ + 2],
       seconds: 3.2,
     },
+    { kind: 'walk', name: 'walk-roof-back', to: [behindWall, bridgeZ - 0.1], within: 0.3 },
     { kind: 'walk', name: 'walk-bridge-back', to: [eastX(114.6), bridgeZ], within: 0.3 },
     {
       kind: 'use',
