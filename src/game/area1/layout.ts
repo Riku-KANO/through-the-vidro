@@ -913,7 +913,8 @@ function viewAt(feet: Vec3, at: Vec3): { feet: Vec3; yaw: number; pitch: number 
  * 見る位置 (?spawn=…): on the road where the sky moves toward morning, in the entrance plaza looking up at the chimney, before
  * 部屋1's alley (the wall and the pedestal ahead), before its wall looking at the drop behind it; (S-40) at the slope's foot
  * looking up the first flight, at 部屋2's courtyard and before each of its pedestals, at the summit where the slope arrives, at
- * 部屋3's edge (both bridges ahead), at the shortcut's top looking down to the plaza, and at its foot in the plaza.
+ * 部屋3's edge (S-44: on the lookout, the drop's way ahead), at the shortcut's top looking down to the plaza, and at its foot in
+ * the plaza.
  */
 export const AREA1_SPAWNS = {
   'area1-road': {

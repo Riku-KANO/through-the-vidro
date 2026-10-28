@@ -64,6 +64,8 @@ const BUDGET = { drawCalls: 300, triangles: 1_500_000 };
 const S41_COURT_A_PEEK = 274;
 const COURT_A_AIM = 210;
 const PEEK_FAR = 150;
+/** S-44: the street's chimney about 190 m off in the town's haze: its stacks a little darker than the haze behind (≤ 0.07). */
+const CHIMNEY_CONTRAST = 0.025;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -200,13 +202,15 @@ async function hookScene(page: Page): Promise<void> {
 
 /**
  * What a thing adds to the picture now: shown, hidden, shown, hidden — the pixels (share of `region`, a circle in 0..1 of the
- * picture's height, or the whole picture) that change both times with it and are the same in both shots of it shown and of it
- * hidden (the motes and the glimmers drift between shots: they change one way, not both).
+ * picture's height, or the whole picture) that change both times with it by more than `contrast` (luminance 0..1) and are the
+ * same in both shots of it shown and of it hidden (the motes and the glimmers drift between shots: they change one way, not
+ * both). A landmark far in the haze stands out less than the drop's light: it is measured with a lower contrast.
  */
 async function addedPixels(
   page: Page,
   what: string,
   region: { x: number; y: number; r: number } | null,
+  contrast = 0.06,
 ): Promise<number> {
   const hide = (hidden: boolean) =>
     page.evaluate(
@@ -222,7 +226,7 @@ async function addedPixels(
   await hide(false);
   await page.waitForTimeout(100);
   return page.evaluate(
-    async ([b64s, reg]) => {
+    async ([b64s, reg, c]) => {
       const read = async (b64: string) => {
         const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
         const c = new OffscreenCanvas(bmp.width, bmp.height);
@@ -252,11 +256,11 @@ async function addedPixels(
           const h1 = lum(H1.d, i);
           const h2 = lum(H2.d, i);
           if (Math.abs(s1 - s2) > 0.03 || Math.abs(h1 - h2) > 0.03) continue;
-          if (Math.abs(s1 - h1) > 0.06 && Math.abs(s2 - h2) > 0.06) changed++;
+          if (Math.abs(s1 - h1) > c && Math.abs(s2 - h2) > c) changed++;
         }
       return n > 0 ? changed / n : 0;
     },
-    [shots.map((b) => b.toString('base64')), region] as const,
+    [shots.map((b) => b.toString('base64')), region, contrast] as const,
   );
 }
 
@@ -365,7 +369,9 @@ for (const backend of backends) {
       const own = await room(page);
       if (name === 'brow-chimney') await page.screenshot({ path: join(shotDir, 'brow-chimney-peek.png') });
       const chimney =
-        name === 'brow-chimney' ? await addedPixels(page, 'landmark:area1-chimney', own.orbScreen) : null;
+        name === 'brow-chimney'
+          ? await addedPixels(page, 'landmark:area1-chimney', own.orbScreen, CHIMNEY_CONTRAST)
+          : null;
       // everything drawn into it, for the count of what the far end saves
       await setFar(1000);
       await page.waitForTimeout(400);
@@ -392,7 +398,7 @@ for (const backend of backends) {
         // past the far end things are left out, yet the landmark is drawn: the chimney's pixels stay in the vidro's circle
         expect(own.peekFar.leftOut).toBeGreaterThan(0);
         expect(own.peekFar.keptLandmarks).toBeGreaterThan(0);
-        expect(chimney, 'the chimney in the vidro').toBeGreaterThan(0.003);
+        expect(chimney, 'the chimney in the vidro').toBeGreaterThan(0.005);
       }
     }
     writeFileSync(

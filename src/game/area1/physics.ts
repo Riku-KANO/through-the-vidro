@@ -206,7 +206,7 @@ export function area1ColliderDescs(R: typeof RAPIER): RAPIER.ColliderDesc[] {
     ),
   );
   for (const r of [ROOM3_ROOF_N, ROOM3_ROOF_S]) descs.push(slab(R, r.minX, r.maxX, r.minZ, r.maxZ, SUMMIT_Y));
-  // S-41: 部屋3's shade — the roof's walls on the north roof's edge (its crumbled wall on the lip is surface-only: SurfaceColliders)
+  // S-41, S-44: 部屋3's shade — the shelter's walls at the north roof's corner (the lookout's crumbled wall is surface-only)
   for (const w of ROOM3_SHADE) {
     const h = w.top - (SUMMIT_Y - SLAB);
     descs.push(
