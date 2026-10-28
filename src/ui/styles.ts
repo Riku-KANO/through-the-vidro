@@ -145,7 +145,7 @@ const CSS = `
 /* ---- settings (S-43): a pane of frosted glass spreading sideways (--open), the tabs and the settings on it ----
    The pane (glass) is the only frosted part: the body over it is revealed by a clip-path and holds no backdrop filter. */
 .vd-settings { position: absolute; top: 50%; right: max(4vw, 16px); transform: translateY(-50%);
-  width: min(calc(100vw - 32px), max(28em, 38vw)); visibility: hidden; pointer-events: none; --open: 0; }
+  width: min(calc(100vw - 32px), max(30em, 38vw)); visibility: hidden; pointer-events: none; --open: 0; }
 .vd-settings.is-up { visibility: visible; }
 .vd-settings.is-interactive { pointer-events: auto; }
 .vd-settings__glass { position: absolute; inset: 0; border-radius: 1.3em; background: rgba(255, 255, 255, 0.13);
@@ -210,8 +210,11 @@ const CSS = `
 .vd-settings__foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em 1em;
   padding-top: 0.7em; border-top: 1px solid rgba(255, 255, 255, 0.16); }
 .vd-settings__keys { opacity: 0.78; }
-.vd-settings__notice { margin: 0; align-self: center; padding: 0.3em 1.1em 0.34em; border-radius: 999px;
-  background: rgba(44, 34, 24, 0.42); border: 1px solid rgba(255, 236, 204, 0.4); opacity: var(--notice, 0); }
+.vd-settings__notice { position: absolute; left: 50%; top: calc(100% + 0.7em); transform: translateX(-50%); margin: 0;
+  padding: 0.3em 1.1em 0.34em; border-radius: 999px; white-space: nowrap; opacity: var(--notice, 0);
+  background: rgba(44, 34, 24, 0.42); border: 1px solid rgba(255, 236, 204, 0.4);
+  -webkit-backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.7); backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.7); }
+.vd-settings__notice[hidden] { display: none; }
 
 /* ---- コントラスト強化 (アクセシビリティ, S-43): the glass's edges thicker and brighter, the frost behind the text denser ---- */
 .vd-root.vd-contrast { text-shadow: 0 1px 3px rgba(8, 12, 18, 0.7); }

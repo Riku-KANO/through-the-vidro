@@ -198,8 +198,10 @@ export class SettingsPanel {
     this.notice.setAttribute('role', 'status');
     this.notice.textContent = t('setCannotSave');
     foot.append(this.back, this.keys);
-    this.body.append(foot, this.notice);
-    this.el.append(this.glass, this.body);
+    this.body.append(foot);
+    // the notice hangs under the pane (outside the body's clip), on its own frost, only while it is shown
+    this.notice.hidden = true;
+    this.el.append(this.glass, this.body, this.notice);
 
     // hover follows the pointer's moves only (a panel shown under a resting pointer must not take the keys' focus)
     this.el.addEventListener('pointermove', (e) => {
@@ -271,6 +273,7 @@ export class SettingsPanel {
       return;
     }
     this.set(this.el, '--open', view.open.toFixed(3));
+    this.notice.hidden = view.notice <= 0;
     this.set(this.notice, '--notice', view.notice.toFixed(3));
 
     if (view.focus.tab !== this.shownTab) {

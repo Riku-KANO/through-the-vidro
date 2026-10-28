@@ -78,7 +78,7 @@ interface GateProbe {
   uiVoices: number;
   voicesStarted: number;
   volumes: Record<string, number> | null;
-  sliders: Record<string, number>;
+  sliders: { master: number; sfx: number; ambience: number; music: number; ui: number };
 }
 interface SoundProbe {
   voicesStarted: number;
@@ -289,11 +289,17 @@ async function panelText(page: Page): Promise<{ tabs: string[]; labels: string[]
     if (!el) return { tabs: [], labels: [], fontPx: [] };
     const tabs = [...el.querySelectorAll<HTMLElement>('[data-tab]')].map((b) => b.textContent ?? '');
     const shown = el.querySelector('[data-page]:not([hidden])');
-    const texts = [...(shown?.querySelectorAll<HTMLElement>('.vd-settings__label, .vd-settings__option') ?? [])];
+    const texts = [
+      ...(shown?.querySelectorAll<HTMLElement>('.vd-settings__label, .vd-settings__option') ?? []),
+    ];
     return {
       tabs,
       labels: texts.map((t) => t.textContent ?? ''),
-      fontPx: [...el.querySelectorAll<HTMLElement>('[data-tab], .vd-settings__label, .vd-settings__option, .vd-settings__value')]
+      fontPx: [
+        ...el.querySelectorAll<HTMLElement>(
+          '[data-tab], .vd-settings__label, .vd-settings__option, .vd-settings__value',
+        ),
+      ]
         .filter((t) => t.getClientRects().length > 0)
         .map((t) => Number.parseFloat(getComputedStyle(t).fontSize)),
     };
@@ -339,9 +345,10 @@ for (const backend of backends) {
     const pressed = await keyAt(page);
     expect(opened.from).toBe('home');
     // 入力から0.1秒以内に必ず音と動きで反応する (UIの原則 3), with the pane's own glass sound (遷移のルール 6)
-    expect((opened.respondedAt ?? Number.POSITIVE_INFINITY) - (pressed ?? 0), 'moved within 0.1 s').toBeLessThan(
-      100,
-    );
+    expect(
+      (opened.respondedAt ?? Number.POSITIVE_INFINITY) - (pressed ?? 0),
+      'moved within 0.1 s',
+    ).toBeLessThan(100);
     const openSound = opened.sounds.find((s) => s.cue === 'open');
     expect(openSound?.rang, 'its opening rang').toBe(true);
     expect((openSound?.at ?? Number.POSITIVE_INFINITY) - (pressed ?? 0)).toBeLessThan(100);
@@ -375,18 +382,20 @@ for (const backend of backends) {
     await waitSettings(page, "q.row === 'invertY' && q.values.invertY === true");
     await page.keyboard.press('Enter');
     await waitSettings(page, 'q.values.invertY === false');
+    // E twice: 音, then 表示 — the focus stays in the rows (the third row there: コントラスト強化)
     await page.keyboard.press('KeyE');
     await page.keyboard.press('KeyE');
-    await waitSettings(page, "q.tab === 'display'");
+    await waitSettings(page, "q.tab === 'display' && q.row === 'contrast'");
 
     // ---- 文字の大きさ: the UI's text grows (3 steps); コントラスト強化: the glass's edges and the frost ----
     const labelPx = async (): Promise<number> =>
       page.evaluate(() =>
-        Number.parseFloat(getComputedStyle(document.querySelector('[data-item="start"] .vd-drop__label') as Element).fontSize),
+        Number.parseFloat(
+          getComputedStyle(document.querySelector('[data-item="start"] .vd-drop__label') as Element).fontSize,
+        ),
       );
     const px0 = await labelPx();
-    await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
     await waitSettings(page, "q.row === 'textSize'");
     await page.keyboard.press('ArrowRight');
     await waitSettings(page, "q.values.textSize === 'large'");
@@ -420,6 +429,31 @@ for (const backend of backends) {
     expect(await page.locator('.vd-root').getAttribute('lang')).toBe('en');
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(shotDir, 'english.png') });
+
+    // ---- the mouse: a tab clicked; hover swells and rings; a click chooses; a slider follows the pointer ----
+    await page.locator('[data-ui="settings"] [data-tab="graphics"]').click();
+    await waitSettings(page, "q.tab === 'graphics' && q.row === null");
+    const high = page.locator('[data-ui="settings"] [data-row="quality"][data-option="high"]');
+    const ticks = async (): Promise<number> =>
+      (await settings(page)).sounds.filter((s) => s.cue === 'tick' && s.rang).length;
+    const ticks0 = await ticks();
+    await high.hover();
+    await expect(high).toHaveClass(/is-hover/);
+    await expect.poll(ticks, { timeout: 2_000 }).toBeGreaterThan(ticks0);
+    await high.click();
+    await waitSettings(page, "q.values.quality === 'high' && q.row === 'quality'");
+    await page.waitForFunction(() => window.__vidro.quality === 'high' && window.__vidro.renderScale === 1);
+    await expect(high).toHaveAttribute('aria-pressed', 'true');
+    const track = await page.locator('[data-ui="settings"] [data-track="fov"]').boundingBox();
+    if (!track) throw new Error('no 視野角 slider');
+    await page.mouse.move(track.x + 1, track.y + track.height / 2);
+    await page.mouse.down();
+    await waitSettings(page, "q.values.fov === 60 && q.row === 'fov'");
+    await page.mouse.move(track.x + track.width * 0.75, track.y + track.height / 2, { steps: 5 });
+    await waitSettings(page, 'q.values.fov === 90');
+    await page.mouse.up();
+    await waitSettings(page, 'q.values.fov === 90');
+    await page.mouse.move(20, 700);
 
     // ---- Esc: the pane shrinks away (the opening played back), the home's 設定 drop has the focus again ----
     await page.keyboard.press('Escape');
@@ -480,6 +514,8 @@ for (const backend of backends) {
     // ---- the pause's items: つづける / 設定 / タイトルへ (設計書の順) ----
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'open'");
+    // the time slowed to a stop as the frost spread: from here it stands
+    const stood = (await room(page)).time;
     expect(await pauseLines(page)).toEqual(['つづける', '設定', 'タイトルへ']);
     await page.keyboard.press('ArrowDown');
     await waitPause(page, "q.focused === 'settings'");
@@ -508,10 +544,10 @@ for (const backend of backends) {
     expect(await renders(page), 'the held picture drawn again at the new scale').toBeGreaterThan(drawn0);
     const atLow = await room(page);
     expect(atLow.orb, 'the vidro still in hand').toBe('hand');
-    expect(Math.hypot(atLow.position.x - before.position.x, atLow.position.z - before.position.z)).toBeLessThan(
-      0.01,
-    );
-    expect(atLow.time, 'the time stands').toBeCloseTo(before.time, 1);
+    expect(
+      Math.hypot(atLow.position.x - before.position.x, atLow.position.z - before.position.z),
+    ).toBeLessThan(0.01);
+    expect(atLow.time, 'the time stands').toBe(stood);
 
     // ---- 視野角: 70 → 80 — the camera now, drawn again while the time stands ----
     await page.keyboard.press('ArrowDown');
@@ -529,10 +565,11 @@ for (const backend of backends) {
     await page.screenshot({ path: join(shotDir, 'pause-fov80.png') });
 
     // ---- 音: 全体・効果音・環境音・UI — each its own slider; the pause's turn-down stays on top ----
+    // E twice, from 画質's second row: 音's second row (効果音); up to 全体
     await page.keyboard.press('KeyE');
     await page.keyboard.press('KeyE');
-    await waitSettings(page, "q.tab === 'sound'");
-    await page.keyboard.press('ArrowDown');
+    await waitSettings(page, "q.tab === 'sound' && q.row === 'sfx'");
+    await page.keyboard.press('ArrowUp');
     await waitSettings(page, "q.row === 'master'");
     const g0 = await gate(page);
     await page.keyboard.press('ArrowLeft');
@@ -556,9 +593,11 @@ for (const backend of backends) {
     expect(g1.volumes?.ambience).toBeCloseTo(g1.sliders.ambience * (PAUSE_DUCK.ambience ?? 1), 6);
 
     // ---- 操作: 覗く 押すたびに切り替え; the mouse's sensitivity — the world takes them ----
+    // Q, from 音's last row: 操作's last (上下の反転); up twice to 覗く
     await page.keyboard.press('KeyQ');
-    await waitSettings(page, "q.tab === 'controls'");
-    await page.keyboard.press('ArrowDown');
+    await waitSettings(page, "q.tab === 'controls' && q.row === 'invertY'");
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp');
     await waitSettings(page, "q.row === 'peekMode'");
     await page.keyboard.press('ArrowRight');
     await waitSettings(page, "q.values.peekMode === 'toggle'");
@@ -567,9 +606,9 @@ for (const backend of backends) {
     await page.keyboard.press('ArrowRight');
     await waitSettings(page, 'q.values.mouseSensitivity === 1.5');
 
-    // ---- the pad: RB to 表示, B closes the pane (back on the pause's 設定), A opens it again, B, B resumes ----
+    // ---- the pad: RB to 音, B closes the pane (back on the pause's 設定), A opens it again, B, B resumes ----
     await padPress(page, PAD.RB);
-    await waitSettings(page, "q.tab === 'display'");
+    await waitSettings(page, "q.tab === 'sound'");
     await padPress(page, PAD.B);
     await waitSettings(page, "q.phase === 'closed'", 2_000);
     await waitPause(page, "q.yielded === false && q.focused === 'settings' && q.phase === 'open'");
@@ -585,9 +624,9 @@ for (const backend of backends) {
     // ---- back in play: the game as it was, at 低, with the new field of view and the toggled peek ----
     const after = await room(page);
     expect(after.orb).toBe('hand');
-    expect(Math.hypot(after.position.x - before.position.x, after.position.z - before.position.z)).toBeLessThan(
-      0.05,
-    );
+    expect(
+      Math.hypot(after.position.x - before.position.x, after.position.z - before.position.z),
+    ).toBeLessThan(0.05);
     expect(after.fov).toBeCloseTo(80, 2);
     expect((await shell(page)).sceneInstances).toBe(shell0.sceneInstances);
     // 押すたびに切り替え: a press of the right button starts the peek, which stays after it is let go; the next ends it
@@ -622,6 +661,44 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
+  test(`S-43 自動 chosen in play: it measures as the game goes on and switches in place, the game kept [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const errors = collectErrors(page);
+    // a short window and a forced pick (the governor's test hooks), so that 自動 decides within the test
+    await playThroughHome(page, `&autoWindow=2&autoForce=high&dynres=0${webgl}`);
+    await waitRoom(page, "r.target === 'bench'", 10_000);
+    await page.keyboard.press('KeyE');
+    await waitRoom(page, "r.orb === 'hand'", 5_000);
+    const s0 = await shell(page);
+    expect(s0.quality).toBe('mid');
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'open'");
+    await page.locator('[data-pause-item="settings"]').click();
+    await waitSettings(page, "q.phase === 'open' && q.from === 'pause'");
+    await page.locator('[data-ui="settings"] [data-row="quality"][data-option="auto"]').click();
+    await waitSettings(page, "q.values.quality === 'auto'");
+    expect((await shell(page)).qualityChoice).toBe('auto');
+    // while the pause holds the picture, nothing is measured: still mid two seconds on
+    await page.waitForTimeout(2_500);
+    expect((await shell(page)).quality).toBe('mid');
+    await page.keyboard.press('Escape');
+    await waitSettings(page, "q.phase === 'closed'", 2_000);
+    await page.keyboard.press('Escape');
+    await waitPause(page, "q.phase === 'closed'", 3_000);
+    // in play it measures, picks (forced: high) and switches without making the scene again
+    await page.waitForFunction(() => window.__vidro.quality === 'high', undefined, { timeout: 30_000 });
+    const s1 = await shell(page);
+    expect(s1.qualityChoice).toBe('auto');
+    expect(s1.qualitySwitchesInPlace).toBe(1);
+    expect(s1.sceneInstances).toBe(s0.sceneInstances);
+    expect(s1.renderScale).toBe(1);
+    expect((await room(page)).orb, 'the vidro still in hand').toBe('hand');
+    expect((await shell(page)).errors ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   test(`S-43 kept: after a reload the settings are there, the scene made with the chosen quality [${backend}]`, async ({
     page,
   }) => {
@@ -638,8 +715,10 @@ for (const backend of backends) {
     await page.keyboard.press('ArrowDown');
     for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
     await waitSettings(page, 'q.values.fov === 90');
+    // Q: from 画質 round to 表示, on its second row (文字の大きさ); up to 言語
     await page.keyboard.press('KeyQ');
-    await page.keyboard.press('ArrowDown');
+    await waitSettings(page, "q.tab === 'display' && q.row === 'textSize'");
+    await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowRight');
     await waitSettings(page, "q.values.lang === 'en'");
     const kept = await settings(page);
@@ -663,13 +742,19 @@ for (const backend of backends) {
     await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
     expect(await page.locator('[data-item="settings"] .vd-drop__label').textContent()).toBe('Settings');
     await page.locator('[data-item="start"]').click();
-    await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing", 60_000);
+    await waitProbe(
+      page,
+      "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
+      60_000,
+    );
     expect((await room(page)).fov, 'the dive ends at the chosen field of view').toBeCloseTo(90, 2);
     expect((await shell(page)).errors ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
 
-  test(`S-43 nothing kept: the settings still take effect, and it says so once [${backend}]`, async ({ page }) => {
+  test(`S-43 nothing kept: the settings still take effect, and it says so once [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
     await page.addInitScript(() => {
@@ -699,13 +784,19 @@ for (const backend of backends) {
     await page.keyboard.press('Escape');
     await waitSettings(page, "q.phase === 'closed'", 2_000);
     await page.locator('[data-item="start"]').click();
-    await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing", 60_000);
+    await waitProbe(
+      page,
+      "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
+      60_000,
+    );
     expect((await room(page)).fov).toBeCloseTo(80, 2);
     expect((await shell(page)).errors ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
 
-  test(`S-43 the pause holds the picture: no frame of it goes to the governor [${backend}]`, async ({ page }) => {
+  test(`S-43 the pause holds the picture: no frame of it goes to the governor [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
     // a target the governor lowers the render scale for (as S-42's sensor of the pause under dynamic resolution)
