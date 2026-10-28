@@ -178,6 +178,88 @@ describe('PauseTimeline: タイトルへ', () => {
   });
 });
 
+describe('S-45 PauseTimeline 簡易トランジション (遷移のルール 1: 0.3秒の白いフェード)', () => {
+  it('opens in a 0.3 s white fade: the game runs until the white is full, then the pause is all there, written', () => {
+    const t = new PauseTimeline();
+    t.simple = true;
+    expect(t.white).toBe(0);
+    t.open();
+    run(t, 0.1);
+    expect(t.white).toBeGreaterThan(0.5);
+    expect(t.frost).toBe(0);
+    expect(t.timeScale).toBe(1);
+    expect(t.interactive).toBe(false);
+    run(t, 0.06);
+    expect(t.frost).toBe(1);
+    expect(t.writing).toBe(1);
+    expect(t.timeScale).toBe(0);
+    expect(t.interactive).toBe(true);
+    run(t, 0.15);
+    expect(t.phase).toBe('open');
+    expect(t.white).toBe(0);
+  });
+
+  it('closes in the same fade: the time runs again from its middle; leaving does the same', () => {
+    for (const how of ['close', 'leave'] as const) {
+      const t = new PauseTimeline();
+      t.simple = true;
+      t.open();
+      run(t, 0.3);
+      expect(how === 'close' ? t.close() : t.leave()).toBe(true);
+      run(t, 0.1);
+      expect(t.frost).toBe(1);
+      expect(t.white).toBeGreaterThan(0.5);
+      run(t, 0.06);
+      expect(t.frost).toBe(0);
+      expect(t.timeScale).toBe(1);
+      run(t, 0.15);
+      expect(t.phase).toBe('closed');
+      expect(t.white).toBe(0);
+    }
+  });
+
+  it('answers at once, and Esc while it fades in plays it back from where it is', () => {
+    const t = new PauseTimeline();
+    t.simple = true;
+    t.open();
+    run(t, 0.05);
+    const w = t.white;
+    expect(w).toBeGreaterThan(0.2);
+    expect(t.close()).toBe(true);
+    expect(t.white).toBeCloseTo(w, 9);
+    run(t, 0.06);
+    expect(t.phase).toBe('closed');
+  });
+
+  it('switched to simple while open (the settings over the pause), it closes by the fade; the glass fade has no white', () => {
+    const t = new PauseTimeline();
+    t.open();
+    run(t, 0.8);
+    expect(t.white).toBe(0);
+    t.simple = true;
+    expect(t.frost).toBe(1);
+    expect(t.writing).toBe(1);
+    t.close();
+    run(t, 0.31);
+    expect(t.phase).toBe('closed');
+    // and back to the glass: it opens slowly again
+    t.simple = false;
+    t.open();
+    run(t, 0.2);
+    expect(t.frost).toBeCloseTo(glassEase(0.5), 3);
+    expect(t.white).toBe(0);
+  });
+
+  it('can be held part way (screenshots): the white at that point', () => {
+    const t = new PauseTimeline();
+    t.simple = true;
+    t.open();
+    t.holdAt(0.15);
+    expect(t.white).toBeCloseTo(1, 6);
+    expect(t.phase).toBe('opening');
+  });
+});
+
 describe('lineWriting (指でなぞった文字: 文の左から右へ光の筆跡が進む)', () => {
   it('writes the lines one after another, overlapping, all done at the end', () => {
     expect(lineWriting(0, 0, 2)).toBe(0);

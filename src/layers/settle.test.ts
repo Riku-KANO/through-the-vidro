@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { splitFooting } from './footing';
 import {
+  CALM_SWEEP,
   countSettled,
   type SettleSweep,
   segmentsCutByBox,
   settledAt,
   settledSegmentIds,
   sweepFront,
+  sweepGlowFor,
   sweepSpan,
 } from './settle';
 import { splitSurface } from './surface';
@@ -85,5 +87,17 @@ describe('定着: light fixes part of the back layer onto the surface (S-34)', (
     const cut = segmentsCutByBox(poking, sweep.box);
     expect(cut).toHaveLength(1);
     expect(cut).toEqual(poking.filter((p) => p.min[2] < -4 && p.max[2] > -4).map((p) => p.id));
+  });
+});
+
+describe('S-45 点滅を抑える: the sweep’s band of light', () => {
+  it('is as it was off, and dimmer on — still there (光で伝えていた手がかりは形で残る)', () => {
+    expect(sweepGlowFor(0.7, false)).toBe(0.7);
+    expect(sweepGlowFor(0, true)).toBe(0);
+    expect(sweepGlowFor(1, true)).toBeCloseTo(CALM_SWEEP, 12);
+    expect(CALM_SWEEP).toBeGreaterThan(0);
+    expect(CALM_SWEEP).toBeLessThan(0.5);
+    // never brighter than off
+    for (const g of [0.1, 0.5, 1, 2]) expect(sweepGlowFor(g, true)).toBeLessThan(sweepGlowFor(g, false));
   });
 });

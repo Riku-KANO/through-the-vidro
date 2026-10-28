@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { VIDRO_VOLUMES } from '../../audio/levels';
+import { assignBinding, DEFAULT_BINDINGS } from '../../game/input/bindings';
 import { MOUSE_RADIANS_PER_PIXEL } from '../../game/input/gamepad';
 import { FOV_DEFAULT, FOV_MAX, FOV_MIN } from '../../game/player/constants';
 import { FONT_STACK } from '../lang';
@@ -25,6 +26,17 @@ describe('defaultSettings (設定の初期値)', () => {
     expect(defaultSettings({ lang: 'en' }).lang).toBe('en');
     expect(ja.textSize).toBe('normal');
     expect(ja.contrast).toBe(false);
+  });
+
+  it('S-45: 歩行の揺れ and 歪み as they were (1), the point, the flashes and the simple fades off, the keys as the design’s table', () => {
+    expect(ja.headBob).toBe(1);
+    expect(ja.distortion).toBe(1);
+    expect(ja.reticle).toBe(false);
+    expect(ja.reduceFlashes).toBe(false);
+    expect(ja.simpleTransitions).toBe(false);
+    expect(ja.bindings).toEqual(DEFAULT_BINDINGS);
+    // its own copy: changing it does not change the defaults
+    expect(ja.bindings).not.toBe(DEFAULT_BINDINGS);
   });
 
   it('leaves the quality to the shell until the player chooses one', () => {
@@ -57,8 +69,44 @@ describe('sanitizeSettings (読み込んだ設定を信用しない)', () => {
       lang: 'en',
       textSize: 'larger',
       contrast: true,
+      headBob: 0.25,
+      reticle: true,
+      distortion: 0.4,
+      reduceFlashes: true,
+      simpleTransitions: true,
+      bindings: assignBinding(DEFAULT_BINDINGS, 'keyboardMouse', 'interact', 1, 'KeyW').bindings,
     };
     expect(sanitizeSettings(JSON.parse(JSON.stringify(s)), ja)).toEqual(s);
+  });
+
+  it('S-45: an entry kept before S-45 (without the new fields) reads them as their defaults', () => {
+    const old = {
+      quality: 'high',
+      fov: 90,
+      peekMode: 'hold',
+      mouseSensitivity: 1,
+      invertY: false,
+      volumes: { master: 0.5, sfx: 0.5, ambience: 0.5, ui: 1 },
+      lang: 'en',
+      textSize: 'large',
+      contrast: true,
+    };
+    const s = sanitizeSettings(old, ja);
+    expect(s.fov).toBe(90);
+    expect(s.headBob).toBe(1);
+    expect(s.distortion).toBe(1);
+    expect(s.reticle).toBe(false);
+    expect(s.reduceFlashes).toBe(false);
+    expect(s.simpleTransitions).toBe(false);
+    expect(s.bindings).toEqual(DEFAULT_BINDINGS);
+  });
+
+  it('S-45: the sway and the distortion are kept within 0..1; broken bindings read as the defaults', () => {
+    const s = sanitizeSettings({ headBob: 3, distortion: -1, bindings: { keyboardMouse: 'W' } }, ja);
+    expect(s.headBob).toBe(1);
+    expect(s.distortion).toBe(0);
+    expect(s.bindings).toEqual(DEFAULT_BINDINGS);
+    expect(sanitizeSettings({ reticle: 'yes', reduceFlashes: 1 }, ja)).toEqual(ja);
   });
 
   it('clamps numbers into their ranges (視野角 60〜100 度, 音量 0〜1)', () => {
@@ -124,6 +172,16 @@ describe('worldSettingsOf (the world takes them in its own terms)', () => {
     expect(worldSettingsOf({ ...ja, contrast: true }).contrast).toBe(true);
     expect(worldSettingsOf({ ...ja, lang: 'en' }).fontFamily).toBe(FONT_STACK.en);
     expect(worldSettingsOf(ja).fontFamily).toBe(FONT_STACK.ja);
+  });
+
+  it('S-45: passes the sway, the distortion, the flashes and the bindings on (WorldSettings: S-46’s colour wave reads reduceFlashes)', () => {
+    const b = assignBinding(DEFAULT_BINDINGS, 'keyboardMouse', 'peek', 0, 'KeyP').bindings;
+    const w = worldSettingsOf({ ...ja, headBob: 0, distortion: 0.3, reduceFlashes: true, bindings: b });
+    expect(w.headBob).toBe(0);
+    expect(w.distortion).toBe(0.3);
+    expect(w.reduceFlashes).toBe(true);
+    expect(w.bindings).toEqual(b);
+    expect(worldSettingsOf(ja).reduceFlashes).toBe(false);
   });
 
   it('turns the sensitivity (×) into radians per pixel of the mouse', () => {
