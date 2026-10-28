@@ -176,8 +176,12 @@ async function expectFits(page: Page): Promise<void> {
       if (range.getBoundingClientRect().right > tag.getBoundingClientRect().left)
         overlaps.push(name.textContent ?? '');
     }
-    // the laid-out words wider than the box they are in (an ellipsis, or run out of it)
+    // the laid-out words wider than the box they are in (an ellipsis, or run out of it). The words' own width is compared
+    // only in the list's columns (the boxes of a set width); a tag that grows with its words (戻る) by its scroll width
+    const columned = (t: HTMLElement): boolean =>
+      t.matches('.vd-keys__cell, .vd-keys__action, .vd-keys__colhead');
     const cutShort = (t: HTMLElement): boolean => {
+      if (!columned(t)) return t.scrollWidth > t.clientWidth + 1;
       const s = getComputedStyle(t);
       const inner =
         t.getBoundingClientRect().width -
@@ -548,11 +552,22 @@ for (const backend of backends) {
     // 前へ進む is walked by holding: the wheel is not taken there (it waits on), Esc gives it up
     await page.locator('[data-key-cell="0:1"]').click();
     await waitKeys(page, "k.waiting && k.waiting.action === 'moveForward'");
+    // (the shake lasts a quarter of a second: an observer notes it)
+    await page.evaluate(() => {
+      const w = window as unknown as { __s45Refused: boolean };
+      w.__s45Refused = false;
+      const cell = document.querySelector('[data-key-cell="0:1"]') as HTMLElement;
+      new MutationObserver(() => {
+        if (cell.classList.contains('is-refused')) w.__s45Refused = true;
+      }).observe(cell, { attributes: true, attributeFilter: ['class'] });
+    });
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(300);
     expect((await settings(page)).keys.waiting, 'still waiting').not.toBeNull();
     // and it answers: the cell shakes its head (入力から0.1秒以内に音と動きで)
-    await expect(page.locator('[data-key-cell="0:1"]')).toHaveClass(/is-refused/, { timeout: 1_000 });
+    expect(await page.evaluate(() => (window as unknown as { __s45Refused: boolean }).__s45Refused)).toBe(
+      true,
+    );
     await page.keyboard.press('Escape');
     await waitKeys(page, 'k.waiting === null');
     // 覗く's second key ← the middle button; the next left click on another tag is a click again (it waits)
@@ -569,9 +584,9 @@ for (const backend of backends) {
     await waitKeys(page, 'k.waiting === null');
     // 小玉 1's second key ← the left button, pressed over another tag: that tag does not start waiting (its click is
     // swallowed), the light stays on 小玉 1; 置く・拾う・調べる gives up its left click (the slot had nothing to give)
-    await page.locator('[data-key-cell="9:1"]').click();
+    await page.locator('[data-key-cell="8:1"]').click();
     await waitKeys(page, "k.waiting && k.waiting.action === 'orb1' && k.waiting.slot === 1");
-    const other = await page.locator('[data-key-cell="10:1"]').boundingBox();
+    const other = await page.locator('[data-key-cell="9:1"]').boundingBox();
     await page.mouse.click(
       (other?.x ?? 0) + (other?.width ?? 0) / 2,
       (other?.y ?? 0) + (other?.height ?? 0) / 2,
@@ -580,7 +595,7 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     s = await settings(page);
     expect(s.keys.waiting, 'the click under it started no waiting').toBeNull();
-    expect(s.keys.focus).toEqual({ row: 9, col: 1 });
+    expect(s.keys.focus).toEqual({ row: 8, col: 1 });
     expect(s.values.bindings.keyboardMouse.orb1).toEqual(['Digit1', 'Mouse0']);
     expect(s.values.bindings.keyboardMouse.interact).toEqual(['KeyE']);
     expect(s.keys.notice).toBe('左クリック を「置く・拾う・調べる」から外しました');
