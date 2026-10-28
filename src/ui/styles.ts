@@ -251,8 +251,8 @@ const CSS = `
 /* ---- S-45 キーの割り当て: a page on the same pane — a list of frosted tags, the one that waits breathing ----
    In place of the tabs and the tab's rows (a page of its own); a little wider, so the keys' names fit. Every word at the
    UI's size (文字と色: 最小18px). */
-.vd-settings.is-keys { width: min(calc(100vw - 32px), max(34em, 45vw)); }
-.vd-root:lang(en) .vd-settings.is-keys { width: min(calc(100vw - 32px), max(37em, 48vw)); }
+.vd-settings.is-keys { width: min(calc(100vw - 32px), max(34.8em, 46vw)); }
+.vd-root:lang(en) .vd-settings.is-keys { width: min(calc(100vw - 32px), max(37.8em, 49vw)); }
 .vd-settings.is-keys .vd-settings__tabs { display: none; }
 .vd-settings button.vd-settings__open { margin-left: auto; }
 .vd-keys { gap: 0.3em; }
@@ -261,12 +261,13 @@ const CSS = `
 .vd-keys__hint { margin: 0 0 0.2em; min-height: 2.7em; opacity: 0.8; line-height: 1.35; white-space: pre-line; }
 .vd-keys__hint.is-waiting { opacity: 1; color: #fff6e6; }
 .vd-keys__list { display: flex; flex-direction: column; gap: 0.14em; max-height: calc(100vh - 12.5em); overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain; padding: 0.15em 0.2em; scrollbar-width: thin; }
 /* the names' column as wide as the longest name of the language (置く・拾う・調べる; Place / pick up / touch), the same in every row */
 .vd-keys__row { display: grid; grid-template-columns: 10.2em repeat(3, minmax(0, 1fr)); align-items: center;
   gap: 0.35em; }
 .vd-root:lang(en) .vd-keys__row { grid-template-columns: 11.8em repeat(3, minmax(0, 1fr)); }
-.vd-keys__head { padding: 0 0.2em; opacity: 0.72; }
+.vd-keys__head { padding: 0 0.2em; opacity: 0.72; overflow: hidden; scrollbar-gutter: stable; scrollbar-width: thin; }
 .vd-keys__colhead { text-align: center; white-space: nowrap; }
 .vd-keys__action { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vd-settings button.vd-keys__cell, .vd-keys__cell { display: block; box-sizing: border-box; width: 100%;
@@ -283,6 +284,9 @@ const CSS = `
 .vd-settings button.vd-keys__cell.is-waiting { background-color: rgba(255, 242, 218, 0.3); border-color: rgba(255, 240, 214, 0.9);
   animation: vd-keys-wait 1.6s ${UI_TOKENS.ease} infinite alternate; }
 @keyframes vd-keys-wait { from { box-shadow: 0 0 8px rgba(255, 222, 160, 0.3); } to { box-shadow: 0 0 20px rgba(255, 222, 160, 0.7); } }
+/* a key the cell does not take: it shakes its head (a movement, not a light) */
+.vd-settings button.vd-keys__cell.is-refused { animation: vd-keys-no 0.26s linear; }
+@keyframes vd-keys-no { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 .vd-keys__notice { margin: 0.1em 0 0; padding: 0.22em 0.9em 0.26em; border-radius: 0.8em; background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 244, 226, 0.4); line-height: 1.35; }
 .vd-keys__notice[hidden] { display: none; }

@@ -46,18 +46,31 @@ describe('S-45 光の点滅や強い閃光を抑えるモード (UI/UX設計 > �
     expect(maxCalm).toBeLessThanOrEqual(maxBefore * CALM.fire + 1e-9);
   });
 
-  it('the vidro’s flash (a refusal, the drop arriving) is as it was off, and much fainter on', () => {
-    expect(orbFlash(0.5, 1, false)).toBeCloseTo(0.5 * 0.5 * 1.6 + 1.4, 12);
+  it('the vidro’s flash (a refusal, the drop arriving) is as it was off, and fainter on — still there', () => {
+    // off: as before S-45 (room.ts: a full tremble and the drop just arrived)
+    for (const [shake, arrival, was] of [
+      [0, 0, 0],
+      [1, 0, 1.6],
+      [0, 1, 1.4],
+      [0.5, 1, 1.8],
+    ] as const)
+      expect(orbFlash(shake, arrival, false)).toBeCloseTo(was, 12);
     expect(orbFlash(0, 0, true)).toBe(0);
-    expect(orbFlash(0.5, 1, true)).toBeCloseTo(orbFlash(0.5, 1, false) * CALM.flash, 12);
-    expect(CALM.flash).toBeLessThanOrEqual(0.25);
+    for (const [shake, arrival] of [
+      [1, 0],
+      [0, 1],
+      [0.5, 0.5],
+    ] as const) {
+      expect(orbFlash(shake, arrival, true)).toBeGreaterThan(0);
+      expect(orbFlash(shake, arrival, true)).toBeLessThan(orbFlash(shake, arrival, false));
+    }
   });
 
   it('the placing wave’s light is kept as a shape, dimmer (光で伝えていた手がかりは形で残る)', () => {
     expect(calmedWave(0.8, false)).toBe(0.8);
-    expect(calmedWave(0.8, true)).toBeCloseTo(0.8 * CALM.wave, 12);
-    expect(CALM.wave).toBeGreaterThan(0);
-    expect(CALM.wave).toBeLessThan(0.5);
+    expect(calmedWave(0.8, true)).toBeGreaterThan(0);
+    expect(calmedWave(0.8, true)).toBeLessThan(0.8);
+    expect(calmedWave(0, true)).toBe(0);
   });
 
   it('the bloom is turned down, not off', () => {

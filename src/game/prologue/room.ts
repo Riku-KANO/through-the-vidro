@@ -1339,7 +1339,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     const words = input.lastDevice === 'gamepad' ? padText : text;
     // S-42: nothing under the pause
     if (held) next = '';
-    else if (playing && !input.locked && hint && hintFor < HINT_SECONDS) next = text.lock;
+    // (S-45: not to a player on the pad: the hint is about the mouse)
+    else if (playing && !input.locked && hint && hintFor < HINT_SECONDS && input.lastDevice !== 'gamepad')
+      next = text.lock;
     else if (playing && target === 'bench') next = words.take;
     else if (playing && target === 'drop') next = words.touch;
     else if (playing && target === 'pedestal')

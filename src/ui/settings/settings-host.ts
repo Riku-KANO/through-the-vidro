@@ -131,6 +131,8 @@ const NOTICE_SECONDS = 6;
 const NOTICE_FADE = 0.4;
 /** 仮: a dragged slider rings at most this often (s). */
 const SLIDE_RING_GAP = 0.06;
+/** 仮 (S-45): a waiting cell answers a key it does not take at most this often (s). */
+const REFUSE_GAP = 0.15;
 /** The stand-in ping before the panel's sound is made: the tick's D5. */
 const TICK_HZ = midiToHz(74);
 /** 仮 (トランジションの音): the pane opening rings A5 then D6 (rising), closing D6 then A5; this far apart (ms). */
@@ -381,7 +383,8 @@ export class SettingsHost {
     window.removeEventListener('pointerdown', this.onPointer, { capture: true });
     window.removeEventListener('click', this.onClick, { capture: true });
     window.removeEventListener('contextmenu', this.onContextMenu, { capture: true });
-    window.removeEventListener('wheel', this.onWheel, { capture: true });
+    // (a cell left waiting: its wheel and back-button listeners)
+    this.setWaiting(null);
     for (const id of this.timers) window.clearTimeout(id);
     this.timers.clear();
     this.offReady();
@@ -505,7 +508,12 @@ export class SettingsHost {
   /** What a waiting cell does with a key, a button or the wheel. */
   private capture(c: Capture): boolean {
     const w = this.waiting;
-    if (!w || c.kind === 'ignore') return false;
+    if (!w) return false;
+    if (c.kind === 'ignore') {
+      // a key it does not take: a low tick and a shake of the cell (入力から0.1秒以内に必ず音と動きで反応する)
+      this.refuse();
+      return false;
+    }
     this.setWaiting(null);
     this.focusPending = true;
     if (c.kind === 'cancel') {
@@ -529,17 +537,45 @@ export class SettingsHost {
     return true;
   }
 
-  /** A cell waits for its key (or none does); the wheel is listened to only meanwhile. */
+  private lastRefusal = Number.NEGATIVE_INFINITY;
+
+  private refuse(): void {
+    if (this.elapsed - this.lastRefusal < REFUSE_GAP) return;
+    this.lastRefusal = this.elapsed;
+    this.panel.refuseKeys(this.keysFocus);
+    this.ring('tick', { rate: tickRate(0, true), gain: 0.6 });
+  }
+
+  /**
+   * A cell waits for its key (or none does). Meanwhile the wheel is listened to, and the mouse's back and forward buttons are
+   * held from the browser (it might go back a page on them; they are not taken).
+   */
   private setWaiting(w: KeysWaiting | null): void {
-    if (w && !this.waiting) window.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
-    if (!w && this.waiting) window.removeEventListener('wheel', this.onWheel, { capture: true });
+    if (w && !this.waiting) {
+      window.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
+      window.addEventListener('mouseup', this.onBackButtons, { capture: true });
+      window.addEventListener('auxclick', this.onBackButtons, { capture: true });
+    }
+    if (!w && this.waiting) {
+      window.removeEventListener('wheel', this.onWheel, { capture: true });
+      window.removeEventListener('mouseup', this.onBackButtons, { capture: true });
+      window.removeEventListener('auxclick', this.onBackButtons, { capture: true });
+    }
     this.waiting = w;
   }
+
+  private readonly onBackButtons = (e: MouseEvent): void => {
+    if (e.button === 3 || e.button === 4) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
 
   private readonly onPointer = (e: PointerEvent): void => {
     // (a click that was to be swallowed never came: the button was not the primary one)
     this.swallowClick = false;
     if (!this.waiting) return;
+    this.onBackButtons(e);
     if (this.capture(captureMouse(this.waiting, e.button))) {
       e.preventDefault();
       e.stopPropagation();

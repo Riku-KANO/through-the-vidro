@@ -118,6 +118,8 @@ const OPTION_KEY: Readonly<Record<string, StringKey>> = {
 
 /** Time a chosen option stays sunk (細部の振る舞い: 選ぶと弾けずに沈み込む). */
 const PRESS_SECONDS = 0.38;
+/** 仮 (S-45): how long a waiting cell shakes its head at a key it does not take. */
+const REFUSE_SECONDS = 0.26;
 
 /** How a slider's value reads. */
 function formatValue(row: SettingsRow, s: Settings): string {
@@ -149,6 +151,7 @@ export class SettingsPanel {
   private pointerY = Number.NaN;
   private sliding: { row: SettingsRow; track: HTMLElement; pointer: number } | null = null;
   private readonly pressed = new Map<HTMLElement, number>();
+  private readonly refused = new Map<HTMLElement, number>();
   /** Last values written to the DOM, by element and property. */
   private readonly last = new Map<HTMLElement, Map<string, string>>();
   /** S-45: the key page and whether it is shown (in place of the tab's rows and the foot). */
@@ -303,6 +306,17 @@ export class SettingsPanel {
     this.pressed.set(el, PRESS_SECONDS);
   }
 
+  /** S-45: the cell that waits shakes its head a little (a key it does not take: 入力には必ず動きで応える). */
+  refuseKeys(at: KeysFocus): void {
+    const el = this.keysPage.elementOf(at);
+    if (!el) return;
+    // (restarted: the class off, a layout read, on again)
+    el.classList.remove('is-refused');
+    void el.offsetWidth;
+    el.classList.add('is-refused');
+    this.refused.set(el, REFUSE_SECONDS);
+  }
+
   /** The option (or the tab) chosen sinks for a moment. */
   press(target: PanelTarget): void {
     const el = this.elementOfTarget(target);
@@ -321,6 +335,13 @@ export class SettingsPanel {
         el.classList.remove('is-pressed');
         this.pressed.delete(el);
       } else this.pressed.set(el, next);
+    }
+    for (const [el, left] of this.refused) {
+      const next = left - dt;
+      if (next <= 0) {
+        el.classList.remove('is-refused');
+        this.refused.delete(el);
+      } else this.refused.set(el, next);
     }
     if (!up) {
       if (this.sliding) this.sliding = null;

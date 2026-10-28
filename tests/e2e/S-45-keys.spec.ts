@@ -487,7 +487,10 @@ for (const backend of backends) {
       "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
       60_000,
     );
-    // (on the pad, the prompt shows the pad's button: A　手に取る)
+    // on the pad, the prompt shows the pad's button (and no hint about the mouse): X (覗く, refused: the vidro is on the
+    // workbench) makes the pad the device in use, then A　手に取る
+    await padPress(page, PAD.X);
+    await expect(page.locator('[data-ui="prompt"]')).toHaveText('A　手に取る', { timeout: 3_000 });
     await padPress(page, PAD.A);
     await waitRoom(page, "r.orb === 'hand'", 5_000);
     const setPad = (b: number, down: boolean) =>
@@ -514,6 +517,22 @@ for (const backend of backends) {
     await toHome(page, webgl);
     await page.locator('[data-item="settings"]').click();
     await waitSettings(page, "q.phase === 'open'");
+    // the page fits at the larger text sizes too (アクセシビリティ: 文字の大きさ, UIの原則 5)
+    for (const size of ['larger', 'large'] as const) {
+      await page.locator('[data-ui="settings"] [data-tab="display"]').click();
+      await page.locator(`[data-ui="settings"] [data-row="textSize"] [data-option="${size}"]`).click();
+      await waitSettings(page, `q.values.textSize === '${size}'`);
+      await page.locator('[data-ui="settings"] [data-tab="controls"]').click();
+      await page.locator('[data-ui="settings"] [data-keys-open]').click();
+      await waitKeys(page, 'k.open === true');
+      await page.waitForTimeout(300);
+      await expectFits(page);
+      await page.locator('[data-ui="settings"] [data-keys-back]').click();
+      await waitKeys(page, 'k.open === false');
+    }
+    await page.locator('[data-ui="settings"] [data-tab="display"]').click();
+    await page.locator('[data-ui="settings"] [data-row="textSize"] [data-option="normal"]').click();
+    await waitSettings(page, "q.values.textSize === 'normal'");
     await page.locator('[data-ui="settings"] [data-tab="controls"]').click();
     await page.locator('[data-ui="settings"] [data-keys-open]').click();
     await waitKeys(page, 'k.open === true');
@@ -532,6 +551,8 @@ for (const backend of backends) {
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(300);
     expect((await settings(page)).keys.waiting, 'still waiting').not.toBeNull();
+    // and it answers: the cell shakes its head (入力から0.1秒以内に音と動きで)
+    await expect(page.locator('[data-key-cell="0:1"]')).toHaveClass(/is-refused/, { timeout: 1_000 });
     await page.keyboard.press('Escape');
     await waitKeys(page, 'k.waiting === null');
     // 覗く's second key ← the middle button; the next left click on another tag is a click again (it waits)
@@ -546,6 +567,23 @@ for (const backend of backends) {
     await waitKeys(page, "k.waiting && k.waiting.action === 'interact'", 3_000);
     await page.keyboard.press('Escape');
     await waitKeys(page, 'k.waiting === null');
+    // 小玉 1's second key ← the left button, pressed over another tag: that tag does not start waiting (its click is
+    // swallowed), the light stays on 小玉 1; 置く・拾う・調べる gives up its left click (the slot had nothing to give)
+    await page.locator('[data-key-cell="9:1"]').click();
+    await waitKeys(page, "k.waiting && k.waiting.action === 'orb1' && k.waiting.slot === 1");
+    const other = await page.locator('[data-key-cell="10:1"]').boundingBox();
+    await page.mouse.click(
+      (other?.x ?? 0) + (other?.width ?? 0) / 2,
+      (other?.y ?? 0) + (other?.height ?? 0) / 2,
+    );
+    await waitKeys(page, 'k.bound === 3');
+    await page.waitForTimeout(300);
+    s = await settings(page);
+    expect(s.keys.waiting, 'the click under it started no waiting').toBeNull();
+    expect(s.keys.focus).toEqual({ row: 9, col: 1 });
+    expect(s.values.bindings.keyboardMouse.orb1).toEqual(['Digit1', 'Mouse0']);
+    expect(s.values.bindings.keyboardMouse.interact).toEqual(['KeyE']);
+    expect(s.keys.notice).toBe('左クリック を「置く・拾う・調べる」から外しました');
     // 戻る and the pane's 戻る, by the mouse
     await page.locator('[data-ui="settings"] [data-keys-back]').click();
     await waitKeys(page, 'k.open === false');
