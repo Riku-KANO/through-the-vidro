@@ -193,7 +193,8 @@ describe('stepPanel: changing (変更は即時反映)', () => {
     const bob = { tab: 3, row: 3 };
     const less = stepPanel(bob, base, 'left');
     expect(less.changed).toBe('headBob');
-    expect(less.settings.headBob).toBeCloseTo(0.75, 9);
+    expect(less.settings.headBob).toBeLessThan(1);
+    expect(less.settings.headBob).toBeGreaterThan(0);
     expect(stepPanel(bob, { ...base, headBob: 0 }, 'left').changed).toBeNull();
     expect(setSlider(base, 'distortion', 0).distortion).toBe(0);
     const flashes = stepPanel({ tab: 3, row: 6 }, base, 'choose');

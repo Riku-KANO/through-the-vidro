@@ -217,6 +217,8 @@ export class PeekPipeline {
 
   /** S-45: the finishing's bloom (its strength is a uniform), when the finishing has one. */
   private bloomNode: ReturnType<typeof bloom> | null = null;
+  /** S-45: the player's settings the frame took last (null: none yet). */
+  access: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number } | null = null;
 
   /**
    * S-45 (UI/UX設計 > アクセシビリティ, 3D酔い対策): the player's settings as the frame takes them — 覗いたときの歪みの強さ and
@@ -224,6 +226,8 @@ export class PeekPipeline {
    * pipeline is made again.
    */
   setAccess(a: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number }): void {
+    // (kept: a finishing made again later — S-48's setQuality — takes them again with setAccess(this.access))
+    this.access = a;
     this.composite.setAccess(a);
     if (this.bloomNode) this.bloomNode.strength.value = BLOOM_STRENGTH * (a.calm ? a.calmBloom : 1);
   }

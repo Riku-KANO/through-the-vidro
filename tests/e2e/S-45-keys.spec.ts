@@ -176,9 +176,22 @@ async function expectFits(page: Page): Promise<void> {
       if (range.getBoundingClientRect().right > tag.getBoundingClientRect().left)
         overlaps.push(name.textContent ?? '');
     }
+    // the laid-out words wider than the box they are in (an ellipsis, or run out of it)
+    const cutShort = (t: HTMLElement): boolean => {
+      const s = getComputedStyle(t);
+      const inner =
+        t.getBoundingClientRect().width -
+        Number.parseFloat(s.paddingLeft) -
+        Number.parseFloat(s.paddingRight) -
+        Number.parseFloat(s.borderLeftWidth) -
+        Number.parseFloat(s.borderRightWidth);
+      const words = document.createRange();
+      words.selectNodeContents(t);
+      return words.getBoundingClientRect().width > inner + 0.5 || t.scrollWidth > t.clientWidth + 1;
+    };
     return {
       fontPx: texts.map((t) => Number.parseFloat(getComputedStyle(t).fontSize)),
-      cut: texts.filter((t) => t.scrollWidth > t.clientWidth + 1).map((t) => t.textContent),
+      cut: texts.filter(cutShort).map((t) => t.textContent),
       overlaps,
       inside: pane.top >= 0 && pane.bottom <= window.innerHeight,
     };
@@ -299,6 +312,8 @@ for (const backend of backends) {
     // (the page is written at the next frame)
     await expect(notice).toHaveText(s.keys.notice ?? '', { timeout: 2_000 });
     await expect(notice).toBeVisible();
+    // (the tags' light settles: 0.26 s)
+    await page.waitForTimeout(600);
     await page.screenshot({ path: join(shotDir, 'keys-swapped.png') });
     expect(s.saves.kept).toBeGreaterThanOrEqual(3);
 

@@ -251,8 +251,8 @@ const CSS = `
 /* ---- S-45 キーの割り当て: a page on the same pane — a list of frosted tags, the one that waits breathing ----
    In place of the tabs and the tab's rows (a page of its own); a little wider, so the keys' names fit. Every word at the
    UI's size (文字と色: 最小18px). */
-.vd-settings.is-keys { width: min(calc(100vw - 32px), max(33em, 44vw)); }
-.vd-root:lang(en) .vd-settings.is-keys { width: min(calc(100vw - 32px), max(35em, 46vw)); }
+.vd-settings.is-keys { width: min(calc(100vw - 32px), max(34em, 45vw)); }
+.vd-root:lang(en) .vd-settings.is-keys { width: min(calc(100vw - 32px), max(37em, 48vw)); }
 .vd-settings.is-keys .vd-settings__tabs { display: none; }
 .vd-settings button.vd-settings__open { margin-left: auto; }
 .vd-keys { gap: 0.3em; }
@@ -265,7 +265,7 @@ const CSS = `
 /* the names' column as wide as the longest name of the language (置く・拾う・調べる; Place / pick up / touch), the same in every row */
 .vd-keys__row { display: grid; grid-template-columns: 10.2em repeat(3, minmax(0, 1fr)); align-items: center;
   gap: 0.35em; }
-.vd-root:lang(en) .vd-keys__row { grid-template-columns: 12.2em repeat(3, minmax(0, 1fr)); }
+.vd-root:lang(en) .vd-keys__row { grid-template-columns: 11.8em repeat(3, minmax(0, 1fr)); }
 .vd-keys__head { padding: 0 0.2em; opacity: 0.72; }
 .vd-keys__colhead { text-align: center; white-space: nowrap; }
 .vd-keys__action { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -273,7 +273,8 @@ const CSS = `
   padding: 0.06em 0.45em 0.1em; border-radius: 999px;
   line-height: 1.35; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-family: ${KEY_FONT}; font-weight: 300; letter-spacing: 0.03em; }
-.vd-keys__cell--fixed { opacity: 0.62; border: 1px dashed rgba(255, 255, 255, 0.28); font-family: inherit; }
+.vd-keys__cell--fixed { opacity: 0.62; border: 1px dashed rgba(255, 255, 255, 0.28); font-family: inherit; padding-left: 0.2em;
+  padding-right: 0.2em; letter-spacing: 0; }
 .vd-keys__row--fixed .vd-keys__action { opacity: 0.72; }
 .vd-settings button.vd-keys__cell.is-focus, .vd-settings button.vd-keys__button.is-focus {
   background-color: rgba(255, 255, 255, 0.2); border-color: rgba(255, 240, 214, 0.75);

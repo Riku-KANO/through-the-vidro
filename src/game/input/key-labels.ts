@@ -21,7 +21,7 @@ const NAMED: Readonly<Record<string, { ja: string; en: string }>> = {
   ArrowLeft: { ja: '←', en: '←' },
   ArrowRight: { ja: '→', en: '→' },
   Mouse0: { ja: '左クリック', en: 'Left click' },
-  Mouse1: { ja: 'ホイールクリック', en: 'Middle click' },
+  Mouse1: { ja: '中クリック', en: 'Middle click' },
   Mouse2: { ja: '右クリック', en: 'Right click' },
   Mouse3: { ja: 'マウス4', en: 'Mouse 4' },
   Mouse4: { ja: 'マウス5', en: 'Mouse 5' },
