@@ -147,8 +147,10 @@ const CSS = `
    The pane (glass) is the only frosted part: the body over it is revealed by a clip-path and holds no backdrop filter. */
 .vd-settings { position: absolute; top: 50%; right: max(4vw, 16px); transform: translateY(-50%);
   width: min(calc(100vw - 32px), max(30em, 38vw)); visibility: hidden; pointer-events: none; --open: 0; }
-/* 英語版: the words run longer (札は文字の長さに合わせて伸びる): a wider pane keeps the tabs on one line */
-.vd-root:lang(en) .vd-settings { width: min(calc(100vw - 32px), max(37em, 44vw)); }
+/* 英語版: the words run longer (札は文字の長さに合わせて伸びる): a slightly wider pane and closer tabs keep them on one line
+   (without covering more of the picture behind) */
+.vd-root:lang(en) .vd-settings { width: min(calc(100vw - 32px), max(32em, 40vw)); }
+.vd-root:lang(en) .vd-settings button.vd-settings__tab { padding-left: 0.6em; padding-right: 0.6em; letter-spacing: 0.04em; }
 .vd-settings.is-up { visibility: visible; }
 .vd-settings.is-interactive { pointer-events: auto; }
 .vd-settings__glass { position: absolute; inset: 0; border-radius: 1.3em; background: rgba(255, 255, 255, 0.13);
