@@ -89,8 +89,8 @@ export class ScreenFlow {
   }
 
   /**
-   * Sandbox only: play the dive backwards from inside the game to home.
-   * In the real game Esc in play opens the pause screen instead.
+   * Play the dive backwards from inside the game to home (戻るときは、来たときの動きを逆再生する): the pause's タイトルへ
+   * (S-42), and Esc in the S-04 sandbox's placeholder world, which has no pause. In the game Esc opens the pause.
    */
   rewindFromGame(): boolean {
     if (this.active || this.current !== 'game') return false;

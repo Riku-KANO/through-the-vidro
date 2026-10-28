@@ -6,5 +6,12 @@
   "echoes": "残響",
   "settings": "設定",
   "credits": "クレジット",
-  "menuLabel": "ホーム"
+  "menuLabel": "ホーム",
+  "pauseLabel": "ポーズ",
+  "pauseResume": "つづける",
+  "pauseTitle": "タイトルへ",
+  "pauseAsk": "タイトルへ戻りますか",
+  "pauseYes": "はい",
+  "pauseNo": "いいえ",
+  "pauseRelock": "つづけたあと、画面をクリックすると視点を動かせます"
 }

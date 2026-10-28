@@ -39,9 +39,10 @@ import { VIDRO_ROOMS } from '../../audio/rooms';
 import { loadWhisperBank, WHISPER_LEVEL, whisperSource } from '../../audio/whisper';
 import { loadBank, scheduleBuffer, startLoop, synth } from '../../core/audio/bank';
 import type { AudioEngine, Emitter } from '../../core/audio/engine';
-import type { GlassStrength } from '../../core/audio/glass';
+import { fadeAndStop, type GlassStrength, type PlannedSource } from '../../core/audio/glass';
 import { renderOffline } from '../../core/audio/offline';
 import { mulberry32, randomSeed } from '../../core/audio/rng';
+import type { ScheduledVoice } from '../../core/audio/voices';
 import type { Vec3 } from '../../layers/footing';
 import { sweepSpan } from '../../layers/settle';
 import { glassEase } from '../../layers/tween';
@@ -253,6 +254,8 @@ export interface SoundRoom {
     RoomProbe,
     'orb' | 'peekAmount' | 'handPresence' | 'time' | 'playing' | 'position' | 'speed' | 'footfalls'
   > & {
+    /** S-42: the game's time speed (the pause stops it; 1 when absent): the sounds of the room's time follow it. */
+    timeScale?: number;
     /** S-34: where the settling light's front is (world z), null when none. */
     finale?: { readonly frontZ: number | null };
     /** S-36: where the vidro stands on its pedestal, and the drop last touched (the prologue's when absent). */
@@ -286,6 +289,81 @@ export interface FinalePlayed {
   event: 'settle' | 'gateOpen';
   at: [number, number, number];
   distance: number;
+}
+
+/* ---------- S-42: the sounds of the room's time follow its speed (the pause) ---------- */
+
+/** A sound of an event of the room's time (the close, the whisper, the shortcut) while it plays: its source and own gain. */
+export interface TimedVoice {
+  readonly source: AudioBufferSourceNode;
+  readonly time: GainNode;
+}
+
+/**
+ * 仮 (S-42; 発案者の判断 2026-10-28, 判断待ち 2 の a): a sound of the room's time follows the time's speed s (0..1; the pause
+ * stops it in 0.4 s on the glass curve and starts it again in 0.3 s): it plays at s times its speed — slowing with the light
+ * or the gate it belongs to — and its own gain is s³, so it is silent and held where it was while the time stands; on resume
+ * it goes on from there, in step with the light again. (Only turning it down would let it run on unheard and come back ahead
+ * of the light it follows.) The gain falls faster than the speed: its pitch sinks as it slows, and by half speed (an
+ * octave down) it is 18 dB under, so the slide is a fading breath under the pause's own sound, not a heard glissando (S-42
+ * review 3). Changes glide over `tau` seconds (no zipper); the speed never goes quite to 0 (`minRate`: a held source; an
+ * hour's pause moves it on 3.6 s, unheard).
+ * When play is left (タイトルへ), they fade out over `leaveFade` and stop: the home has no room sounds (S-42 判断待ち 5).
+ */
+export const TIME_FOLLOW = { minRate: 1e-3, tau: 0.02, leaveFade: 0.3 } as const;
+
+const rateOf = (scale: number): number => Math.max(TIME_FOLLOW.minRate, Math.min(1, scale));
+const gainOf = (scale: number): number => Math.max(0, Math.min(1, scale)) ** 3;
+
+/**
+ * Plays `buffer` once into `destination` from `when` at `gain` (as bank.ts scheduleBuffer), following the time's speed
+ * `scale` from the start; `onEnded` is told when it has played out.
+ */
+export function scheduleTimed(
+  ctx: BaseAudioContext,
+  destination: AudioNode,
+  buffer: AudioBuffer,
+  when: number,
+  gain: number,
+  scale = 1,
+  onEnded?: (voice: TimedVoice) => void,
+): { voice: ScheduledVoice; timed: TimedVoice } {
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.playbackRate.value = rateOf(scale);
+  const time = ctx.createGain();
+  time.gain.value = gainOf(scale);
+  const out = ctx.createGain();
+  out.gain.value = gain;
+  source.connect(time).connect(out).connect(destination);
+  // the engine counts it as ending when it would at the time's own speed: a pause makes it end later than counted (only
+  // the engine's voice count sees that)
+  const end = when + buffer.duration;
+  source.start(when);
+  const timed: TimedVoice = { source, time };
+  source.onended = () => {
+    out.disconnect();
+    onEnded?.(timed);
+  };
+  const sources: PlannedSource[] = [{ node: source, stop: end }];
+  return { voice: { end, fadeOut: (at: number) => fadeAndStop(out, sources, at) }, timed };
+}
+
+/** Sets the time's speed `scale` on the sounds of the room's time, from `at` (gliding). */
+export function followTime(voices: Iterable<TimedVoice>, scale: number, at: number): void {
+  for (const v of voices) {
+    v.source.playbackRate.setTargetAtTime(rateOf(scale), at, TIME_FOLLOW.tau);
+    v.time.gain.setTargetAtTime(gainOf(scale), at, TIME_FOLLOW.tau);
+  }
+}
+
+/** Fades the sounds of the room's time out from `at` and stops them (play is left: タイトルへ). */
+export function letTimeGo(voices: Iterable<TimedVoice>, at: number): void {
+  for (const v of voices) {
+    v.time.gain.cancelScheduledValues(at);
+    v.time.gain.setTargetAtTime(0, at, TIME_FOLLOW.leaveFade / 3);
+    v.source.stop(at + TIME_FOLLOW.leaveFade * 2);
+  }
 }
 
 /* ---------- S-40: エリア1's shortcut settling ---------- */
@@ -589,6 +667,16 @@ export type SoundLabSpec =
       yaw?: number;
       when: number;
       whisper: boolean;
+    }
+  /**
+   * S-42: one of the sounds of the room's time from 0.01 s, on the effects bus at its level (no emitter), as the room plays
+   * it (`scheduleTimed`), its time's speed set at the given moments ([seconds, speed]: the pause sets it frame by frame).
+   */
+  | {
+      kind: 'timed';
+      sound: 'settle' | 'gate' | 'shortcut' | 'whisper';
+      seconds: number;
+      speeds?: readonly (readonly [number, number])[];
     };
 
 export interface SoundLabResult {
@@ -602,6 +690,13 @@ export interface SoundLabResult {
 }
 
 const LAB_RATE = 44100;
+/** S-42: the sounds of the room's time in the lab, and the level the room plays each at. */
+const TIMED_LAB = {
+  settle: { source: FINALE_SOURCES.settle, level: FINALE_LEVELS.settle },
+  gate: { source: FINALE_SOURCES.gate, level: FINALE_LEVELS.gate },
+  shortcut: { source: SHORTCUT_SOURCE, level: SHORTCUT_LEVEL },
+  whisper: { source: WHISPER_SOURCE, level: WHISPER_LEVEL },
+} as const;
 /** The walking cadence: 0.7 m strides at 1.4 m/s (game/player/motion.ts footfallsBy). */
 const WALK_STEP_SECONDS = 0.5;
 
@@ -651,6 +746,12 @@ export async function renderSoundLab(spec: SoundLabSpec): Promise<SoundLabResult
           if (b)
             scheduleBuffer(ctx, feet.input, b, 0.3 + k * WALK_STEP_SECONDS, { gain: FOOTSTEP_TUNING.level });
         }
+      } else if (spec.kind === 'timed') {
+        const { source, level } = TIMED_LAB[spec.sound];
+        const [buf] = await loadBank(ctx, [source]);
+        if (!buf) throw new Error(`sound ${source.id} did not render`);
+        const { timed } = scheduleTimed(ctx, engine.bus('sfx'), buf, 0.01, level);
+        for (const [at, speed] of spec.speeds ?? []) followTime([timed], speed, at);
       } else {
         const spawn = SPAWNS[spec.at];
         const yaw = spec.kind === 'whisper' && spec.yaw !== undefined ? spec.yaw : spawn.yaw;
@@ -743,6 +844,8 @@ export interface SoundProbe {
   readonly shortcut: ShortcutSoundProbe;
   /** S-41: エリア1's gates between its rooms opening, counted apart from the cues. */
   readonly gates: AreaGateSoundProbe;
+  /** S-42: the time's speed the sounds of the room's time follow, and how many of them are playing. */
+  readonly time: TimeSoundProbe;
   /** S-22 sensor (not enumerable, so probes copied by the e2e leave it out): renders a sound offline. */
   readonly render: (spec: SoundLabSpec) => Promise<SoundLabResult>;
 }
@@ -797,6 +900,14 @@ export interface AreaGateSoundProbe {
   refused: string[];
   /** Voices the engine started for them (the engine's whole count takes them in: engineVoices). */
   voicesStarted: number;
+}
+
+/** S-42: the sounds of the room's time (the close, the whisper, the shortcut, エリア1's gates) and the speed they follow. */
+export interface TimeSoundProbe {
+  /** The speed last followed (1 = as they play; 0 = standing, silent). */
+  scale: number;
+  /** Such sounds playing now (also standing ones). */
+  voices: number;
 }
 
 /** One footstep that sounded: the floor (zone and material) where the foot came down, and how. */
@@ -953,6 +1064,18 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   let stepsSince: number | null = null;
   let lastFootfalls = 0;
   const feetAt = { x: 0, y: 0, z: 0 };
+  /** S-42: the sounds of the room's time now playing (held until they end: S-09), and the time's speed they follow. */
+  const timed = new Set<TimedVoice>();
+  let timeScale = 1;
+  const playTimed =
+    (buffer: AudioBuffer, level: number) =>
+    (ctx: BaseAudioContext, destination: AudioNode, when: number): ScheduledVoice => {
+      const { voice, timed: t } = scheduleTimed(ctx, destination, buffer, when, level, timeScale, (v) =>
+        timed.delete(v),
+      );
+      timed.add(t);
+      return voice;
+    };
 
   const ear = new THREE.Vector3();
   const forward = new THREE.Vector3();
@@ -1046,9 +1169,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         : [GATE_SOUND[0], GATE_SOUND[1], GATE_SOUND[2]];
     const level = kind === 'settle' ? FINALE_LEVELS.settle : FINALE_LEVELS.gate;
     const before = engine.snapshot().voicesStarted;
-    const started = engine.startVoice({ level, emitter }, (ctx, destination, when) =>
-      scheduleBuffer(ctx, destination, buffer, when, { gain: level }),
-    );
+    const started = engine.startVoice({ level, emitter }, playTimed(buffer, level));
     finaleLog.voices += engine.snapshot().voicesStarted - before;
     if (!started) {
       finaleLog.refused.push(kind);
@@ -1089,7 +1210,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     const before = engine.snapshot().voicesStarted;
     const started = engine.startVoice(
       { level: WHISPER_LEVEL, emitter: whisper.emitter },
-      (ctx, destination, when) => scheduleBuffer(ctx, destination, buffer, when, { gain: WHISPER_LEVEL }),
+      playTimed(buffer, WHISPER_LEVEL),
     );
     whisperLog.voices += engine.snapshot().voicesStarted - before;
     if (!started) {
@@ -1139,7 +1260,7 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     const before = engine.snapshot().voicesStarted;
     const started = engine.startVoice(
       { level: SHORTCUT_LEVEL, emitter: shortcutSound.emitter },
-      (ctx, destination, when) => scheduleBuffer(ctx, destination, buffer, when, { gain: SHORTCUT_LEVEL }),
+      playTimed(buffer, SHORTCUT_LEVEL),
     );
     shortcutLog.voices += engine.snapshot().voicesStarted - before;
     if (!started) {
@@ -1167,9 +1288,8 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     const level = FINALE_LEVELS.gate;
     const emitter = gateEmitter;
     const before = engine.snapshot().voicesStarted;
-    const started = engine.startVoice({ level, emitter }, (ctx, destination, when) =>
-      scheduleBuffer(ctx, destination, buffer, when, { gain: level }),
-    );
+    // S-42: a sound of the room's time (it stands with the pause)
+    const started = engine.startVoice({ level, emitter }, playTimed(buffer, level));
     gateLog.voices += engine.snapshot().voicesStarted - before;
     if (!started) {
       gateLog.refused.push(event.gate);
@@ -1276,6 +1396,17 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
   const tick = (): void => {
     const e = engine;
     if (!e || disposed) return;
+    // S-42: the sounds of the room's time slow and stand with it (the pause), and go on with it
+    const scale = roomProbe.timeScale ?? 1;
+    if (scale !== timeScale) {
+      timeScale = scale;
+      followTime(timed, scale, e.ctx.currentTime);
+    }
+    // and leaving play (タイトルへ) they fade out instead of going on over the dive back and the home
+    if (!roomProbe.playing && timed.size > 0) {
+      letTimeGo(timed, e.ctx.currentTime);
+      timed.clear();
+    }
     if (steps) {
       const n = roomProbe.footfalls;
       if (stepsSince === null) {
@@ -1438,6 +1569,9 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
         refused: [...gateLog.refused],
         voicesStarted: gateLog.voices,
       };
+    },
+    get time(): TimeSoundProbe {
+      return { scale: timeScale, voices: timed.size };
     },
     get footsteps(): FootstepsProbe {
       return {
