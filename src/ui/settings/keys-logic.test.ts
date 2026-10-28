@@ -100,12 +100,17 @@ describe('S-45 capturing the key pressed while waiting', () => {
     expect(captureKey(km, 'ControlLeft')).toEqual({ kind: 'ignore' });
   });
 
-  it('the mouse’s buttons and wheel for a key’s cell too', () => {
+  it('the mouse’s buttons and wheel for a key’s cell too (the wheel only for an action of one press)', () => {
     expect(captureMouse(km, 2)).toEqual({ kind: 'bind', code: 'Mouse2' });
     expect(captureMouse(km, 0)).toEqual({ kind: 'bind', code: 'Mouse0' });
-    expect(captureWheel(km, -120)).toEqual({ kind: 'bind', code: 'WheelUp' });
-    expect(captureWheel(km, 40)).toEqual({ kind: 'bind', code: 'WheelDown' });
-    expect(captureWheel(km, 0)).toEqual({ kind: 'ignore' });
+    // the back and forward buttons are not taken (the browser's): it waits on
+    expect(captureMouse(km, 3)).toEqual({ kind: 'ignore' });
+    const orbs: KeysWaiting = { action: 'orbPrev', device: 'keyboardMouse', slot: 0 };
+    expect(captureWheel(orbs, -120)).toEqual({ kind: 'bind', code: 'WheelUp' });
+    expect(captureWheel(orbs, 40)).toEqual({ kind: 'bind', code: 'WheelDown' });
+    expect(captureWheel(orbs, 0)).toEqual({ kind: 'ignore' });
+    // 覗く is held down (長押し): the wheel is never held, so it waits on
+    expect(captureWheel(km, -120)).toEqual({ kind: 'ignore' });
   });
 
   it('a pad button for a pad’s cell; B and Start give up (fixed), keys and the mouse are not taken', () => {

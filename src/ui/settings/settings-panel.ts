@@ -42,9 +42,10 @@ export interface PanelEvents {
   onSlide(row: SettingsRow, fraction: number, done: boolean): void;
   /** The browser moved the focus (Tab) onto a tab or a row. */
   onFocus(focus: PanelFocus): void;
-  /** S-45: a cell or a button of the key page was clicked, or the pointer reached one. */
+  /** S-45: a cell or a button of the key page was clicked, the pointer reached one, the browser focused one (Tab). */
   onKeysPick?(at: KeysFocus): void;
   onKeysHover?(at: KeysFocus): void;
+  onKeysFocus?(at: KeysFocus): void;
 }
 
 export interface PanelView {
@@ -234,6 +235,7 @@ export class SettingsPanel {
     this.keysPage = new KeysPage(t, {
       onPick: (at) => this.events.onKeysPick?.(at),
       onHover: (at) => this.events.onKeysHover?.(at),
+      onFocus: (at) => this.events.onKeysFocus?.(at),
     });
     this.foot = foot;
     this.body.append(this.keysPage.el, foot);

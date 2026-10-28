@@ -69,7 +69,6 @@
   "keysSwapped": "{key} moved from “{other}”, which now uses {old}",
   "keysRemoved": "{key} taken off “{other}”",
   "keysFixed": "Pause, back",
-  "keysFixedNote": "fixed",
   "keysFixedPad": "Start, B",
   "keysStick": "Left stick",
   "keyActMoveForward": "Move forward",

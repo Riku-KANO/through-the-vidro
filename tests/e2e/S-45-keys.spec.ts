@@ -59,7 +59,7 @@ const GPU_VALIDATION = /Destroyed texture|GPUValidationError|\[Invalid |used in 
 /** The page's rows (src/ui/settings/keys-logic.ts KEY_ROWS) as the test walks them. */
 const ROW = { moveForward: 0, moveBack: 1, moveLeft: 2, moveRight: 3, peek: 4, interact: 5 } as const;
 /** W3C standard mapping. */
-const PAD = { A: 0, B: 1, X: 2, RB: 5, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 } as const;
+const PAD = { A: 0, B: 1, X: 2, RB: 5, LT: 6, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 } as const;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -153,6 +153,42 @@ async function toHome(page: Page, query: string): Promise<void> {
   await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
 }
 
+/**
+ * Every word of the key page at the UI's size (文字と色: 最小の文字サイズは1080p基準で18px), the pane on the screen, and no name
+ * cut short or running into the tag beside it (英語版: 札は文字の長さに合わせて伸びる).
+ */
+async function expectFits(page: Page): Promise<void> {
+  const fit = await page.evaluate(() => {
+    const el = document.querySelector('[data-ui="settings"] [data-page="keys"]') as HTMLElement;
+    const pane = (document.querySelector('[data-ui="settings"]') as HTMLElement).getBoundingClientRect();
+    const texts = [...el.querySelectorAll<HTMLElement>('p, span, button')].filter(
+      (t) =>
+        t.childElementCount === 0 && (t.textContent ?? '').trim() !== '' && t.getClientRects().length > 0,
+    );
+    // each name's ink against the left edge of the first tag of its row
+    const overlaps: string[] = [];
+    for (const row of el.querySelectorAll<HTMLElement>('.vd-keys__row')) {
+      const name = row.querySelector<HTMLElement>('.vd-keys__action');
+      const tag = row.querySelector<HTMLElement>('.vd-keys__cell');
+      if (!name || !tag || !name.firstChild) continue;
+      const range = document.createRange();
+      range.selectNodeContents(name);
+      if (range.getBoundingClientRect().right > tag.getBoundingClientRect().left)
+        overlaps.push(name.textContent ?? '');
+    }
+    return {
+      fontPx: texts.map((t) => Number.parseFloat(getComputedStyle(t).fontSize)),
+      cut: texts.filter((t) => t.scrollWidth > t.clientWidth + 1).map((t) => t.textContent),
+      overlaps,
+      inside: pane.top >= 0 && pane.bottom <= window.innerHeight,
+    };
+  });
+  for (const px of fit.fontPx) expect(px).toBeGreaterThanOrEqual(18);
+  expect(fit.cut, 'no key or action name cut short').toEqual([]);
+  expect(fit.overlaps, 'no name under the tag beside it').toEqual([]);
+  expect(fit.inside, 'the pane within the screen').toBe(true);
+}
+
 /** The page's visible words: the action names of its rows and what each cell reads. */
 async function pageText(page: Page): Promise<{ actions: string[]; cells: string[]; title: string }> {
   return page.evaluate(() => {
@@ -210,23 +246,7 @@ for (const backend of backends) {
     ]);
     // the first row: W, (none), the left stick
     expect(ja.cells.slice(0, 3)).toEqual(['W', '—', '左スティック']);
-    // every word at the UI's size (文字と色: 最小の文字サイズは1080p基準で18px), every row on the pane, nothing cut short
-    const fit = await page.evaluate(() => {
-      const el = document.querySelector('[data-ui="settings"] [data-page="keys"]') as HTMLElement;
-      const pane = (document.querySelector('[data-ui="settings"]') as HTMLElement).getBoundingClientRect();
-      const texts = [...el.querySelectorAll<HTMLElement>('p, span, button')].filter(
-        (t) =>
-          t.childElementCount === 0 && (t.textContent ?? '').trim() !== '' && t.getClientRects().length > 0,
-      );
-      return {
-        fontPx: texts.map((t) => Number.parseFloat(getComputedStyle(t).fontSize)),
-        cut: texts.filter((t) => t.scrollWidth > t.clientWidth + 1).map((t) => t.textContent),
-        inside: pane.top >= 0 && pane.bottom <= window.innerHeight,
-      };
-    });
-    for (const px of fit.fontPx) expect(px).toBeGreaterThanOrEqual(18);
-    expect(fit.cut, 'no key or action name cut short').toEqual([]);
-    expect(fit.inside, 'the pane within the screen').toBe(true);
+    await expectFits(page);
     await page.screenshot({ path: join(shotDir, 'keys-ja.png') });
 
     // ---- the waiting (キーを押してください), and Esc gives it up: back to the list, nothing changed ----
@@ -364,6 +384,7 @@ for (const backend of backends) {
     expect(en.title).toBe('Key bindings');
     expect(en.actions.slice(0, 2)).toEqual(['Move forward', 'Move back']);
     expect(en.cells.slice(0, 3)).toEqual(['I', '—', 'Left stick']);
+    await expectFits(page);
     await page.screenshot({ path: join(shotDir, 'keys-en.png') });
     // to the foot: 初期に戻す (Reset to defaults)
     for (let i = 0; i < 14; i++) await page.keyboard.press('ArrowDown');
@@ -380,11 +401,11 @@ for (const backend of backends) {
     await waitSettings(page, "q.phase === 'closed'");
     await page.keyboard.press('Escape');
     await waitProbe(page, "p.pause.phase === 'closed'", 5_000);
-    // the prompt follows (English, E again)
-    await page.mouse.move(640, 360);
-    await page.mouse.down();
-    await page.mouse.up();
-    await waitRoom(page, 'r.locked === true');
+    // the prompt follows: English, the design's keys again (the one-line hint while the mouse is free)
+    await expect(prompt).toHaveText(
+      'Click to look around · WASD walk · Right click peek · E place / pick up / touch · Esc release',
+      { timeout: 3_000 },
+    );
 
     expect(await contexts(page)).toBe(1);
     writeFileSync(
@@ -441,6 +462,79 @@ for (const backend of backends) {
     await waitKeys(page, 'k.open === false');
     await padPress(page, PAD.B);
     await waitSettings(page, "q.phase === 'closed'");
+    // played with the pad alone: 十字 up to はじめる, A dives; X held peeks, let go it ends; LT does not
+    await waitProbe(page, "p.focused === 'settings'");
+    for (let i = 0; i < 3; i++) await padPress(page, PAD.UP);
+    await waitProbe(page, "p.focused === 'start'");
+    await padPress(page, PAD.A);
+    await waitProbe(
+      page,
+      "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
+      60_000,
+    );
+    // (on the pad, the prompt shows the pad's button: A　手に取る)
+    await padPress(page, PAD.A);
+    await waitRoom(page, "r.orb === 'hand'", 5_000);
+    const setPad = (b: number, down: boolean) =>
+      page.evaluate(
+        ([i, d]) => (window as unknown as { __s45Pad: (i: number, d: boolean) => void }).__s45Pad(i, d),
+        [b, down] as const,
+      );
+    await setPad(PAD.X, true);
+    await waitRoom(page, 'r.peeking === true', 3_000);
+    await setPad(PAD.X, false);
+    await waitRoom(page, 'r.peeking === false', 3_000);
+    await setPad(PAD.LT, true);
+    await page.waitForTimeout(500);
+    expect((await room(page)).peeking, 'LT no longer peeks').toBe(false);
+    await setPad(PAD.LT, false);
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-45 keys by the mouse: the wheel, the middle button, and the next click is a click [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(150_000);
+    const errors = collectErrors(page);
+    await toHome(page, webgl);
+    await page.locator('[data-item="settings"]').click();
+    await waitSettings(page, "q.phase === 'open'");
+    await page.locator('[data-ui="settings"] [data-tab="controls"]').click();
+    await page.locator('[data-ui="settings"] [data-keys-open]').click();
+    await waitKeys(page, 'k.open === true');
+    // 小玉を前へ ← the wheel down: 小玉を次へ, which had it, takes the wheel up in exchange
+    await page.locator('[data-key-cell="6:0"]').click();
+    await waitKeys(page, "k.waiting && k.waiting.action === 'orbPrev'");
+    await page.mouse.wheel(0, 120);
+    await waitKeys(page, 'k.bound === 1 && k.waiting === null');
+    let s = await settings(page);
+    expect(s.values.bindings.keyboardMouse.orbPrev).toEqual(['WheelDown']);
+    expect(s.values.bindings.keyboardMouse.orbNext).toEqual(['WheelUp']);
+    expect(s.keys.notice).toBe('ホイール下 を「小玉を次へ」から移し、「小玉を次へ」は ホイール上 にしました');
+    // 前へ進む is walked by holding: the wheel is not taken there (it waits on), Esc gives it up
+    await page.locator('[data-key-cell="0:1"]').click();
+    await waitKeys(page, "k.waiting && k.waiting.action === 'moveForward'");
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(300);
+    expect((await settings(page)).keys.waiting, 'still waiting').not.toBeNull();
+    await page.keyboard.press('Escape');
+    await waitKeys(page, 'k.waiting === null');
+    // 覗く's second key ← the middle button; the next left click on another tag is a click again (it waits)
+    await page.locator(`[data-key-cell="${ROW.peek}:1"]`).click();
+    await waitKeys(page, "k.waiting && k.waiting.action === 'peek' && k.waiting.slot === 1");
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.up({ button: 'middle' });
+    await waitKeys(page, 'k.bound === 2 && k.waiting === null');
+    s = await settings(page);
+    expect(s.values.bindings.keyboardMouse.peek).toEqual(['Mouse2', 'Mouse1']);
+    await page.locator(`[data-key-cell="${ROW.interact}:1"]`).click();
+    await waitKeys(page, "k.waiting && k.waiting.action === 'interact'", 3_000);
+    await page.keyboard.press('Escape');
+    await waitKeys(page, 'k.waiting === null');
+    // 戻る and the pane's 戻る, by the mouse
+    await page.locator('[data-ui="settings"] [data-keys-back]').click();
+    await waitKeys(page, 'k.open === false');
+    await waitSettings(page, "q.row === 'keys'");
     expect(errors).toEqual([]);
   });
 }

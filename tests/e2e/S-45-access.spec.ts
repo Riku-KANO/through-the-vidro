@@ -359,7 +359,7 @@ for (const backend of backends) {
     await waitRoom(page, "r.target === 'bench'", 5_000);
     await page.waitForTimeout(600);
     const r0 = await room(page);
-    expect(r0.access).toEqual({ headBob: 1, distortion: 1, calm: false, contrast: false });
+    expect(r0.access).toMatchObject({ headBob: 1, distortion: 1, calm: false, contrast: false });
     // the vidro on the workbench, its rim lit (調べられる物に近づくと縁が淡く光る)
     const bench = project(r0, BENCH_ORB, HAND_ORB_RADIUS);
     expect(bench.x).toBeGreaterThan(0);
@@ -490,8 +490,8 @@ for (const backend of backends) {
     const weak = await shot(page, join(shotDir, 'peek-weak.png'));
     await page.mouse.up({ button: 'right' });
     const madeByDistortion = (await pipelines(page)) - p3;
-    const peekNoise = changedShare(strongA, strongB, px, py, pr);
-    const peekChange = changedShare(strongA, weak, px, py, pr);
+    const peekNoise = changedShare(strongA, strongB, px, py, pr, 0.03);
+    const peekChange = changedShare(strongA, weak, px, py, pr, 0.03);
     expect(peekChange, 'the picture through the orb changed').toBeGreaterThan(peekNoise + 0.1);
     // 弱くしても玉越しの裏の層ははっきり見える: still a picture (not a flat disc)
     expect(spread(weak, px, py, pr)).toBeGreaterThan(spread(strongA, px, py, pr) * 0.5);

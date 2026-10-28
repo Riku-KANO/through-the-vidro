@@ -286,7 +286,7 @@ export interface RoomProbe {
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   /** S-45: the accessibility settings as the room took them (歩行の揺れ, 歪み, 点滅を抑える, コントラスト強化). */
-  access: { headBob: number; distortion: number; calm: boolean; contrast: boolean };
+  access: { headBob: number; distortion: number; calm: boolean; contrast: boolean; bloom: number | null };
   /**
    * The script's step, whether it is done, and (S-34 review: where a long frame falls) the longest frame of the play so
    * far, in which step it fell and when (room clock), and the longest frame of each step. A frame is the time between two
@@ -710,7 +710,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     fallRescues: 0,
     peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0, keptLandmarks: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
-    access: { headBob: 1, distortion: 1, calm: false, contrast: false },
+    access: { headBob: 1, distortion: 1, calm: false, contrast: false, bloom: null },
     autoplay: opts.autopilot
       ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
       : null,
@@ -1878,7 +1878,13 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       WORLD_ACCESS.contrast.value = s.contrast ? 1 : 0;
       WORLD_ACCESS.calm.value = calm ? 1 : 0;
       pipeline.setAccess({ distortion: s.distortion, contrast: s.contrast, calm, calmBloom: CALM.bloom });
-      probe.access = { headBob: s.headBob, distortion: s.distortion, calm, contrast: s.contrast };
+      probe.access = {
+        headBob: s.headBob,
+        distortion: s.distortion,
+        calm,
+        contrast: s.contrast,
+        bloom: pipeline.bloomStrength,
+      };
       // the prompt's frosted label follows the UI's text size and contrast (アクセシビリティ)
       prompt.style.fontSize = `calc(max(18px, 1.85vh) * ${s.textScale})`;
       prompt.style.fontFamily = s.fontFamily;

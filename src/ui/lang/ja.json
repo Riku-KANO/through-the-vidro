@@ -69,7 +69,6 @@
   "keysSwapped": "{key} を「{other}」から移し、「{other}」は {old} にしました",
   "keysRemoved": "{key} を「{other}」から外しました",
   "keysFixed": "ポーズ・戻る",
-  "keysFixedNote": "固定",
   "keysFixedPad": "Start・B",
   "keysStick": "左スティック",
   "keyActMoveForward": "前へ進む",

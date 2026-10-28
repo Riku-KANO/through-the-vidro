@@ -212,8 +212,11 @@ export const REBINDABLE: readonly ButtonAction[] = [
 export const MAX_SLOTS = 2;
 /** Codes no action may take: Esc (ポーズと戻る), the pad's Start and B (the pause, the way back), the pad's Home (the system's). */
 const FIXED_CODES: ReadonlySet<string> = new Set(['Escape', 'PadStart', 'PadB', 'PadHome']);
-/** Keys the input never reads as presses (it leaves the browser's shortcuts alone: input-system.ts onKeyDown). */
-const UNREAD_KEYS: ReadonlySet<string> = new Set([
+/**
+ * Keys the input never reads as presses (it leaves the browser's shortcuts alone: input-system.ts onKeyDown), and the mouse's
+ * back and forward buttons (the browser may go back a page on them).
+ */
+const UNREAD_CODES: ReadonlySet<string> = new Set([
   'ControlLeft',
   'ControlRight',
   'AltLeft',
@@ -224,14 +227,34 @@ const UNREAD_KEYS: ReadonlySet<string> = new Set([
   'OSRight',
   'ContextMenu',
   'Unidentified',
+  'Mouse3',
+  'Mouse4',
 ]);
 const PAD_CODES: ReadonlySet<string> = new Set(PAD_BUTTON_CODES);
+/**
+ * The actions the input reads as held (walking, walking faster, the peek held down): the wheel only turns in steps and is never
+ * held or let go (input-system.ts onWheel), so it is not theirs.
+ */
+const HELD_ACTIONS: ReadonlySet<ButtonAction> = new Set<ButtonAction>([
+  'moveForward',
+  'moveBack',
+  'moveLeft',
+  'moveRight',
+  'sprint',
+  'peek',
+]);
 
 /** Whether `code` can be bound on `device`: a key, a mouse button or the wheel; or a pad's button. Never a fixed one. */
 export function bindableCode(device: Device, code: string): boolean {
   if (!code || FIXED_CODES.has(code)) return false;
   if (device === 'gamepad') return PAD_CODES.has(code);
-  return !code.startsWith('Pad') && !UNREAD_KEYS.has(code);
+  return !code.startsWith('Pad') && !UNREAD_CODES.has(code);
+}
+
+/** Whether `action` can take `code` on `device`: a bindable code, and the wheel only for an action of one press. */
+export function bindableFor(action: ButtonAction, device: Device, code: string): boolean {
+  if (!bindableCode(device, code)) return false;
+  return !(HELD_ACTIONS.has(action) && code.startsWith('Wheel'));
 }
 
 /** An action that lost a code to another: it took `gave` in its place (入れ替え), or nothing (null). */
@@ -259,7 +282,7 @@ export function assignBinding(
   code: string,
 ): AssignResult {
   const next = cloneBindings(bindings);
-  if (!REBINDABLE.includes(action) || !bindableCode(device, code) || slot < 0 || slot >= MAX_SLOTS)
+  if (!REBINDABLE.includes(action) || !bindableFor(action, device, code) || slot < 0 || slot >= MAX_SLOTS)
     return { bindings: next, swaps: [] };
   const codes = next[device];
   const own = codes[action];
@@ -277,7 +300,8 @@ export function assignBinding(
     const list = codes[other];
     const k = list.indexOf(code);
     if (k < 0) continue;
-    const gave = old !== null && !list.includes(old) ? old : null;
+    // (it takes the code in exchange only if it can: the wheel is never given to walking or the held peek)
+    const gave = old !== null && !list.includes(old) && bindableFor(other, device, old) ? old : null;
     if (gave !== null) list[k] = gave;
     else list.splice(k, 1);
     swaps.push({ action: other, code, gave });
@@ -303,7 +327,7 @@ export function sanitizeBindings(value: unknown): Bindings {
     for (const action of REBINDABLE) {
       const codes: string[] = [];
       for (const c of parsed[device][action]) {
-        if (codes.length >= MAX_SLOTS || !bindableCode(device, c) || codes.includes(c)) continue;
+        if (codes.length >= MAX_SLOTS || !bindableFor(action, device, c) || codes.includes(c)) continue;
         if (seen.has(c)) broken = true;
         seen.add(c);
         codes.push(c);

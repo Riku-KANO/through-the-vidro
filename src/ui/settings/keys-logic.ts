@@ -1,6 +1,6 @@
 import {
   type ButtonAction,
-  bindableCode,
+  bindableFor,
   type Device,
   REBINDABLE,
   type Swap,
@@ -127,7 +127,7 @@ export function pickKeys(at: KeysFocus): KeysStep {
 export type Capture = { kind: 'bind'; code: string } | { kind: 'cancel' } | { kind: 'ignore' };
 
 const bind = (waiting: KeysWaiting, code: string): Capture =>
-  bindableCode(waiting.device, code) ? { kind: 'bind', code } : { kind: 'ignore' };
+  bindableFor(waiting.action, waiting.device, code) ? { kind: 'bind', code } : { kind: 'ignore' };
 
 /** A key (KeyboardEvent.code): Esc gives up (待ちの間の Esc は割り当てをやめて一覧へ戻る); a key's cell takes a key. */
 export function captureKey(waiting: KeysWaiting, code: string): Capture {

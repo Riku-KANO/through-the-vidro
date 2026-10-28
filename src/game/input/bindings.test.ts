@@ -4,6 +4,7 @@ import {
   assignBinding,
   BUTTON_ACTIONS,
   bindableCode,
+  bindableFor,
   cloneBindings,
   DEFAULT_BINDINGS,
   isHeld,
@@ -252,18 +253,49 @@ describe('S-45 assignBinding: the settings’ key page (すべてのキーは設
       'ShiftLeft',
       'ArrowUp',
       'Mouse0',
+      'Mouse1',
       'Mouse2',
-      'Mouse3',
       'WheelUp',
     ])
       expect(bindableCode('keyboardMouse', code), code).toBe(true);
-    // Esc is the pause and the way back; the modifiers are the browser's shortcuts (the input ignores them)
-    for (const code of ['Escape', 'ControlLeft', 'AltRight', 'MetaLeft', 'PadA', '', 'Unidentified'])
+    // Esc is the pause and the way back; the modifiers are the browser's shortcuts (the input ignores them); the mouse's
+    // back and forward buttons may take the browser back a page
+    for (const code of [
+      'Escape',
+      'ControlLeft',
+      'AltRight',
+      'MetaLeft',
+      'PadA',
+      '',
+      'Unidentified',
+      'Mouse3',
+      'Mouse4',
+    ])
       expect(bindableCode('keyboardMouse', code), code).toBe(false);
     for (const code of ['PadA', 'PadX', 'PadY', 'PadLB', 'PadRT', 'PadL3', 'PadUp', 'PadBack'])
       expect(bindableCode('gamepad', code), code).toBe(true);
     for (const code of ['PadB', 'PadStart', 'PadHome', 'KeyA', 'Mouse0', 'PadZ'])
       expect(bindableCode('gamepad', code), code).toBe(false);
+  });
+
+  it('the wheel only for an action of one press: never walking, walking faster or the held peek (it is never held)', () => {
+    expect(bindableFor('orbPrev', 'keyboardMouse', 'WheelUp')).toBe(true);
+    expect(bindableFor('interact', 'keyboardMouse', 'WheelDown')).toBe(true);
+    for (const a of ['moveForward', 'moveBack', 'moveLeft', 'moveRight', 'sprint', 'peek'] as const) {
+      expect(bindableFor(a, 'keyboardMouse', 'WheelUp'), a).toBe(false);
+      expect(bindableFor(a, 'keyboardMouse', 'KeyK'), a).toBe(true);
+    }
+    expect(assignBinding(DEFAULT_BINDINGS, 'keyboardMouse', 'moveForward', 0, 'WheelUp').bindings).toEqual(
+      DEFAULT_BINDINGS,
+    );
+  });
+
+  it('a swap never hands the wheel to an action that cannot take it: that action loses the key instead', () => {
+    // 小玉を前へ (the wheel up) takes W: 前へ進む cannot walk on the wheel, so it is left without W
+    const { bindings, swaps } = assignBinding(DEFAULT_BINDINGS, 'keyboardMouse', 'orbPrev', 0, 'KeyW');
+    expect(bindings.keyboardMouse.orbPrev).toEqual(['KeyW']);
+    expect(bindings.keyboardMouse.moveForward).toEqual([]);
+    expect(swaps).toEqual([{ action: 'moveForward', code: 'KeyW', gave: null }]);
   });
 });
 

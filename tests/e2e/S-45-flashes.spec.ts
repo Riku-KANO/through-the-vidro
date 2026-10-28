@@ -22,7 +22,7 @@ interface RoomProbe {
   events: string[];
   finale: { settle: number };
   autoplay: { step: string; done: boolean } | null;
-  access: { calm: boolean };
+  access: { calm: boolean; bloom: number | null };
 }
 interface Sample {
   time: number;
@@ -160,6 +160,9 @@ for (const backend of backends) {
     );
     expect(runs.off.final.access.calm).toBe(false);
     expect(runs.on.final.access.calm).toBe(true);
+    // the bloom turned down, not off
+    expect(runs.on.final.access.bloom ?? 0).toBeGreaterThan(0);
+    expect(runs.on.final.access.bloom ?? 1).toBeLessThan(runs.off.final.access.bloom ?? 0);
     for (const k of ['place', 'take', 'sweep'] as const) {
       expect(on[k].samples, `${k} sampled`).toBeGreaterThan(3);
       expect(off[k].samples).toBeGreaterThan(3);

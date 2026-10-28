@@ -20,7 +20,7 @@ import { SettingsHost } from '../settings/settings-host';
 import { defaultSettings } from '../settings/settings-model';
 import { browserStorage, SettingsStore } from '../settings/settings-store';
 import { createUiRoot } from '../styles';
-import { createAccessLayer } from './access-layer';
+import { createAccessLayer, type FadeSource } from './access-layer';
 import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './choreography';
 import { createLensUniforms } from './lens';
 import { createMembrane } from './membrane';
@@ -179,6 +179,12 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   };
   // S-45: the white of the simple fades over everything, and the dot in the middle of the screen (視点の基準)
   const access = createAccessLayer(ui.root);
+  const fadeSources: [FadeSource, FadeSource, FadeSource, FadeSource] = [
+    { source: TRANSITIONS.loadingToHome.id, white: 0, reversed: false },
+    { source: TRANSITIONS.homeToGame.id, white: 0, reversed: false },
+    { source: 'pause', white: 0 },
+    { source: 'settings', white: 0 },
+  ];
   window.__vidro.sceneProbe = Object.assign(
     probe,
     pause ? { pause: pause.probe } : {},
@@ -601,27 +607,17 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       probe.dive.inner = dv.inner;
       probe.paused = paused;
 
-      // S-45: the white of the simple fades (the screens', the pause's, the panel's) and the dot while playing
-      const flowWhite = (id: string): number => (simple && tr?.spec.id === id ? fadeWhite(tr.progress) : 0);
+      // S-45: the white of the simple fades (the screens', the pause's, the panel's) and the dot while playing (the same
+      // records each frame: nothing is made per frame)
+      const flowWhite = simple && tr ? fadeWhite(tr.progress) : 0;
+      const [opening, dive, pausing, panel] = fadeSources;
+      opening.white = tr?.spec.id === opening.source ? flowWhite : 0;
+      dive.white = tr?.spec.id === dive.source ? flowWhite : 0;
+      opening.reversed = dive.reversed = tr?.direction === -1;
+      pausing.white = pause?.white ?? 0;
+      panel.white = settings.white;
       const pauseUp = pause !== null && pause.probe.phase !== 'closed';
-      access.update(
-        [
-          {
-            source: TRANSITIONS.loadingToHome.id,
-            white: flowWhite(TRANSITIONS.loadingToHome.id),
-            reversed: tr?.direction === -1,
-          },
-          {
-            source: TRANSITIONS.homeToGame.id,
-            white: flowWhite(TRANSITIONS.homeToGame.id),
-            reversed: tr?.direction === -1,
-          },
-          { source: 'pause', white: pause?.white ?? 0 },
-          { source: 'settings', white: settings.white },
-        ],
-        settings.current.reticle && playing && !pauseUp && !settings.isUp,
-        simple,
-      );
+      access.update(fadeSources, settings.current.reticle && playing && !pauseUp && !settings.isUp, simple);
     },
     render() {
       const phase = phaseOf();

@@ -36,6 +36,8 @@ export interface KeysPageEvents {
   onPick(at: KeysFocus): void;
   /** The pointer reached one (it swells and rings). */
   onHover(at: KeysFocus): void;
+  /** The browser moved the focus onto one (Tab). */
+  onFocus?(at: KeysFocus): void;
 }
 
 interface Cell {
@@ -56,7 +58,6 @@ export class KeysPage {
   private readonly list: HTMLElement;
   private readonly fixed: HTMLElement;
   private readonly fixedPad: HTMLElement;
-  private readonly fixedNote: HTMLElement;
   private readonly notice: HTMLElement;
   private readonly reset: HTMLButtonElement;
   private readonly back: HTMLButtonElement;
@@ -131,9 +132,10 @@ export class KeysPage {
     this.fixedPad = document.createElement('span');
     this.fixedPad.className = 'vd-keys__cell vd-keys__cell--fixed';
     this.fixedPad.dataset.keyFixed = '';
-    this.fixedNote = document.createElement('span');
-    this.fixedNote.className = 'vd-keys__cell vd-keys__cell--fixed';
-    fixedLine.append(this.fixed, esc, this.fixedNote, this.fixedPad);
+    const none = document.createElement('span');
+    none.className = 'vd-keys__cell vd-keys__cell--fixed';
+    none.textContent = NO_KEY;
+    fixedLine.append(this.fixed, esc, none, this.fixedPad);
     this.list.appendChild(fixedLine);
     this.notice = document.createElement('p');
     this.notice.className = 'vd-keys__notice';
@@ -174,7 +176,6 @@ export class KeysPage {
     for (const a of this.actions) a.el.textContent = t(a.key);
     this.fixed.textContent = t('keysFixed');
     this.fixedPad.textContent = t('keysFixedPad');
-    this.fixedNote.textContent = t('keysFixedNote');
     this.reset.textContent = t('keysReset');
     this.back.textContent = t('setBack');
     this.el.setAttribute('aria-label', t('keysTitle'));
@@ -254,6 +255,9 @@ export class KeysPage {
 
   /** ホバーすると膨らんで鳴る: the tag swells while the pointer is on it, and rings once the page takes commands. */
   private hoverable(el: HTMLElement, at: KeysFocus, events: KeysPageEvents): void {
+    el.addEventListener('focus', () => {
+      if (this.enabled) events.onFocus?.(at);
+    });
     // the pointer's own moves only (a page shown under a resting pointer neither swells nor rings: as the panel's hover)
     el.addEventListener('pointermove', (e) => {
       if (el.classList.contains('is-hover') || (e.clientX === this.pointerX && e.clientY === this.pointerY))

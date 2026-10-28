@@ -191,6 +191,18 @@ export class SettingsHost {
       onKeysHover: (at) => {
         if (this.keysOpen && !this.waiting) this.ring('tick', { rate: tickRate(at.row % 8), gain: 0.8 });
       },
+      onKeysFocus: (at) => {
+        // the browser moved the focus (Tab) onto a cell: the lit one follows, with its sound
+        if (
+          !this.keysOpen ||
+          this.waiting ||
+          (at.row === this.keysFocus.row && at.col === this.keysFocus.col)
+        )
+          return;
+        this.keysFocus = at;
+        this.syncKeysProbe();
+        this.ring('tick', { rate: tickRate(at.row % 8) });
+      },
     });
     const v = this.values;
     this.probe = {
@@ -226,11 +238,11 @@ export class SettingsHost {
       );
     });
     window.addEventListener('keydown', this.onKey);
-    // S-45: a mouse button or the wheel taken by a cell of the key page that waits (before anything under the pointer)
+    // S-45: a mouse button taken by a cell of the key page that waits (before anything under the pointer); the wheel is
+    // listened to only while a cell waits (a listener that may stop it would hold every scroll on the main thread)
     window.addEventListener('pointerdown', this.onPointer, { capture: true });
     window.addEventListener('click', this.onClick, { capture: true });
     window.addEventListener('contextmenu', this.onContextMenu, { capture: true });
-    window.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
   }
 
   /** S-45: the settings in effect (the host reads 視点の基準の点 and 簡易トランジション from them). */
@@ -276,7 +288,7 @@ export class SettingsHost {
     this.pendingBack = false;
     // (the key page goes with the pane; it opens on 画質 again)
     this.keysOpen = false;
-    this.waiting = null;
+    this.setWaiting(null);
     this.keysLine = null;
     // a slider let go of while it closes (Esc during a drag) is kept as it took effect
     if (this.unsaved) this.keep(this.values, null);
@@ -451,7 +463,7 @@ export class SettingsHost {
   private openKeys(): void {
     this.keysOpen = true;
     this.keysFocus = KEYS_START;
-    this.waiting = null;
+    this.setWaiting(null);
     this.keysLine = null;
     this.focusPending = true;
     this.syncKeysProbe();
@@ -461,7 +473,7 @@ export class SettingsHost {
   /** 戻る: back to 操作, on the row of the page (一つ前に戻る). */
   private leaveKeys(): void {
     this.keysOpen = false;
-    this.waiting = null;
+    this.setWaiting(null);
     this.keysLine = null;
     this.focus = placeOf('keys');
     this.focusPending = true;
@@ -483,7 +495,7 @@ export class SettingsHost {
       this.ring('tick', { rate: tickRate(0, true) });
     } else if (step.waiting) {
       // 「キーを押してください」: the next key, button or turn of the wheel is the cell's
-      this.waiting = step.waiting;
+      this.setWaiting(step.waiting);
       this.keysLine = null;
       this.ring('tick', { rate: tickRate(6) });
     } else if (step.moved) this.ring('tick', { rate: tickRate(step.focus.row % 8), gain: 0.85 });
@@ -494,7 +506,7 @@ export class SettingsHost {
   private capture(c: Capture): boolean {
     const w = this.waiting;
     if (!w || c.kind === 'ignore') return false;
-    this.waiting = null;
+    this.setWaiting(null);
     this.focusPending = true;
     if (c.kind === 'cancel') {
       // 待ちの間の Esc は割り当てをやめて一覧へ戻る
@@ -506,18 +518,33 @@ export class SettingsHost {
     this.commit({ ...this.values, bindings: r.bindings }, 'keys', true);
     // 重なったら前の持ち主と入れ替え、何が入れ替わったかを書く
     this.keysLine = keysNotice(this.values.lang, c.code, r.swaps);
+    // the key in the slot it took (キー（副） of an action with no first key is its first): the light follows it
+    if (w.device === 'keyboardMouse') {
+      const at = r.bindings.keyboardMouse[w.action].indexOf(c.code);
+      if (at >= 0) this.keysFocus = { row: this.keysFocus.row, col: at };
+    }
     this.probe.keys.bound++;
     this.syncKeysProbe();
     this.ring('tick', { rate: tickRate(7) });
     return true;
   }
 
+  /** A cell waits for its key (or none does); the wheel is listened to only meanwhile. */
+  private setWaiting(w: KeysWaiting | null): void {
+    if (w && !this.waiting) window.addEventListener('wheel', this.onWheel, { capture: true, passive: false });
+    if (!w && this.waiting) window.removeEventListener('wheel', this.onWheel, { capture: true });
+    this.waiting = w;
+  }
+
   private readonly onPointer = (e: PointerEvent): void => {
+    // (a click that was to be swallowed never came: the button was not the primary one)
+    this.swallowClick = false;
     if (!this.waiting) return;
     if (this.capture(captureMouse(this.waiting, e.button))) {
       e.preventDefault();
       e.stopPropagation();
-      this.swallowClick = true;
+      // only the primary button's press is followed by a click (the others: auxclick, contextmenu)
+      this.swallowClick = e.button === 0;
     }
   };
 
