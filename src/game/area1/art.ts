@@ -564,7 +564,8 @@ export function* buildArea1(
         const p = a.clone().lerp(b, i / posts);
         brassParts.push(new THREE.CylinderGeometry(0.022, 0.028, h, 8).translate(p.x, SUMMIT_Y + h / 2, p.z));
       }
-      // its lamps on brass posts at the railing's ends, over its walls (seen from where the slope arrives)
+      // its lamps on brass posts rising from its walls' ends (by the railing, by its way in), over the walls (seen from where the
+      // slope arrives)
       for (const [x, y, z] of ROOM3_LOOKOUT.lamps) {
         const post = y - 0.2 - SUMMIT_Y;
         brassParts.push(
@@ -1268,15 +1269,16 @@ export function* buildArea1(
     }
     // S-41: 部屋3's shade
     for (const w of ROOM3_SHADE) box(w.minX, SUMMIT_Y - 0.3, w.minZ, w.maxX, w.top, w.maxZ);
-    // S-44: 部屋3's lookout — its deck, its walls and its railing out over the valley
+    // S-44: 部屋3's lookout — its deck, its walls and its railing out over the valley; its lamps over its walls
     box(
       LOOKOUT_DECK.minX,
       SUMMIT_Y - LOOKOUT_DECK.depth,
       LOOKOUT_DECK.minZ,
       LOOKOUT_DECK.maxX,
-      Math.max(...ROOM3_LOOKOUT.lamps.map((l) => l[1] + 0.2)),
+      ROOM3_RAILING.box.max[1],
       LOOKOUT_DECK.maxZ,
     );
+    for (const [x, y, z] of ROOM3_LOOKOUT.lamps) box(x - 0.2, SUMMIT_Y, z - 0.2, x + 0.2, y + 0.2, z + 0.2);
     for (const h of AREA1_HOUSES)
       box(
         h.minX,

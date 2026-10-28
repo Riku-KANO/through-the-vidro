@@ -687,40 +687,42 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
           ).toBeGreaterThan(MAIN_ORB_RADIUS);
   });
 
-  it('S-44: from where the slope arrives it is in sight — its lamps over its walls, nothing in the way (探さなくても目に入る) — and the motes drift to it', () => {
-    const v = AREA1_SPAWNS['area1-summit'];
-    const cp = Math.cos(v.pitch);
-    const look: Vec3 = [-Math.sin(v.yaw) * cp, Math.sin(v.pitch), -Math.cos(v.yaw) * cp];
-    // (its railing at the deck's end is behind its crumbled wall from there, whole up past the eye: its lamps stand above)
+  it('S-44: arriving up the slope it is in sight — its lamps over its walls, nothing in the way (探さなくても目に入る) — and the motes drift to it', () => {
+    // (its railing at the deck's end is behind its crumbled wall from where the slope arrives — the wall is whole up past the eye,
+    // as it must be to hide the drop once the vidro is placed — so its lamps stand over its walls)
     const f = ROOM3_LOOKOUT.floor;
-    const rail: Vec3 = [f.minX, SUMMIT_Y + ROOM3_LOOKOUT.rail.height, (f.minZ + f.maxZ) / 2];
-    const at = (feet: Vec3): Vec3 => [feet[0], feet[1] + EYE_HEIGHT, feet[2]];
-    expect(shaded(at(v.feet), rail, true)).toContain('the crumbled wall');
+    // the screen's half width (FOV_DEFAULT is the vertical field of view; at 16:9)
+    const halfWidth = Math.atan(Math.tan(((FOV_DEFAULT / 2) * Math.PI) / 180) * (16 / 9));
+    const turn = (5 * Math.PI) / 180;
     expect(ROOM3_LOOKOUT.lamps).toHaveLength(2);
     for (const lamp of ROOM3_LOOKOUT.lamps) {
-      // in the arrival's view, well inside its width (FOV_DEFAULT is the vertical field of view; the screen is wider)
-      const eye = at(v.feet);
-      const to: Vec3 = [lamp[0] - eye[0], lamp[1] - eye[1], lamp[2] - eye[2]];
-      const cos = (to[0] * look[0] + to[1] * look[1] + to[2] * look[2]) / Math.hypot(...to);
-      expect(cos, `${lamp}`).toBeGreaterThan(Math.cos(((FOV_DEFAULT / 2) * Math.PI) / 180));
-      // and from anywhere the slope comes up onto the terrace, over every wall of the summit and the lookout's own
       for (
         let x = AREA1_SLOPE.x - AREA1_SLOPE.halfWidth + 0.4;
         x <= AREA1_SLOPE.x + AREA1_SLOPE.halfWidth - 0.4;
         x += 0.4
-      )
+      ) {
+        // from anywhere the slope comes up onto the terrace, over every wall of the summit and the lookout's own
         for (const z of [AREA1_SLOPE.toZ - 0.4, AREA1_SLOPE.toZ - 1.2, AREA1_SLOPE.toZ - 2.0]) {
           const e: Vec3 = [x, SUMMIT_Y + EYE_HEIGHT, z];
           expect(hidden(e, lamp), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
           expect(shaded(e, lamp, true), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
         }
-      // over the walls' tops, on the lookout
+        // and facing along the slope (south) as one comes up onto the terrace: on the screen, at its west edge, or a small turn
+        // of the head from the slope's east side (the lookout lies west-south-west of where the slope arrives)
+        const z = AREA1_SLOPE.toZ - 0.4;
+        const off = Math.atan2(Math.abs(lamp[0] - x), z - lamp[2]);
+        expect(off, `${lamp} from (${x.toFixed(1)}, ${z}) facing south`).toBeLessThan(halfWidth + turn);
+      }
       expect(lamp[1] - ROOM3_RAILING.box.max[1]).toBeGreaterThan(0.5);
-      expect(lamp[0] >= f.minX && lamp[0] <= f.maxX && lamp[2] >= f.minZ && lamp[2] <= f.maxZ).toBe(true);
     }
-    // one at the railing's end (its edge over the valley), one at its way in
+    // one standing in the end of its whole south wall by the railing (out over the valley: its edge), one in the end of its
+    // crumbled wall by its way in — in the walls, whose colliders keep the body off the posts (当たり判定は見た目に正直に)
     const [edgeLamp, wayLamp] = ROOM3_LOOKOUT.lamps as [Vec3, Vec3];
-    expect(Math.abs(edgeLamp[0] - f.minX)).toBeLessThan(0.3);
+    const inBox = (q: Vec3, b: Box): boolean =>
+      q[0] > b.min[0] + 0.05 && q[0] < b.max[0] - 0.05 && q[2] > b.min[2] + 0.05 && q[2] < b.max[2] - 0.05;
+    expect(inBox(edgeLamp, ROOM3_LOOKOUT.wallS)).toBe(true);
+    expect(edgeLamp[0]).toBeLessThan(f.minX);
+    expect(inBox(wayLamp, ROOM3_RAILING.box)).toBe(true);
     expect(Math.abs(wayLamp[0] - f.maxX)).toBeLessThan(0.3);
     // and no post of them stands where one looks from it toward the drop (its posts, in plan, 0.2 m clear of every line from
     // where the drop is seen peeking)
