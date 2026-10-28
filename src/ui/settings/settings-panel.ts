@@ -1,6 +1,6 @@
 import type { QualityLevel } from '../../core/quality';
 import type { StringKey } from '../lang';
-import { qualityOptionWords } from './quality-row';
+import { autoTagWords } from './quality-row';
 import {
   CONTROLS,
   type PanelFocus,
@@ -271,7 +271,7 @@ export class SettingsPanel {
   /** S-48: the 自動 tag's words, with the preset it uses when it is chosen (自動（高）). */
   private writeAutoTag(): void {
     const o = this.rows.get('quality')?.options.find((x) => x.value === 'auto');
-    if (o) o.el.textContent = qualityOptionWords(this.t, 'auto', this.autoShown);
+    if (o) o.el.textContent = autoTagWords(this.t, this.autoShown);
   }
 
   /** Moves the browser's focus onto the focused tab or row (screen readers and Tab follow). */

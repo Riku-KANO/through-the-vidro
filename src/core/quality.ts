@@ -107,12 +107,12 @@ export function startQuality(opts: {
 }
 
 /**
- * S-48: whether 自動 runs, once the scene is made. The first time (nothing chosen) only where the scene takes presets in
- * place (`inPlace`: the game through the home): a dev scene that would be made again for another preset keeps the one it
- * was made with, as before S-48. 自動 asked for — the URL's, or the player's kept — runs either way.
+ * S-48: whether 自動 runs, once the scene is made. The first time (nothing chosen) only for the game itself (`game`: a scene
+ * that takes presets in place and says it is the game, `QualityScene.game`): a dev scene keeps the preset it was made with,
+ * as before S-48. 自動 asked for — the URL's, or the player's kept — runs either way.
  */
-export function governorAuto(start: StartQuality, inPlace: boolean): boolean {
-  return start.auto && (start.origin !== 'default' || inPlace);
+export function governorAuto(start: StartQuality, game: boolean): boolean {
+  return start.auto && (start.origin !== 'default' || game);
 }
 
 /**
@@ -135,16 +135,16 @@ export function governorTakesFrame(o: {
 /**
  * S-48: whether the shell keeps what 自動 picked, for the next visit to be built from it (選ばれたプリセットを保存して次は
  * そこから作る): the player's 自動 only — not a preset the player chose, not the URL's (a dev switch), never a measurement —
- * and only as measured in the game (`inPlace`: the scene that takes presets in place; 推奨はゲームの絵を描いている間の計測で
- * 決める), not in a scene made again for each preset (a dev scene's load is not the game's).
+ * and only as measured in the game (`game`: `QualityScene.game`; 推奨はゲームの絵を描いている間の計測で決める), not in a dev
+ * scene (its load is not the game's).
  */
 export function keepsAutoPick(o: {
   player: boolean;
   choice: QualityChoice;
   bench: boolean;
-  inPlace: boolean;
+  game: boolean;
 }): boolean {
-  return o.player && o.choice === 'auto' && !o.bench && o.inPlace;
+  return o.player && o.choice === 'auto' && !o.bench && o.game;
 }
 
 /**
@@ -201,4 +201,10 @@ export interface QualityScene {
    * the player's 自動 measures these frames only (`governorTakesFrame`). Left out: every frame is the game's.
    */
   readonly drawsGame?: boolean;
+  /**
+   * S-48: the scene is the game (not a dev scene that takes presets in place too, as S-04's placeholder city does): the
+   * first time's 自動 runs, and its pick is kept, only for it (`governorAuto`, `keepsAutoPick`). Read when it attaches and
+   * when 自動 is chosen. Left out: not the game.
+   */
+  readonly game?: boolean;
 }

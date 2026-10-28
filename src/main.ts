@@ -424,9 +424,11 @@ async function main(): Promise<void> {
       dynresRequireResponse: params.dynresResponse,
       forceLevel: params.autoForce ?? undefined,
     });
-  // S-48: the first time's 自動 runs where the scene takes presets in place (the game through the home); a scene that would
-  // be made again for another preset keeps the one it was made with (the dev scenes, the direct view), as before
-  const startAuto = governorAuto(startPreset, attached !== null);
+  /** S-48: the scene is the game (attached, and says so: the prologue through the home), not a dev scene. */
+  const isGame = (): boolean => attached?.game === true;
+  // S-48: the first time's 自動 runs for the game alone; a dev scene (made again for another preset, the direct view, S-04's
+  // placeholder city) keeps the one it was made with, as before
+  const startAuto = governorAuto(startPreset, isGame());
   if (!startAuto) probe.qualityChoice = startPreset.level;
   let governor = makeGovernor(startPreset.level, startAuto);
   /**
@@ -441,7 +443,7 @@ async function main(): Promise<void> {
     player: governorOrigin === 'player',
     choice: probe.qualityChoice,
     bench,
-    inPlace: attached !== null,
+    game: isGame(),
   });
   /** Bumped with each new governor: GPU samples requested for an old one are dropped. */
   let governorGeneration = 0;
@@ -529,13 +531,15 @@ async function main(): Promise<void> {
     governor = makeGovernor(level, choice === 'auto');
     governorOrigin = 'player';
     governorGeneration++;
-    pickToKeep = keepsAutoPick({ player: true, choice, bench, inPlace: attached !== null });
+    pickToKeep = keepsAutoPick({ player: true, choice, bench, game: isGame() });
     if (level !== probe.quality) switchQuality(level);
     else applyScale(QUALITY_PRESETS[level].renderScale);
   };
   if (pendingChoice) requestQuality(pendingChoice);
   pendingChoice = null;
 
+  /** S-48: what governorTakesFrame reads, written each frame (one object for the session). */
+  const frameState = { idle: false, drawsGame: true, measuring: false, player: false };
   const frameTimes: number[] = [];
   let maxDrawCalls = 0;
   let maxTriangles = 0;
@@ -564,12 +568,11 @@ async function main(): Promise<void> {
     // own frames go to it (推奨はゲームの絵を描いている間の計測で決める: not the light home orb, the loading, the dive)
     const idle = attached?.idle === true;
     if (idle) probe.idleFrames++;
-    const takes = governorTakesFrame({
-      idle,
-      drawsGame: attached?.drawsGame ?? true,
-      measuring: governor.phase !== 'steady',
-      player: governorOrigin === 'player',
-    });
+    frameState.idle = idle;
+    frameState.drawsGame = attached?.drawsGame ?? true;
+    frameState.measuring = governor.phase !== 'steady';
+    frameState.player = governorOrigin === 'player';
+    const takes = governorTakesFrame(frameState);
     const pollFrame = frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
     const sampleGpu = pollFrame && takes && (governor.gpuReliable || stats.visible || benchRecording);
     const wantPasses = gpuTiming && params.gpuPasses && (gpuSource === 'passes' || benchRecording);

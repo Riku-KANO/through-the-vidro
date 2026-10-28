@@ -157,6 +157,8 @@ export class PeekPipeline {
    * 2026-10-28: 遊ぶ途中の品質の切り替えで AA もその場で変える).
    */
   private readonly aaPipelines = new Map<QualityPreset['antialias'] | 'none', THREE.RenderPipeline>();
+  /** S-48: SMAA's own targets are shrunk while it is not in use (its next frame in use sizes them again). */
+  private smaaNode: { setSize(width: number, height: number): void } | null = null;
   private readonly scenePass: ReturnType<typeof pass>;
   private readonly composite: OrbComposite;
   /** Finishing nodes that own render targets. */
@@ -201,6 +203,7 @@ export class PeekPipeline {
       const image = texture(this.display.texture);
       const fx = fxaa(image);
       const sm = smaa(image);
+      this.smaaNode = sm;
       this.finishing.push(fx, sm);
       this.aaPipelines.set('fxaa', this.finishWith(fx));
       this.aaPipelines.set('smaa', this.finishWith(sm));
@@ -268,6 +271,15 @@ export class PeekPipeline {
     if (!next) return;
     this.pipeline = next;
     this.quality.antialias = preset.antialias;
+    this.shrinkUnusedAA();
+  }
+
+  /**
+   * S-48: SMAA not in use (低's FXAA) keeps no targets of the drawing buffer's size (its edges and weights): shrunk once its
+   * shaders are made (the first frame) and when the preset leaves it. In use again, its own update sizes them on that frame.
+   */
+  private shrinkUnusedAA(): void {
+    if (this.quality.antialias !== 'smaa') this.smaaNode?.setSize(1, 1);
   }
 
   /** Render size in pixels (drawing buffer). */
@@ -410,6 +422,7 @@ export class PeekPipeline {
     }
     if (first) for (const p of this.aaPipelines.values()) if (p !== this.pipeline) p.render();
     this.pipeline.render();
+    if (first) this.shrinkUnusedAA();
   }
 
   dispose(): void {

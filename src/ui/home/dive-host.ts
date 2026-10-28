@@ -139,6 +139,9 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     get drawsGame() {
       return playing;
     },
+    // S-48: the game (the prologue room: a world that takes the preset's own parts), not S-04's placeholder city: the first
+    // time's 自動 runs, and its pick is kept, for the game alone
+    game: typeof worldQuality.applyQuality === 'function',
   });
   // S-43: 設定, from the home's drop and the pause's item, over the picture behind
   const settings = new SettingsHost({

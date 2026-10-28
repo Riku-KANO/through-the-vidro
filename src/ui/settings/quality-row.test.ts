@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { QualityChoice, QualityLevel } from '../../core/quality';
 import { STRINGS, type StringKey } from '../lang';
-import { qualityOptionWords, qualityRowView } from './quality-row';
+import { autoTagWords, qualityRowView } from './quality-row';
 
 const port = (choice: QualityChoice, level: QualityLevel, sceneLevel: QualityLevel) => ({
   choice,
@@ -19,13 +19,13 @@ describe('S-48: the 品質 row — 自動 shows the preset it uses (設定の「
     expect(qualityRowView(null).autoLevel).toBeNull();
   });
 
-  it('the tag’s words, in each language', () => {
-    expect(qualityOptionWords(ja, 'auto', 'high')).toBe('自動（高）');
-    expect(qualityOptionWords(ja, 'auto', 'low')).toBe('自動（低）');
-    expect(qualityOptionWords(en, 'auto', 'mid')).toBe('Auto (Medium)');
-    expect(qualityOptionWords(ja, 'auto', null)).toBe('自動');
-    expect(qualityOptionWords(ja, 'low', 'high')).toBe('低');
-    expect(qualityOptionWords(en, 'high', null)).toBe('High');
+  it('the tag’s words, in each language (the presets’ own words)', () => {
+    expect(autoTagWords(ja, 'high')).toBe(`自動（${STRINGS.ja.setQualityHigh}）`);
+    expect(autoTagWords(ja, 'high')).toBe('自動（高）');
+    expect(autoTagWords(ja, 'low')).toBe('自動（低）');
+    expect(autoTagWords(en, 'mid')).toBe('Auto (Medium)');
+    expect(autoTagWords(ja, null)).toBe('自動');
+    expect(autoTagWords(en, null)).toBe('Auto');
   });
 });
 

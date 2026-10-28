@@ -92,9 +92,9 @@ describe('startQuality (which preset the shell creates the scene with)', () => {
 
 describe('governorAuto (S-48: whether 自動 runs, once the scene is made)', () => {
   const first = startQuality({ url: null, saved: null });
-  it('the first time, only where the scene takes presets in place (the game through the home)', () => {
+  it('the first time, only for the game itself (the prologue through the home)', () => {
     expect(governorAuto(first, true)).toBe(true);
-    // a dev scene that is made again for a preset keeps the one it was made with, as before S-48
+    // a dev scene (made again for a preset, or S-04's placeholder city) keeps the one it was made with, as before S-48
     expect(governorAuto(first, false)).toBe(false);
   });
 
@@ -132,7 +132,7 @@ describe('governorTakesFrame (S-48: 推奨はゲームの絵を描いている�
 });
 
 describe('keepsAutoPick (S-48: 選ばれたプリセットを保存して次はそこから作る)', () => {
-  const game = { player: true, choice: 'auto', bench: false, inPlace: true } as const;
+  const game = { player: true, choice: 'auto', bench: false, game: true } as const;
   it('the player’s 自動, measured in the game, keeps what it picked', () => {
     expect(keepsAutoPick(game)).toBe(true);
   });
@@ -143,8 +143,8 @@ describe('keepsAutoPick (S-48: 選ばれたプリセットを保存して次は�
     expect(keepsAutoPick({ ...game, bench: true })).toBe(false);
   });
 
-  it('not as measured in a scene made again for each preset (a dev scene’s load is not the game’s)', () => {
-    expect(keepsAutoPick({ ...game, inPlace: false })).toBe(false);
+  it('not as measured in a dev scene (its load is not the game’s: S-04’s placeholder city, the stress scene)', () => {
+    expect(keepsAutoPick({ ...game, game: false })).toBe(false);
   });
 });
 

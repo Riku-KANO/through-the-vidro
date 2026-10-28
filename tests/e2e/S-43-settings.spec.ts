@@ -769,7 +769,8 @@ for (const backend of backends) {
     await page.locator('[data-item="settings"]').click();
     await waitSettings(page, "q.phase === 'open'");
     await page.keyboard.press('ArrowDown');
-    await page.keyboard.press('ArrowRight');
+    // S-48: the first time is 自動 (no ?quality here: the reload must build from what is kept), so 高 is three steps on
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
     await waitSettings(page, "q.values.quality === 'high'");
     await page.waitForFunction(() => window.__vidro.quality === 'high' && window.__vidro.renderScale === 1);
     await page.keyboard.press('ArrowDown');

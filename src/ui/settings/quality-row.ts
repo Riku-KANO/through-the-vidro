@@ -25,21 +25,16 @@ export function qualityRowView(
   };
 }
 
+/** The words of each preset (the panel's tags of 低・中・高 use the same keys, settings-panel.ts OPTION_KEY). */
 const LEVEL_KEY: Readonly<Record<QualityLevel, StringKey>> = {
   low: 'setQualityLow',
   mid: 'setQualityMid',
   high: 'setQualityHigh',
 };
-const OPTION_KEY: Readonly<Record<string, StringKey>> = { auto: 'setQualityAuto', ...LEVEL_KEY };
 
-/** The words on a 品質 tag: 自動 carries `autoLevel` when there is one (自動（高）, Auto (High)). */
-export function qualityOptionWords(
-  t: (k: StringKey) => string,
-  option: string,
-  autoLevel: QualityLevel | null,
-): string {
-  if (option === 'auto' && autoLevel)
-    return t('setQualityAutoPick').replace('{level}', t(LEVEL_KEY[autoLevel]));
-  const key = OPTION_KEY[option];
-  return key ? t(key) : option;
+/** The words on the 自動 tag: with the preset it uses when it is chosen (自動（高）, Auto (High)), else 自動. */
+export function autoTagWords(t: (k: StringKey) => string, autoLevel: QualityLevel | null): string {
+  return autoLevel
+    ? t('setQualityAutoPick').replace('{level}', t(LEVEL_KEY[autoLevel]))
+    : t('setQualityAuto');
 }

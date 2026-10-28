@@ -6,7 +6,7 @@ import type { DiveWorld } from '../../game/dive-world';
 import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import type { Lang, StringKey } from '../lang';
-import { qualityRowView } from './quality-row';
+import { type QualityRowView, qualityRowView } from './quality-row';
 import {
   CONTROLS,
   keyCommand,
@@ -112,6 +112,9 @@ const TICK_HZ = midiToHz(74);
 const PANE_NOTES = { low: 3, high: 5, gapMs: 70 } as const;
 
 type Cue = 'open' | 'close' | 'tick';
+
+/** S-48: the 品質 row while the panel is down (nothing of it is drawn). */
+const QUALITY_ROW_HIDDEN: QualityRowView = { autoLevel: null, later: false };
 
 export class SettingsHost {
   readonly probe: SettingsProbe;
@@ -249,7 +252,7 @@ export class SettingsHost {
     const notice = this.noticeLeft <= 0 ? 0 : Math.min(1, shown / NOTICE_FADE, this.noticeLeft / NOTICE_FADE);
     // S-48: 自動's tag carries the preset in use; the line under 品質 only while the shadows and the glass wait (自動 too:
     // its pick is kept, and the next visit is built from it)
-    const quality = qualityRowView(this.opts.quality);
+    const quality = this.isUp ? qualityRowView(this.opts.quality) : QUALITY_ROW_HIDDEN;
     this.panel.render(dt, {
       open: this.timeline.value,
       interactive: this.timeline.interactive,
