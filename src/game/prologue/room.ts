@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { drawsGlass, readsBackdrop, withGlassUnculled } from '../../core/glass';
 import type { SceneContext } from '../../core/scene';
+import { glassEaseInverse } from '../../core/transition';
 import type { FieldSphere } from '../../layers/field';
 import { LayerField } from '../../layers/field';
 import type { Box, FootingSegment, Vec3 } from '../../layers/footing';
@@ -105,7 +106,9 @@ import {
   type SpawnName,
   TRIAL_SURFACE_WALL,
   WORKSHOP_ASSET,
+  WORKSHOP_FLOOR_RADIUS,
   WORKSHOP_OBJECTS,
+  WORKSHOP_TOP,
 } from './layout';
 import {
   addRoomColliders,
@@ -219,6 +222,8 @@ export interface RoomProbe {
   playing: boolean;
   /** Scene clock, seconds. */
   time: number;
+  /** S-42: the game's time speed (the pause stops it): the room's sounds of its time follow it (sound.ts). */
+  timeScale: number;
   position: { x: number; y: number; z: number };
   grounded: boolean;
   speed: number;
@@ -413,6 +418,14 @@ export interface PrologueRoom extends DiveWorld {
   readonly shortcut: EventBus<ShortcutEvent>;
   /** S-41: エリア1's gates between its rooms opening, apart from the others. */
   readonly gates: EventBus<AreaGateEvent>;
+  /** S-42: the pause's port (src/ui/pause/port.ts): the input asks for it (Esc, the mouse let go, Start). */
+  onPauseRequest(listener: () => void): () => void;
+  /** S-42: the game's time speed (0..1): the body, the orb, the light's sweeps and the ambient motion run at it. */
+  setTimeScale(scale: number): void;
+  /** S-42: the input held back while the pause is up (the mouse let go, no prompt). */
+  setHeld(held: boolean): void;
+  /** S-42: asks for the mouse lock again (inside the click or key press that resumes). */
+  relock(): void;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
@@ -464,6 +477,97 @@ const peekFarOf = (fogFar: number): number => fogFar;
 const HINT_SECONDS = 8;
 /** UI/UX設計 > ゲーム中: 0.2秒で現れ、離れると消える (the prompt, and the rims of what you can act on). */
 const FOCUS_SECONDS = 0.2;
+/** S-42: a camera pose (where it stands, a point it looks at). */
+export type Pose = { pos: THREE.Vector3; target: THREE.Vector3 };
+const smoothSpan = (u: number, from: number, to: number): number => {
+  const t = Math.min(1, Math.max(0, (u - from) / (to - from)));
+  return t * t * (3 - 2 * t);
+};
+/** Yaw and pitch of a direction (layout.ts lookDirection's angles). */
+function anglesOf(x: number, y: number, z: number, out: { yaw: number; pitch: number }): void {
+  const len = Math.hypot(x, y, z) || 1;
+  out.yaw = Math.atan2(-x, -z);
+  out.pitch = Math.asin(Math.min(1, Math.max(-1, y / len)));
+}
+/** `a` moved by whole turns to lie within half a turn of `near`. */
+const turnNear = (a: number, near: number): number =>
+  a - 2 * Math.PI * Math.round((a - near) / (2 * Math.PI));
+/**
+ * S-42 (仮): where the dive's time (its share, 0..1) leaves its own way for where play stands: in the workshop the eye's turn
+ * starts above it (u 0.3) and its place from the skylight's crossing on (u 0.62: dive-path.ts, the moment the home camera
+ * passes the orb's surface); out of it the camera leaves above the workshop (u 0.15) and is over the eye a little before
+ * the end. The dive's u is its eased value (glassEase of its time: ui/flow), so these are times along it.
+ */
+const TURN_FROM = glassEaseInverse(0.3);
+const SKYLIGHT_FROM = glassEaseInverse(0.62);
+const LEAVE_FROM = glassEaseInverse(0.15);
+const OVER_EYE_AT = 0.92;
+/** 仮: the arc over the town rises this share of the way to go, within these heights (m). */
+const ARC_RISE = 0.2;
+const ARC_MIN = 6;
+const ARC_MAX = 50;
+const path = { yaw: 0, pitch: 0 };
+const eyeAngles = { yaw: 0, pitch: 0 };
+const landingAngles = { yaw: 0, pitch: 0 };
+/**
+ * S-42: bends the dive's camera (`pos`, `target`: its pose at the dive's eased value u) toward where play stands (`eye`), so
+ * that the dive back from the pause's タイトルへ leaves from that eye and the dive in again ends there. Returns how far
+ * (0..1) its place has gone over (the haze follows it). `landing` is the dive's own end (the landing pose).
+ *  - in the workshop: the dive's own way in through the skylight, moved over by how far the eye stands from the landing
+ *    pose, and its view turned by how far the eye looks away from the landing's. The landing pose (the first dive) bends
+ *    nothing
+ *  - out of it (仮): from above the workshop the camera leaves the dive in an arc high over the town, is over the eye a
+ *    little before the end and comes down onto it; its view turns from the dive's (down onto the workshop) to the eye's.
+ *    It passes through neither the dome nor the town (for a roof right over the eye, see S-42 残件)
+ * Both run on the dive's time, not its eased value, so the way is spread over the dive (no leap in its fast middle).
+ */
+export function towardEye(
+  u: number,
+  landing: Pose,
+  eye: Pose,
+  pos: THREE.Vector3,
+  target: THREE.Vector3,
+): number {
+  const t = glassEaseInverse(Math.min(1, Math.max(0, u)));
+  anglesOf(target.x - pos.x, target.y - pos.y, target.z - pos.z, path);
+  anglesOf(eye.target.x - eye.pos.x, eye.target.y - eye.pos.y, eye.target.z - eye.pos.z, eyeAngles);
+  const l = landing;
+  anglesOf(l.target.x - l.pos.x, l.target.y - l.pos.y, l.target.z - l.pos.z, landingAngles);
+  // how far the eye looks round from the landing pose, the short way
+  const turnAway = turnNear(eyeAngles.yaw - landingAngles.yaw, 0);
+  const inWorkshop =
+    Math.hypot(eye.pos.x, eye.pos.z) < WORKSHOP_FLOOR_RADIUS - 0.4 && eye.pos.y < WORKSHOP_TOP - 1;
+  let placed: number;
+  let yaw: number;
+  let pitch: number;
+  if (inWorkshop) {
+    placed = smoothSpan(t, SKYLIGHT_FROM, 1);
+    pos.x += (eye.pos.x - l.pos.x) * placed;
+    pos.y += (eye.pos.y - l.pos.y) * placed;
+    pos.z += (eye.pos.z - l.pos.z) * placed;
+    // the dive's own view, turned by the eye's turn from the landing's (over the end of the dive, not at its end)
+    const turn = smoothSpan(t, TURN_FROM, 1);
+    yaw = path.yaw + turnAway * turn;
+    pitch = path.pitch + (eyeAngles.pitch - landingAngles.pitch) * turn;
+  } else {
+    placed = smoothSpan(t, LEAVE_FROM, 1);
+    if (placed <= 0) return 0;
+    const across = smoothSpan(t, LEAVE_FROM, OVER_EYE_AT);
+    const rise = Math.min(
+      ARC_MAX,
+      Math.max(ARC_MIN, ARC_RISE * Math.hypot(eye.pos.x - pos.x, eye.pos.z - pos.z)),
+    );
+    pos.x += (eye.pos.x - pos.x) * across;
+    pos.z += (eye.pos.z - pos.z) * across;
+    pos.y += (eye.pos.y - pos.y) * placed + rise * Math.sin(Math.PI * placed);
+    // from the dive's view to the eye's (its yaw taken on the side the landing's turn says, as the dive's own view turns)
+    yaw = path.yaw + turnNear(eyeAngles.yaw - path.yaw, turnAway) * placed;
+    pitch = path.pitch + (eyeAngles.pitch - path.pitch) * placed;
+  }
+  const c = Math.cos(pitch);
+  target.set(pos.x - Math.sin(yaw) * c, pos.y + Math.sin(pitch), pos.z - Math.cos(yaw) * c);
+  return placed;
+}
 const STRINGS = {
   ja: {
     lock: 'クリックで視点を固定 ・ WASD 歩く ・ 右クリック 覗く ・ E 置く／拾う／調べる ・ Esc 解除',
@@ -503,6 +607,8 @@ interface Shell {
   hints: EventBus<HintEvent>;
   shortcut: EventBus<ShortcutEvent>;
   gates: EventBus<AreaGateEvent>;
+  /** S-42: the input's asks for the pause. */
+  pauses: EventBus<'pause'>;
 }
 
 /** A rectangle on the ground (x and z). */
@@ -514,6 +620,10 @@ interface BuiltRoom {
   fogRange: { near: { value: number }; far: { value: number } };
   warm(): void;
   setPlaying(on: boolean): void;
+  setHeld(held: boolean): void;
+  relock(): void;
+  /** S-42: where play stands — the eye, a point it looks at, and the haze there. */
+  eyePose(outPos: THREE.Vector3, outTarget: THREE.Vector3, outFog: { near: number; far: number }): void;
   update(dt: number, t: number): void;
   render(): void;
   resize(): void;
@@ -537,10 +647,12 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   const hints = new EventBus<HintEvent>();
   const shortcut = new EventBus<ShortcutEvent>();
   const gates = new EventBus<AreaGateEvent>();
+  const pauses = new EventBus<'pause'>();
   const probe: RoomProbe = {
     ready: false,
     playing: false,
     time: 0,
+    timeScale: 1,
     position: { x: s.feet[0], y: s.feet[1], z: s.feet[2] },
     grounded: false,
     speed: 0,
@@ -706,6 +818,14 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   let building: Promise<void> | null = null;
   let disposed = false;
   let playing = false;
+  // S-42: the game's time speed (the pause stops it) and the game's own clock, which runs at it
+  let timeScale = 1;
+  let clock: number | null = null;
+  let held = false;
+  const eye = { pos: new THREE.Vector3(), target: new THREE.Vector3(), fog: { near: 0, far: 0 } };
+  const landing: Pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+  dive.pose(1, landing.pos, landing.target);
+  const shell: Shell = { camera, probe, events, finale, hints, shortcut, gates, pauses };
   return {
     get scene() {
       return built?.scene ?? placeholder;
@@ -723,22 +843,30 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     pose(u, outPos, outTarget) {
       dive.pose(u, outPos, outTarget);
       if (!built) return;
+      // S-42: the dive ends where play stands (back from the pause's タイトルへ, and in again, it passes through that eye
+      // and its haze; the first time that is the landing pose itself, and the dive is as it was)
+      let w = 0;
+      if (u > 0) {
+        built.eyePose(eye.pos, eye.target, eye.fog);
+        w = towardEye(u, landing, eye, outPos, outTarget);
+      }
       // the haze is set for standing in the room; seen from afar (the miniature) it moves out with the camera
       const away = Math.max(0, outPos.length() - 25);
-      built.fogRange.near.value = 18 + away;
-      built.fogRange.far.value = 150 + away * 3;
+      const near = 18 + away;
+      const far = 150 + away * 3;
+      built.fogRange.near.value = near + (eye.fog.near - near) * w;
+      built.fogRange.far.value = far + (eye.fog.far - far) * w;
     },
     prepare() {
-      building ??= buildRoom(ctx, opts, { camera, probe, events, finale, hints, shortcut, gates }).then(
-        (b) => {
-          if (disposed) {
-            b.dispose();
-            return;
-          }
-          built = b;
-          b.setPlaying(playing);
-        },
-      );
+      building ??= buildRoom(ctx, opts, shell).then((b) => {
+        if (disposed) {
+          b.dispose();
+          return;
+        }
+        built = b;
+        b.setPlaying(playing);
+        b.setHeld(held);
+      });
       return building;
     },
     warm: () => built?.warm(),
@@ -746,9 +874,23 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       playing = on;
       built?.setPlaying(on);
     },
-    update: (dt, t) => built?.update(dt, t),
+    update(dt, t) {
+      const d = dt * timeScale;
+      clock = clock === null ? t : clock + d;
+      built?.update(d, clock);
+    },
     render: () => built?.render(),
     resize: () => built?.resize(),
+    onPauseRequest: (listener) => pauses.on(listener),
+    setTimeScale(scale) {
+      timeScale = Number.isFinite(scale) ? Math.min(1, Math.max(0, scale)) : 1;
+      probe.timeScale = timeScale;
+    },
+    setHeld(on) {
+      held = on;
+      built?.setHeld(on);
+    },
+    relock: () => built?.relock(),
     dispose() {
       disposed = true;
       built?.dispose();
@@ -758,6 +900,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       hints.clear();
       shortcut.clear();
       gates.clear();
+      pauses.clear();
     },
   };
 }
@@ -958,6 +1101,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   });
 
   let playing = false;
+  /** S-42: the pause is up: the input is held (playing stays true: the body keeps the camera). */
+  let held = false;
+  const holdInput = (): void => {
+    input.suspended = !playing || held || opts.autopilot !== null;
+  };
   let time = 0;
   let frames = 0;
   let prewarm = false;
@@ -1092,7 +1240,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     else if (type === 'peekDenied') {
       session.refusePeek();
       probe.lastAction = 'peek-denied';
-    }
+    } else if (type === 'pause') shell.pauses.emit('pause');
   };
 
   // S-34: the close as the session says (or as held): the settled bridge and its band of light, the gate. S-40: every leg of
@@ -1182,7 +1330,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     // the controls hint shows only for a few seconds while the mouse is free (ゲーム中は常時表示なし), and
     // never in the dev holds (clean screenshots)
     const hint = !opts.autopilot && opts.peekHold === null && opts.growHold === null;
-    if (playing && !input.locked && hint && hintFor < HINT_SECONDS) next = text.lock;
+    // S-42: nothing under the pause
+    if (held) next = '';
+    else if (playing && !input.locked && hint && hintFor < HINT_SECONDS) next = text.lock;
     else if (playing && target === 'bench') next = text.take;
     else if (playing && target === 'drop') next = text.touch;
     else if (playing && target === 'pedestal')
@@ -1686,7 +1836,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     setPlaying(on) {
       playing = on;
-      input.suspended = !on || opts.autopilot !== null;
+      holdInput();
       if (on) {
         hintFor = 0;
         // the way's haze in the workshop, the town's out on the slope (S-35: plaza.ts fogRangeAt)
@@ -1698,6 +1848,21 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       } else {
         input.exitLock();
       }
+    },
+    setHeld(on) {
+      held = on;
+      holdInput();
+      if (on) input.exitLock();
+    },
+    relock() {
+      if (playing && !opts.autopilot && !input.locked) input.requestLock();
+    },
+    eyePose(outPos, outTarget, outFog) {
+      const e = player.eye;
+      outPos.set(e.x, e.y, e.z);
+      const d = lookDirection(player.yaw, player.pitch, forward);
+      outTarget.set(e.x + d[0], e.y + d[1], e.z + d[2]);
+      fogRangeAt(e.z, outFog);
     },
     update(dt, t) {
       time += dt;

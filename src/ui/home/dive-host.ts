@@ -10,6 +10,8 @@ import { AUTOPLAY, parsePauseSpec } from '../autoplay';
 import { ScreenFlow, TRANSITIONS } from '../flow';
 import { pickLang, STRINGS, type StringKey } from '../lang';
 import { LoadingScreen } from '../loading-screen';
+import { PauseHost } from '../pause/pause-host';
+import { pausableOf } from '../pause/port';
 import type { HomeDiveProbe, PhaseName, PhaseStats } from '../probe';
 import { createUiRoot } from '../styles';
 import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './choreography';
@@ -92,6 +94,11 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   const ownsGate = !opts.audio;
   if (autoplay !== 'off') gate.skip();
   const flow = new ScreenFlow();
+  // S-42: the pause, over a world that has its port (the prologue room); its タイトルへ plays the dive back to the home
+  const pausable = pausableOf(world);
+  const pause = pausable
+    ? new PauseHost({ root: ui.root, t, gate, world: pausable, leave: () => flow.rewindFromGame() })
+    : null;
 
   // ---- probe ----
   const probe: HomeDiveProbe = {
@@ -110,10 +117,11 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     release: false,
     phases: {},
   };
-  window.__vidro.sceneProbe = Object.assign(probe, opts.probeExtras ?? {}) as unknown as Record<
-    string,
-    unknown
-  >;
+  window.__vidro.sceneProbe = Object.assign(
+    probe,
+    pause ? { pause: pause.probe } : {},
+    opts.probeExtras ?? {},
+  ) as unknown as Record<string, unknown>;
 
   // ---- screens ----
   const startOpening = (byUser: boolean): void => {
@@ -357,6 +365,8 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         playing = nowPlaying;
         world.setPlaying(playing);
       }
+      // S-42: before the world's update, so that the time speed it sets is this frame's
+      pause?.update(dt, playing);
 
       // back at rest on the home screen (arrived, or played back there): the keyboard focus returns
       if (hadTransition && !tr && flow.screen === 'home')
@@ -494,9 +504,13 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       }
       const tr = flow.transition;
       if (playing) {
-        // standing in the world: it draws the whole picture now
-        renderer.setRenderTarget(null);
-        world.render();
+        // standing in the world: it draws the whole picture now — but not again while the pause holds it (S-42)
+        const held = pause?.holdsFrame ?? false;
+        if (!held) {
+          renderer.setRenderTarget(null);
+          world.render();
+        }
+        pause?.frameDrawn(!held);
       } else {
         if (warmPlay) {
           // compile the playing view's passes; the home frame below draws over it
@@ -537,6 +551,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       innerRT.setSize(Math.max(1, drawSize.x), Math.max(1, drawSize.y));
       menu.invalidate();
       world.resize(width, height);
+      pause?.resize(width, height);
     },
     dispose() {
       disposed = true;
@@ -545,6 +560,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       window.removeEventListener('pointermove', onMove);
       loading.dispose();
       menu.dispose();
+      pause?.dispose();
       ui.dispose();
       if (ownsGate) gate.dispose();
       orb.dispose();

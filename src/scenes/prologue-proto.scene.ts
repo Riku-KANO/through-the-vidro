@@ -50,6 +50,9 @@ export const title =
  * .sound (game/prologue/sound.ts SoundProbe): the room's events answered with po-pens and glass (S-16), silent until
  * the audio starts: through the home, the press of 「はじめる」 starts the page's one engine, shared by the home's drops
  * and the room (.audioGate, S-18); in direct mode, the room's own on the first gesture.
+ * S-42: through the home, Esc (or the mouse let go) and a pad's Start open the pause in play (src/ui/pause, the home host's;
+ * not in direct mode): the time stops, つづける / タイトルへ (the dive played back to the home). Its probe is .pause
+ * (ui/pause/pause-host.ts PauseProbe; `.pause.hold = <s>` stands the opening that far in, for screenshots).
  */
 const unit = (v: string | null): number | null => {
   if (v === null || v.trim() === '') return null;

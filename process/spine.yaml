@@ -963,7 +963,8 @@ slices:
 
   - id: S-42
     title: ポーズ画面 — 時間がゆっくり止まり、曇りが広がって文字が書かれる。つづける・タイトルへ（確認つき）
-    status: todo
+    status: integrated
+    accepted: 発案者が上限（レビュー2巡）で受け入れ。残った P1（開いたときに鳴っている出来事の音が最後まで鳴る）は、発案者の判断で sound.ts に時間の速さの口を足して直し、追加のレビュー1巡（3巡目）で P1 なし。見た目と手触り、タイトルへ戻った後の「はじめる」が続きから（セーブまで）、ホームでは環境音を消す、はこのまま。room.ts・dive-host.ts が spine の用途より広がったのは統合で追認。全検査は実時間の音の6件（スリープ後の環境、main でも同じく落ちる）を除いて緑（2026-10-28）
     depends: [S-40]
     parallel: true
     decided: 発案者の判断（2026-10-27）。M1 の主要画面のうち、ポーズと設定を S-41 と並べて進める。設定パネルは S-43 で、ポーズの「設定」はそこでつなぐ。ヒントと地図の玉の項目は、その仕組みを作るスライスで足す
@@ -975,7 +976,7 @@ slices:
       - src/ui/pause/**（新規。ポーズの見た目・項目・確認・状態）
       - src/ui/lang/*.json、src/ui/styles.ts、src/ui/flow.ts（遷移の口が要るとき）、src/ui/home/**（ホームへ戻る口だけ）
       - src/game/prologue/room.ts（ポーズの配線と時間の速さだけ。並行の S-41 も触るので広げない）
-      - src/audio/**（ポーズの音、ポーズ中に絞る音）
+      - src/audio/**（ポーズの音、ポーズ中に絞る音）、src/game/prologue/sound.ts（時間の速さの口。発案者の判断で追加）、src/ui/home/dive-host.ts（ポーズの持ち主。統合で追認）
       - src/scenes/prologue-proto.scene.ts（先頭のコメントだけ）
       - src/core/transition/**（要るときだけ。CHANGELOG に記録）
       - 上の単体テスト、tests/e2e/S-42-*.spec.ts
