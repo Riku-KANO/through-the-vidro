@@ -433,14 +433,15 @@ for (const backend of backends) {
       const shotAll = await page.screenshot();
       await setFar(null);
       await page.mouse.up({ button: 'right' });
+      // (for the record: how much of the vidro's image the far end changes against everything drawn into it)
+      const changedInOrb = await changedShare(page, shotOwn, shotOwnAgain, shotAll, own.orbScreen);
       runs[name] = {
         drawCalls: own.drawCalls,
         triangles: own.triangles,
         peekFar: own.peekFar,
         allDrawCalls: all.drawCalls,
         chimneyInOrb: chimney,
-        // (for the record: how much of the vidro's image the far end changes against everything drawn into it)
-        changedInOrb: await changedShare(page, shotOwn, shotOwnAgain, shotAll, own.orbScreen),
+        changedInOrb,
       };
       expect(own.peekFar.far, name).toBe(PEEK_FAR);
       expect(own.peekFar.leftOutBack, `${name}: nothing of the back layer left out`).toBe(0);
@@ -452,10 +453,13 @@ for (const backend of backends) {
         expect(own.drawCalls, `down from ${S41_COURT_A_PEEK}`).toBeLessThanOrEqual(COURT_A_AIM);
       }
       if (name === 'brow-chimney') {
-        // past the far end things are left out, yet the landmark is drawn: the chimney's pixels stay in the vidro's circle
-        expect(own.peekFar.leftOut).toBeGreaterThan(0);
-        expect(own.peekFar.keptLandmarks).toBeGreaterThan(0);
+        // past the far end the landmark is drawn — the chimney's stacks, their glow and bands, and (発案者 2026-10-28) the town's
+        // bubbles on the hill at its foot: nothing that way is left out, the vidro's image as with everything drawn into it
+        expect(own.peekFar.keptLandmarks).toBeGreaterThanOrEqual(4);
+        expect(own.peekFar.leftOut).toBe(0);
+        expect(own.drawCalls, 'the far end saves nothing toward the chimney').toBe(all.drawCalls);
         expect(chimney, 'the chimney in the vidro').toBeGreaterThan(0.005);
+        expect(changedInOrb, 'its foot stays in the vidro (S-44 before the call: 7.6%)').toBeLessThan(0.01);
       }
     }
     writeFileSync(

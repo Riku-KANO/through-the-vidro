@@ -874,6 +874,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       town.renderOrder = 1;
       instanced.push(town);
       put(town);
+      // S-44 (発案者 2026-10-28): the bubbles on エリア1's hill are the chimney's foot: drawn into the peek image with it however far
+      if (z === 'hill') markLandmark(town, 'area1-chimney');
     }
   }
 

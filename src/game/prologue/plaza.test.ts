@@ -199,13 +199,15 @@ describe('S-35: the plaza as drawn (plaza.ts buildPlaza)', () => {
           sphere.radius,
         );
       }
-    // and nothing else of the town: its bubbles, its floor and gates' roads are left out far off as anything else
+    // (発案者 2026-10-28: the town's bubbles on エリア1's hill are the chimney's foot — with them, it does not float in the haze)
+    expect(landmarkOf(scene.getObjectByName('town-hill') as THREE.Object3D)).toBe('area1-chimney');
+    // and nothing else of the town: its other bubbles, its floor and gates' roads are left out far off as anything else
     let unmarked = 0;
     scene.traverse((o) => {
       if ((o as THREE.Mesh).isMesh && !landmarkOf(o)) unmarked++;
     });
     expect(unmarked).toBeGreaterThan(5);
-    for (const name of ['town-plaza', 'town-slope', 'town-hill', 'town-far'])
+    for (const name of ['town-plaza', 'town-slope', 'town-far'])
       expect(landmarkOf(scene.getObjectByName(name) as THREE.Object3D), name).toBeNull();
     art.dispose();
   });
