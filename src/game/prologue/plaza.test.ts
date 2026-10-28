@@ -4,12 +4,16 @@ import { QUALITY_PRESETS } from '../../core/quality';
 import { LayerField } from '../../layers/field';
 import { viewMask } from '../../layers/layers';
 import { AREA1_CHIMNEY, AREA1_KEEP_OUT, AREA1_PLAZA, MOTES_TO_ROOM } from '../area1/layout';
+import { landmarkOf } from '../orb/peek-pipeline';
 import { BODY_RADIUS } from '../player/constants';
 import {
   COMPASS,
+  DROP_TOWERS,
   EAST_ROAD,
   EAST_ROAD_END_X,
   GATE,
+  GREENHOUSE,
+  LIGHTHOUSE,
   PLAZA,
   PLAZA_GATE,
   PLAZA_GATES,
@@ -160,6 +164,49 @@ describe('S-35: the plaza as drawn (plaza.ts buildPlaza)', () => {
       if (!mesh.frustumCulled || frustum.intersectsObject(mesh)) drawn.push(mesh.name || mesh.type);
     });
     expect(drawn).toEqual([]);
+    art.dispose();
+  });
+
+  it('S-44: the landmarks are marked, so the peek image draws them however far (空間の可読性と導線 5: 灯塔、工房街の煙突、水路の雫塔、温室のドーム)', () => {
+    const { scene, art } = build();
+    scene.updateMatrixWorld(true);
+    const marked = new Map<string, THREE.Mesh[]>();
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      const mark = landmarkOf(o);
+      if (!mesh.isMesh || !mark) return;
+      marked.set(mark, [...(marked.get(mark) ?? []), mesh]);
+    });
+    expect([...marked.keys()].sort()).toEqual(['area1-chimney', 'drop-towers', 'greenhouse', 'lighthouse']);
+    // each mark on the things of its landmark: their bounds stand over its foot
+    const [sx, sz] = plazaGateAt(COMPASS.south);
+    const towerFoot: [number, number] = [sx + (DROP_TOWERS[0]?.[0] ?? 0), sz - (DROP_TOWERS[0]?.[1] ?? 0)];
+    const feet: Record<string, [number, number]> = {
+      lighthouse: [LIGHTHOUSE[0], LIGHTHOUSE[2]],
+      'area1-chimney': [AREA1_CHIMNEY.foot[0], AREA1_CHIMNEY.foot[2]],
+      'drop-towers': towerFoot,
+      greenhouse: [GREENHOUSE.center[0], GREENHOUSE.center[2]],
+    };
+    const sphere = new THREE.Sphere();
+    for (const [mark, meshes] of marked)
+      for (const m of meshes) {
+        if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+        const b = (m as THREE.InstancedMesh).boundingSphere ?? m.geometry.boundingSphere;
+        expect(b, `${mark}: ${m.name}`).toBeTruthy();
+        sphere.copy(b as THREE.Sphere).applyMatrix4(m.matrixWorld);
+        const [fx, fz] = feet[mark] as [number, number];
+        expect(Math.hypot(sphere.center.x - fx, sphere.center.z - fz), `${mark}: ${m.name}`).toBeLessThan(
+          sphere.radius,
+        );
+      }
+    // and nothing else of the town: its bubbles, its floor and gates' roads are left out far off as anything else
+    let unmarked = 0;
+    scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && !landmarkOf(o)) unmarked++;
+    });
+    expect(unmarked).toBeGreaterThan(5);
+    for (const name of ['town-plaza', 'town-slope', 'town-hill', 'town-far'])
+      expect(landmarkOf(scene.getObjectByName(name) as THREE.Object3D), name).toBeNull();
     art.dispose();
   });
 });

@@ -68,6 +68,7 @@ import {
   ROOM3_BRIDGE_N,
   ROOM3_BRIDGE_S,
   ROOM3_DROP,
+  ROOM3_LOOKOUT,
   ROOM3_PEDESTAL_N,
   ROOM3_PEDESTAL_S,
   ROOM3_RAILING,
@@ -83,7 +84,7 @@ import {
   SUMMIT_Y,
   shortcutSegments,
 } from './layout';
-import { area1SlopeDeckShape, balconyRails } from './physics';
+import { area1SlopeDeckShape, balconyRails, LOOKOUT_DECK, lookoutRail } from './physics';
 
 /**
  * エリア1's look (S-36, S-40; 仮): grey boxes from code — the houses of the workshop street with their roofs as bubbles, stone
@@ -432,6 +433,13 @@ export function* buildArea1(
       parts.push(
         boxGeometry({ min: [r.minX, SUMMIT_Y - 0.3, r.minZ], max: [r.maxX, SUMMIT_Y - 0.002, r.maxZ] }),
       );
+    // S-44: 部屋3's lookout — its deck out over the lip, under its floor and its walls (physics.ts LOOKOUT_DECK)
+    {
+      const d = LOOKOUT_DECK;
+      parts.push(
+        boxGeometry({ min: [d.minX, SUMMIT_Y - d.depth, d.minZ], max: [d.maxX, SUMMIT_Y - 0.002, d.maxZ] }),
+      );
+    }
     put(new THREE.Mesh(merged(parts), stone), 'area1-floor');
   }
   yield;
@@ -529,6 +537,41 @@ export function* buildArea1(
         );
       }
     }
+    // S-44: 部屋3's lookout — its railing across the deck's end (柵; the same line as its collider: physics.ts lookoutRail), its
+    // deck's end edged in brass (縁)
+    {
+      const r = lookoutRail();
+      const h = ROOM3_LOOKOUT.rail.height;
+      const a = new THREE.Vector3(
+        r.at[0] - (r.along[0] * r.length) / 2,
+        0,
+        r.at[1] - (r.along[1] * r.length) / 2,
+      );
+      const b = new THREE.Vector3(
+        r.at[0] + (r.along[0] * r.length) / 2,
+        0,
+        r.at[1] + (r.along[1] * r.length) / 2,
+      );
+      for (const [at, radius] of [
+        [h, 0.026],
+        [h * 0.5, 0.016],
+      ] as const)
+        brassParts.push(rod(a.clone().setY(SUMMIT_Y + at), b.clone().setY(SUMMIT_Y + at), radius, 8));
+      const posts = Math.max(1, Math.round(r.length / 1.1));
+      for (let i = 0; i <= posts; i++) {
+        const p = a.clone().lerp(b, i / posts);
+        brassParts.push(new THREE.CylinderGeometry(0.022, 0.028, h, 8).translate(p.x, SUMMIT_Y + h / 2, p.z));
+      }
+      const d = LOOKOUT_DECK;
+      brassParts.push(
+        rod(
+          new THREE.Vector3(d.minX + 0.03, SUMMIT_Y - 0.03, d.minZ),
+          new THREE.Vector3(d.minX + 0.03, SUMMIT_Y - 0.03, d.maxZ),
+          0.035,
+          8,
+        ),
+      );
+    }
   }
   yield;
 
@@ -599,15 +642,43 @@ export function* buildArea1(
             (w.minZ + w.maxZ) / 2,
           ),
         );
-        const x = (w.minX + w.maxX) / 2;
+        // (along its longer side)
+        const alongZ = w.maxZ - w.minZ >= w.maxX - w.minX;
+        const [x, z] = [(w.minX + w.maxX) / 2, (w.minZ + w.maxZ) / 2];
         brassParts.push(
-          rod(
-            new THREE.Vector3(x, w.top - 0.12, w.minZ + 0.06),
-            new THREE.Vector3(x, w.top - 0.12, w.maxZ - 0.06),
-            0.03,
+          alongZ
+            ? rod(
+                new THREE.Vector3(x, w.top - 0.12, w.minZ + 0.06),
+                new THREE.Vector3(x, w.top - 0.12, w.maxZ - 0.06),
+                0.03,
+              )
+            : rod(
+                new THREE.Vector3(w.minX + 0.06, w.top - 0.12, z),
+                new THREE.Vector3(w.maxX - 0.06, w.top - 0.12, z),
+                0.03,
+              ),
+        );
+      }
+      // S-44: the lookout's whole south wall (a brass line along its top) and the fallen stones at its north wall's foot (low)
+      for (const b of [ROOM3_LOOKOUT.wallS, ROOM3_LOOKOUT.heap]) {
+        const h = b.max[1] - (SUMMIT_Y - 0.3);
+        parts.push(
+          bare(new RoundedBoxGeometry(b.max[0] - b.min[0], h, b.max[2] - b.min[2], 2, 0.08)).translate(
+            (b.min[0] + b.max[0]) / 2,
+            SUMMIT_Y - 0.3 + h / 2,
+            (b.min[2] + b.max[2]) / 2,
           ),
         );
       }
+      const w = ROOM3_LOOKOUT.wallS;
+      const wz = (w.min[2] + w.max[2]) / 2;
+      brassParts.push(
+        rod(
+          new THREE.Vector3(w.min[0] + 0.06, w.max[1] - 0.12, wz),
+          new THREE.Vector3(w.max[0] - 0.06, w.max[1] - 0.12, wz),
+          0.03,
+        ),
+      );
     }
     if (parts.length > 0) put(new THREE.Mesh(merged(parts), grey), `area1-houses-${zone}`);
   };
@@ -1155,6 +1226,15 @@ export function* buildArea1(
     }
     // S-41: 部屋3's shade
     for (const w of ROOM3_SHADE) box(w.minX, SUMMIT_Y - 0.3, w.minZ, w.maxX, w.top, w.maxZ);
+    // S-44: 部屋3's lookout — its deck, its walls and its railing out over the valley
+    box(
+      LOOKOUT_DECK.minX,
+      SUMMIT_Y - LOOKOUT_DECK.depth,
+      LOOKOUT_DECK.minZ,
+      LOOKOUT_DECK.maxX,
+      ROOM3_RAILING.box.max[1],
+      LOOKOUT_DECK.maxZ,
+    );
     for (const h of AREA1_HOUSES)
       box(
         h.minX,
