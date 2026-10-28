@@ -555,10 +555,17 @@ for (const backend of backends) {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
     // nothing kept, no ?quality: S-04's placeholder city through the same home host (it takes presets in place, but it is
-    // not the game), the prologue's direct view, and a sandbox scene are made at 中 and stay there, as before S-48
-    for (const query of ['scene=home-dive', 'scene=prologue-proto&spawn=dead-end', 'scene=hello']) {
+    // not the game; played by its script into the city, where the game's 自動 would measure), the prologue's direct view,
+    // and a sandbox scene are made at 中 and stay there, as before S-48
+    for (const query of [
+      'scene=home-dive&autoplay=1',
+      'scene=prologue-proto&spawn=dead-end',
+      'scene=hello',
+    ]) {
       await page.goto(`/?${query}&autoWindow=1${webgl}`);
       await page.waitForFunction(() => window.__vidro?.status === 'running', undefined, { timeout: 90_000 });
+      if (query.startsWith('scene=home-dive'))
+        await waitProbe(page, "p.screen === 'game' && p.transition === null", 60_000);
       // past the window it would have measured in (warm-up 0.5 s + 1 s)
       await page.waitForTimeout(2_500);
       const s = await shell(page);
