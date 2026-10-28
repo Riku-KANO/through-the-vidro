@@ -211,6 +211,8 @@ export interface RoomProbe {
   playing: boolean;
   /** Scene clock, seconds. */
   time: number;
+  /** S-42: the game's time speed (the pause stops it): the room's sounds of its time follow it (sound.ts). */
+  timeScale: number;
   position: { x: number; y: number; z: number };
   grounded: boolean;
   speed: number;
@@ -615,6 +617,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     ready: false,
     playing: false,
     time: 0,
+    timeScale: 1,
     position: { x: s.feet[0], y: s.feet[1], z: s.feet[2] },
     grounded: false,
     speed: 0,
@@ -833,6 +836,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     onPauseRequest: (listener) => pauses.on(listener),
     setTimeScale(scale) {
       timeScale = Number.isFinite(scale) ? Math.min(1, Math.max(0, scale)) : 1;
+      probe.timeScale = timeScale;
     },
     setHeld(on) {
       held = on;

@@ -3,7 +3,9 @@ import { join } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { VIDRO_VOLUMES } from '../../src/audio/levels';
 import { PAUSE_DUCK } from '../../src/audio/pause';
+import { rms } from '../../src/core/audio/analysis';
 import { WORKSHOP_TOP } from '../../src/game/prologue/layout';
+import { PauseTimeline } from '../../src/ui/pause/pause-logic';
 
 /**
  * S-42: the pause. Through the home (loading → 「はじめる」 → dive), as a player plays it, on both render paths:
@@ -60,6 +62,8 @@ interface PauseProbe {
 interface SoundProbe {
   state: string;
   voicesStarted: number;
+  /** The time's speed the sounds of the room's time follow (sound.ts TimeSoundProbe). */
+  time: { scale: number; voices: number };
 }
 interface GateProbe {
   state: string;
@@ -365,6 +369,8 @@ for (const backend of backends) {
     expect(r1.time, 'the room’s clock stands').toBe(r0.time);
     expect(r1.footfalls, 'no footsteps').toBe(r0.footfalls);
     expect(s1.voicesStarted, 'no room sounds start').toBe(s0.voicesStarted);
+    // the sounds of the room's time (the light's, the gate's, ...) follow the time's speed: standing now
+    expect(s1.time.scale, 'the room’s sounds follow the stopped time').toBe(0);
     expect(n1 - n0, 'the world is not drawn while the pause holds its picture').toBe(0);
     const g1 = await gate(page);
     expect(g1.volumes?.ambience ?? 1, 'the ambience is turned down, not off').toBeCloseTo(
@@ -412,6 +418,7 @@ for (const backend of backends) {
     const closed = await pause(page);
     expect(closed.timeScale).toBe(1);
     expect(closed.sounds.some((s) => s.cue === 'close')).toBe(true);
+    await expect.poll(async () => (await sound(page)).time.scale, { timeout: 2_000 }).toBe(1);
     const t0 = (await room(page)).time;
     // back from the bench (walking on toward it, the body stands against it)
     await page.keyboard.down('KeyS');
@@ -772,6 +779,108 @@ for (const backend of backends) {
     }
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'closed'", 3_000);
+    expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}
+
+/**
+ * S-42 (発案者の判断 2026-10-28): a sound of the room's time caught ringing by the pause stands with the time and goes on with
+ * it. Rendered offline in the page through the game's engine (sound.ts renderSoundLab, as the room plays it: scheduleTimed /
+ * followTime), the time's speed set frame by frame by the pause's own timeline (pause-logic.ts PauseTimeline), against the
+ * same sound left to ring. エリア1's shortcut: its held chord runs 6 s, so the pause falls in the middle of it.
+ */
+const LAB_SECONDS = 10;
+const PAUSE_AT = 2;
+const RESUME_AT = 4.5;
+function pauseSpeeds(): { speeds: [number, number][]; played: (t: number) => number } {
+  const timeline = new PauseTimeline();
+  const speeds: [number, number][] = [];
+  const step = 1 / 120;
+  const playedAt: number[] = [];
+  let played = 0;
+  for (let i = 0; i * step <= LAB_SECONDS; i++) {
+    const t = i * step;
+    if (Math.abs(t - PAUSE_AT) < step / 2) timeline.open();
+    if (Math.abs(t - RESUME_AT) < step / 2) timeline.close();
+    timeline.update(step);
+    speeds.push([t, timeline.timeScale]);
+    playedAt.push(played);
+    played += timeline.timeScale * step;
+  }
+  // how far into the sound (s) it has played by time t
+  return { speeds, played: (t) => playedAt[Math.min(playedAt.length - 1, Math.round(t / step))] ?? 0 };
+}
+
+for (const backend of backends) {
+  const webgl = backend === 'webgl2' ? '&webgl=1' : '';
+  test(`S-42 a sound of the room's time caught by the pause stands with it, and goes on with it (offline) [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    mkdirSync(join(root, 'artifacts/S-42'), { recursive: true });
+    const errors = collectErrors(page);
+    await page.goto(`/?scene=prologue-proto&direct=1${webgl}`);
+    await page.waitForFunction(() => !!(window.__vidro.sceneProbe as { sound?: unknown }).sound, undefined, {
+      timeout: 60_000,
+    });
+    const render = async (speeds?: [number, number][]): Promise<{ sr: number; mono: Float32Array }> => {
+      const r = (await page.evaluate(
+        (spec) =>
+          (window.__vidro.sceneProbe as { sound: { render(s: unknown): Promise<unknown> } }).sound.render(
+            spec,
+          ),
+        { kind: 'timed', sound: 'shortcut', seconds: LAB_SECONDS, speeds },
+      )) as { sampleRate: number; left: ArrayLike<number>; right: ArrayLike<number> };
+      const left = Float32Array.from(r.left);
+      const right = Float32Array.from(r.right);
+      return { sr: r.sampleRate, mono: left.map((v, i) => (v + (right[i] as number)) / 2) };
+    };
+    const rung = await render();
+    const { speeds, played } = pauseSpeeds();
+    const paused = await render(speeds);
+    const sr = rung.sr;
+    const at = (x: Float32Array, a: number, b: number) => rms(x, Math.round(a * sr), Math.round(b * sr));
+    // before the pause: the same sound
+    const before = at(paused.mono, 1.2, 1.8) / at(rung.mono, 1.2, 1.8);
+    // standing (the time stopped at 2.4 s; a second on, past the room's reverb): far quieter than the sound left to ring
+    const standing = at(paused.mono, 3.4, 4.4) / at(rung.mono, 3.4, 4.4);
+    // after the resume (the time runs again from 4.8 s): it goes on where it stood — as loud as the sound at that point of it
+    const from = played(5.0);
+    const to = played(5.8);
+    const goesOn = at(paused.mono, 5.0, 5.8) / at(rung.mono, from, to);
+    writeFileSync(
+      join(root, `artifacts/S-42/timed-${backend}.json`),
+      JSON.stringify({ backend, before, standing, goesOn, playedAtResume: played(RESUME_AT + 0.3) }, null, 2),
+    );
+    // for the ear (16-bit mono WAV): the shortcut's sound with the pause from 2 s to 4.5 s, and left to ring
+    for (const [name, x] of [
+      ['paused', paused.mono],
+      ['rung', rung.mono],
+    ] as const) {
+      const data = Buffer.alloc(44 + x.length * 2);
+      data.write('RIFF', 0);
+      data.writeUInt32LE(36 + x.length * 2, 4);
+      data.write('WAVEfmt ', 8);
+      data.writeUInt32LE(16, 16);
+      data.writeUInt16LE(1, 20);
+      data.writeUInt16LE(1, 22);
+      data.writeUInt32LE(sr, 24);
+      data.writeUInt32LE(sr * 2, 28);
+      data.writeUInt16LE(2, 32);
+      data.writeUInt16LE(16, 34);
+      data.write('data', 36);
+      data.writeUInt32LE(x.length * 2, 40);
+      for (let i = 0; i < x.length; i++)
+        data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, x[i] as number)) * 32767), 44 + i * 2);
+      writeFileSync(join(root, `artifacts/S-42/shortcut-${name}-${backend}.wav`), data);
+    }
+    expect(at(rung.mono, 3.4, 4.4), 'the sound rings there when left alone').toBeGreaterThan(1e-3);
+    expect(before).toBeGreaterThan(0.9);
+    expect(before).toBeLessThan(1.1);
+    expect(standing, 'standing with the time: −20 dB or more under the sound left to ring').toBeLessThan(0.1);
+    expect(goesOn, 'it goes on from where it stood').toBeGreaterThan(0.5);
+    expect(goesOn).toBeLessThan(2);
     expect((await page.evaluate(() => window.__vidro.errors)) ?? []).toEqual([]);
     expect(errors).toEqual([]);
   });
