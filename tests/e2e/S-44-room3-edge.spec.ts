@@ -66,6 +66,8 @@ const COURT_A_AIM = 210;
 const PEEK_FAR = 150;
 /** S-44: the street's chimney about 190 m off in the town's haze: its stacks a little darker than the haze behind (≤ 0.07). */
 const CHIMNEY_CONTRAST = 0.025;
+/** S-44: the lookout's milky lamps against the morning sky (lit, but not much brighter than the sky behind). */
+const LAMP_CONTRAST = 0.04;
 
 function collectErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -193,6 +195,8 @@ async function hookScene(page: Page): Promise<void> {
       }
       const o = scene.getObjectByName(what);
       if (!o) return 0;
+      // (the thing and its children: the room shows and hides the drop itself each frame, its children stay as set)
+      o.visible = !hidden;
       for (const c of o.children) c.visible = !hidden;
       return 1;
     };
@@ -264,6 +268,51 @@ async function addedPixels(
   );
 }
 
+/**
+ * Pixels (share of `region`) that change from `a` to `b`, leaving out those that differ between `a` and `again` (the same
+ * picture twice): S-41's measure of what the far end changes in the vidro's image, kept for the record (not judged).
+ */
+async function changedShare(
+  page: Page,
+  a: Buffer,
+  again: Buffer,
+  b: Buffer,
+  region: { x: number; y: number; r: number },
+): Promise<number> {
+  return page.evaluate(
+    async ([pa, pa2, pb, reg]) => {
+      const read = async (b64: string) => {
+        const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const g = c.getContext('2d');
+        if (!g) throw new Error('no 2d context');
+        g.drawImage(bmp, 0, 0);
+        return { d: g.getImageData(0, 0, bmp.width, bmp.height).data, w: bmp.width, h: bmp.height };
+      };
+      const A = await read(pa);
+      const A2 = await read(pa2);
+      const B = await read(pb);
+      const lum = (d: Uint8ClampedArray, i: number) =>
+        (0.2126 * (d[i] ?? 0) + 0.7152 * (d[i + 1] ?? 0) + 0.0722 * (d[i + 2] ?? 0)) / 255;
+      let n = 0;
+      let changed = 0;
+      for (let y = 0; y < A.h; y += 2)
+        for (let x = 0; x < A.w; x += 2) {
+          const cx = reg.x * A.w;
+          const cy = reg.y * A.h;
+          const rr = reg.r * A.h * 0.9;
+          if ((x - cx) ** 2 + (y - cy) ** 2 > rr * rr) continue;
+          const i = (y * A.w + x) * 4;
+          n++;
+          if (Math.abs(lum(A.d, i) - lum(A2.d, i)) > 0.02) continue;
+          if (Math.abs(lum(A.d, i) - lum(B.d, i)) > 0.06) changed++;
+        }
+      return n > 0 ? changed / n : 0;
+    },
+    [a.toString('base64'), again.toString('base64'), b.toString('base64'), region] as const,
+  );
+}
+
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
   const shotDir = join(root, 'artifacts/screens/S-44', backend);
@@ -285,9 +334,10 @@ for (const backend of backends) {
     const r3 = r0.layout.area1.room3;
     await lock(page);
     await hookScene(page);
-    // where the slope arrives: the lookout ahead at the valley's front (探さなくても目に入る)
+    // where the slope arrives: the lookout ahead at the valley's front, its lamps over its walls (探さなくても目に入る)
     await page.waitForTimeout(400);
     await page.screenshot({ path: join(shotDir, 'arrive.png') });
+    const lamps = await addedPixels(page, 'area1-lookout-lamps', null, LAMP_CONTRAST);
     // into the lookout by its way in (east of its walls), then three spots on it
     const wall = r3.railing;
     const midZ = r3.edge[2];
@@ -315,8 +365,9 @@ for (const backend of backends) {
     }
     writeFileSync(
       join(runDir, `lookout-${backend}.json`),
-      JSON.stringify({ backend, share, errors }, null, 2),
+      JSON.stringify({ backend, share, lamps, errors }, null, 2),
     );
+    expect(lamps, 'the lookout’s lamps seen from where the slope arrives').toBeGreaterThan(0.0003);
     for (const [name, v] of Object.entries(share))
       expect(v, `the drop through the gap, peeking from the lookout (${name})`).toBeGreaterThan(0.003);
     expect((await room(page)).fallRescues).toBe(0);
@@ -367,6 +418,9 @@ for (const backend of backends) {
       await waitRoom(page, 'r.peekAmount > 0.999');
       await page.waitForTimeout(600);
       const own = await room(page);
+      const shotOwn = await page.screenshot();
+      await page.waitForTimeout(120);
+      const shotOwnAgain = await page.screenshot();
       if (name === 'brow-chimney') await page.screenshot({ path: join(shotDir, 'brow-chimney-peek.png') });
       const chimney =
         name === 'brow-chimney'
@@ -376,6 +430,7 @@ for (const backend of backends) {
       await setFar(1000);
       await page.waitForTimeout(400);
       const all = await room(page);
+      const shotAll = await page.screenshot();
       await setFar(null);
       await page.mouse.up({ button: 'right' });
       runs[name] = {
@@ -384,6 +439,8 @@ for (const backend of backends) {
         peekFar: own.peekFar,
         allDrawCalls: all.drawCalls,
         chimneyInOrb: chimney,
+        // (for the record: how much of the vidro's image the far end changes against everything drawn into it)
+        changedInOrb: await changedShare(page, shotOwn, shotOwnAgain, shotAll, own.orbScreen),
       };
       expect(own.peekFar.far, name).toBe(PEEK_FAR);
       expect(own.peekFar.leftOutBack, `${name}: nothing of the back layer left out`).toBe(0);

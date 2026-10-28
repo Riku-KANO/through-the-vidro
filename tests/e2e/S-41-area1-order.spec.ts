@@ -506,6 +506,7 @@ for (const backend of backends) {
     const wall = r3.railing;
     const way = wall.max[0] + 0.7;
     const northOf = wall.max[2] + 0.6;
+    // (its south wall mirrors the north one about the edge's line: the probe gives the north one, room.ts not widened for it)
     const southOf = 2 * r3.edge[2] - wall.max[2] - 0.6;
     const into = async (): Promise<void> => {
       await walkTo(page, way, r3.edge[2], { within: 0.3 });

@@ -687,31 +687,36 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
           ).toBeGreaterThan(MAIN_ORB_RADIUS);
   });
 
-  it('S-44: from where the slope arrives it is in sight, nothing in the way (探さなくても目に入る), and the motes drift to it', () => {
+  it('S-44: from where the slope arrives it is in sight — its lamps over its walls, nothing in the way (探さなくても目に入る) — and the motes drift to it', () => {
     const v = AREA1_SPAWNS['area1-summit'];
-    const eye: Vec3 = [v.feet[0], v.feet[1] + EYE_HEIGHT, v.feet[2]];
     const cp = Math.cos(v.pitch);
     const look: Vec3 = [-Math.sin(v.yaw) * cp, Math.sin(v.pitch), -Math.cos(v.yaw) * cp];
+    // (its railing at the deck's end is behind its crumbled wall from there, whole up past the eye: its lamps stand above)
     const f = ROOM3_LOOKOUT.floor;
-    // its railing's middle, and the top of each wall where it ends over the valley
-    for (const p of [
-      [f.minX, SUMMIT_Y + ROOM3_LOOKOUT.rail.height, (f.minZ + f.maxZ) / 2],
-      [
-        ROOM3_RAILING.box.min[0],
-        ROOM3_RAILING.box.max[1] - 0.1,
-        (ROOM3_RAILING.box.min[2] + ROOM3_RAILING.box.max[2]) / 2,
-      ],
-      [
-        ROOM3_LOOKOUT.wallS.min[0],
-        ROOM3_LOOKOUT.wallS.max[1] - 0.1,
-        (ROOM3_LOOKOUT.wallS.min[2] + ROOM3_LOOKOUT.wallS.max[2]) / 2,
-      ],
-    ] as Vec3[]) {
-      const to: Vec3 = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+    const rail: Vec3 = [f.minX, SUMMIT_Y + ROOM3_LOOKOUT.rail.height, (f.minZ + f.maxZ) / 2];
+    const at = (feet: Vec3): Vec3 => [feet[0], feet[1] + EYE_HEIGHT, feet[2]];
+    expect(shaded(at(v.feet), rail, true)).toContain('the crumbled wall');
+    expect(ROOM3_LOOKOUT.lamps).toHaveLength(2);
+    for (const lamp of ROOM3_LOOKOUT.lamps) {
+      // in the arrival's view, well inside its width (FOV_DEFAULT is the vertical field of view; the screen is wider)
+      const eye = at(v.feet);
+      const to: Vec3 = [lamp[0] - eye[0], lamp[1] - eye[1], lamp[2] - eye[2]];
       const cos = (to[0] * look[0] + to[1] * look[1] + to[2] * look[2]) / Math.hypot(...to);
-      // (well inside the view's width: FOV_DEFAULT is the vertical field of view; the screen is wider)
-      expect(cos, `${p}`).toBeGreaterThan(Math.cos(((FOV_DEFAULT / 2) * Math.PI) / 180));
-      expect(hidden(eye, p), `${p}`).toEqual([]);
+      expect(cos, `${lamp}`).toBeGreaterThan(Math.cos(((FOV_DEFAULT / 2) * Math.PI) / 180));
+      // and from anywhere the slope comes up onto the terrace, over every wall of the summit and the lookout's own
+      for (
+        let x = AREA1_SLOPE.x - AREA1_SLOPE.halfWidth + 0.4;
+        x <= AREA1_SLOPE.x + AREA1_SLOPE.halfWidth - 0.4;
+        x += 0.4
+      )
+        for (const z of [AREA1_SLOPE.toZ - 0.4, AREA1_SLOPE.toZ - 1.2, AREA1_SLOPE.toZ - 2.0]) {
+          const e: Vec3 = [x, SUMMIT_Y + EYE_HEIGHT, z];
+          expect(hidden(e, lamp), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
+          expect(shaded(e, lamp, true), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
+        }
+      // they stand at the railing's ends, against its walls, over the walls' tops
+      expect(Math.abs(lamp[0] - f.minX)).toBeLessThan(0.3);
+      expect(lamp[1] - ROOM3_RAILING.box.max[1]).toBeGreaterThan(0.5);
     }
     // the motes of 部屋2's drop drift from the second flight to it
     const [mx, mz] = motePathAt(MOTE_PATHS[2] as MotePath, 1);

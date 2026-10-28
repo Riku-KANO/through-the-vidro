@@ -349,12 +349,20 @@ export const ROOM3_SHADE: readonly (Rect & { top: number })[] = [
  * spheres. `floor`: where one stands, between its walls, from the deck's end out over the valley (its railing across, 柵) to its
  * way in on the terrace (east). `wallS`: its south wall, whole (both layers), from its way in out past the deck's end. `heap`: the fallen stones at its north wall's foot on
  * the lip (both layers, low: the eye sees over them; nobody stands there). `rail`: the railing across the deck's end.
+ * `lamps`: its two lamps on brass posts at the railing's ends, their milky globes' middles (S-44 review: from where the slope
+ * arrives the railing is behind the crumbled wall — whole up past the eye, as it must be to hide the drop — the lamps stand over
+ * the walls and mark the lookout from there: 探さなくても目に入る).
  */
+const LOOKOUT_FLOOR = rectAt(112.4, 116.0, -165.95, -163.55);
 export const ROOM3_LOOKOUT = {
-  floor: rectAt(112.4, 116.0, -165.95, -163.55),
+  floor: LOOKOUT_FLOOR,
   wallS: boxAt(112.0, 116.0, SUMMIT_Y, SUMMIT_Y + 2.4, -166.35, -165.95),
   heap: boxAt(113.0, 113.7, SUMMIT_Y, SUMMIT_Y + 0.8, -163.15, -161.9),
   rail: { height: 1.0, thickness: 0.06 },
+  lamps: [
+    [LOOKOUT_FLOOR.minX + 0.12, SUMMIT_Y + 3.2, LOOKOUT_FLOOR.maxZ - 0.15],
+    [LOOKOUT_FLOOR.minX + 0.12, SUMMIT_Y + 3.2, LOOKOUT_FLOOR.minZ + 0.15],
+  ] as readonly Vec3[],
 } as const;
 /**
  * S-41, S-44: 崩れた壁 (表にだけあるもの, as 部屋1's: 3部屋目は前の2部屋の組み合わせ) — the lookout's north wall, from its way in out over

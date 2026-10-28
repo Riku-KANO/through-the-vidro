@@ -515,6 +515,7 @@ for (const backend of backends) {
     // peek from the edge (端; S-44: the lookout, between its walls: round them by its way in, east of them)
     const way = r3.railing.max[0] + 0.7;
     const northOf = r3.railing.max[2] + 0.6;
+    // (its south wall mirrors the north one about the edge's line: the probe gives the north one, room.ts not widened for it)
     const southOf = 2 * r3.edge[2] - r3.railing.max[2] - 0.6;
     await walkTo(page, way, northOf, { within: 0.3 });
     await walkTo(page, way, r3.edge[2], { within: 0.3 });

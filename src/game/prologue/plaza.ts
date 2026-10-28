@@ -972,7 +972,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
   }
 
-  // S-44: the plaza's brass holds the lighthouse's bands, spire and cage; the hill's, the chimneys' bands; the west's, the dome's ribs
+  // S-44: the plaza's brass — its rim, lamps, gates and the east road's railings with the lighthouse's bands, spire and cage — is
+  // marked the lighthouse's as a whole (one draw call kept); the hill's brass, the chimneys' bands; the west's, the dome's ribs
   markLandmark(put(new THREE.Mesh(merged(brassParts), brass)), 'lighthouse');
   markLandmark(put(new THREE.Mesh(merged(hillBrass), brass)), 'area1-chimney');
   markLandmark(put(new THREE.Mesh(merged(westBrass), brass)), 'greenhouse');
