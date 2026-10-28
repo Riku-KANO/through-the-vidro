@@ -3,6 +3,35 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.14.0（案。版は統合で決める）— 2026-10-28（S-43 設定パネル: 系統ごとの絞りの段、UI の系統、品質の切り替えの口）
+
+足しただけ。既存の呼び方の振る舞いは変えていない（音の配線に利得 1 の節点が 1 段ずつ入る。`snapshot().volumes` は今までどおり
+プレイヤーの 4 つの音量）。`VERSION` は変えていない（統合で親が決める）。
+
+- `audio/engine.ts`:
+  - **絞りの段（duck）**: 各系統（master / music / sfx / ambience）の音量の節点の後ろに、利得 1 の節点を 1 段ずつ足した
+    （`bus ▶ duck ─┬▶ master`、`└▶ send ▶ 残響` なので、絞ると残響に送る量も減る。master は `master ▶ duck ▶ limiter`）。
+    `setDuck(owner, channel, value)` は持ち主（例 `'pause'`）ごとに音量と同じ 0〜1（利得は value²）で絞り、持ち主どうしは
+    掛け合わせる。1 で外れる。`getDuck(owner, channel)`、`mixVolume(channel)`（音量 × すべての絞り。いま鳴っている大きさを
+    音量の目盛りで）。プレイヤーの音量（`setVolume`）には触らないので、設定とポーズの絞りが同じ音量を取り合わない
+  - `duckStage(engine, owner)`: 持ち主の絞りの段を、4 つの音量と同じ形（`getVolume` / `setVolume`）で見せる。音量の形で書かれた
+    ミックス（案1 の `PauseMix`、S-42）をそのまま絞りの段に向けられる
+  - **追加の系統（extra bus）**: `addBus(name, { volume, reverbSend })` で music / sfx / ambience の横に系統を足す（master と
+    部屋の残響へ）。同じ名前は同じ系統。`setBusVolume` / `getBusVolume`。声は `startVoice({ extraBus: name })` で入れる
+    （足していない名前は例外。聞こえない所へ鳴らさない）。案1 では UI の音（`ui`）に使う
+  - スピーカーへの線は今までどおりリミッターの 1 本
+- `quality.ts`:
+  - `QUALITY_CHOICES`（自動・低・中・高）、`QualityChoice`、`isQualityChoice`
+  - `startQuality({ url, saved })`: 殻が最初のプリセットを決める（URL の `?quality` が勝つ。なければプレイヤーの保存した選択、
+    自動は中から測る。どちらもなければ中）
+  - `QualityPort`（`choice`・`level`・`request`・`attach`）と `QualityScene`（`applyQuality`・`idle`）、`qualityPortOf(ctx)`:
+    殻（main.ts）がシーンの文脈に `qualityPort` として渡す口。作り直さずにプリセットを受けられるシーンは `attach` し、遊ぶ途中の
+    品質の切り替えで状態を失わない。`idle`（絵が止まっている: ポーズ）の間、殻は governor にフレームも GPU 時間も渡さない
+- 泡沫回廊へ写すとき: `SceneContext` に `qualityPort` を正式に足す（案1 は `core/scene.ts` を S-43 で変えられなかったので
+  `qualityPortOf` で形から見ている。提案）。泡沫回廊の main.ts が口を渡さなければ、シーンは今までどおり作り直される
+- 単体テスト `audio/engine.test.ts`（新規 13 件: 絞りの段、持ち主ごとの掛け合わせ、mixVolume、残響への送り、master、
+  duckStage、snapshot、追加の系統の音量・残響・同じ名前・声・知らない名前・スピーカーへの線）、`quality.test.ts`（新規 5 件）
+
 ## 0.13.0 — 2026-10-23（S-37 光を分けて焼く: ライトマップを重ねる受け口）
 
 足しただけ。分けて焼いた光（extras の `lightmap_layers`）のない glb と `lightmaps: true` の呼び方の振る舞いは変えていない
