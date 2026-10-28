@@ -23,6 +23,7 @@ import { createBrassMaterial, createGlass, type HazeSpec } from '../../core/glas
 import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import { AREA1_KEEP_OUT } from '../area1/layout';
+import { markLandmark } from '../orb/peek-pipeline';
 import {
   AREA1_CHIMNEY,
   CANAL,
@@ -734,7 +735,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     tower.computeBoundingSphere();
     tower.renderOrder = 1;
     instanced.push(tower);
-    put(tower);
+    markLandmark(put(tower), 'lighthouse');
     const orbY = ly + LIGHTHOUSE_HEIGHT - 4.2;
     // the spire up to the cage
     brassParts.push(
@@ -776,7 +777,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     great.position.set(lx, orbY, lz);
     great.rotation.copy(orbTurn);
     great.renderOrder = 1;
-    put(great);
+    markLandmark(put(great), 'lighthouse');
     const rand = rng(35);
     const shards: THREE.BufferGeometry[] = [];
     // its broken rim: jagged pieces of the shell still standing into the hole
@@ -824,7 +825,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
     const shardMesh = new THREE.Mesh(merged(shards), frosted);
     shardMesh.renderOrder = 2;
-    put(shardMesh);
+    markLandmark(put(shardMesh), 'lighthouse');
     // the railing round the foot
     const rr = LIGHTHOUSE_RAIL.radius;
     brassParts.push(
@@ -873,6 +874,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       town.renderOrder = 1;
       instanced.push(town);
       put(town);
+      // S-44 (発案者 2026-10-28): the bubbles on エリア1's hill are the chimney's foot: drawn into the peek image with it however far
+      if (z === 'hill') markLandmark(town, 'area1-chimney');
     }
   }
 
@@ -909,8 +912,8 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       if (i === 0)
         tops.push(new THREE.SphereGeometry(r * 0.85, 24, 12).scale(1, 0.45, 1).translate(x, y0 + h * 1.0, z));
     });
-    put(new THREE.Mesh(merged(stacks), frosted));
-    put(new THREE.Mesh(merged(tops), chimneyMilk));
+    markLandmark(put(new THREE.Mesh(merged(stacks), frosted)), 'area1-chimney');
+    markLandmark(put(new THREE.Mesh(merged(tops), chimneyMilk)), 'area1-chimney');
   }
 
   // ---- beyond the shut gates: the canal and its drop towers (south), the greenhouse's dome (west): 気配だけ --------------
@@ -944,7 +947,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
       });
       drops.push(new THREE.LatheGeometry(pts, 24).translate(sx + dx, PLAZA_Y - DROP_TOWER_FOOT, sz - along));
     }
-    put(new THREE.Mesh(merged(drops), clear));
+    markLandmark(put(new THREE.Mesh(merged(drops), clear)), 'drop-towers');
     // 温室のドーム (温室の目印), far to the west, its brass ribs
     const R = GREENHOUSE.radius;
     const domeAt = new THREE.Vector3(...GREENHOUSE.center);
@@ -954,7 +957,7 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     );
     dome.position.copy(domeAt);
     dome.renderOrder = 1;
-    put(dome);
+    markLandmark(put(dome), 'greenhouse');
     for (let i = 0; i < 6; i++)
       westBrass.push(
         new THREE.TorusGeometry(R + 0.05, 0.12, 6, 96, Math.PI)
@@ -971,9 +974,11 @@ export function buildPlaza(quality: QualityPreset, field: LayerField, scene: THR
     }
   }
 
-  put(new THREE.Mesh(merged(brassParts), brass));
-  put(new THREE.Mesh(merged(hillBrass), brass));
-  put(new THREE.Mesh(merged(westBrass), brass));
+  // S-44: the plaza's brass — its rim, lamps, gates and the east road's railings with the lighthouse's bands, spire and cage — is
+  // marked the lighthouse's as a whole (one draw call kept); the hill's brass, the chimneys' bands; the west's, the dome's ribs
+  markLandmark(put(new THREE.Mesh(merged(brassParts), brass)), 'lighthouse');
+  markLandmark(put(new THREE.Mesh(merged(hillBrass), brass)), 'area1-chimney');
+  markLandmark(put(new THREE.Mesh(merged(westBrass), brass)), 'greenhouse');
   put(new THREE.Mesh(merged(globes), lampMilk));
   put(new THREE.Mesh(merged(keystones), keystoneLit));
   put(new THREE.Mesh(merged(embers), keystoneDim));

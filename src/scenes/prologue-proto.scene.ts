@@ -27,9 +27,10 @@ export const title =
  *                  S-36: area1-road = on the road where the sky moves toward morning, area1-plaza = up at the chimney from
  *                  エリア1's entrance plaza, area1-alley = before 部屋1's alley, area1-wall = before its crumbled wall looking at
  *                  where the drop hovers; S-40: area1-slope = up the slope toward 部屋2 (S-36's area1-gate), area1-court(-a/-b) = 部屋2's
- *                  courtyard and its pedestals A and B, area1-summit / area1-edge = 部屋3's lookout and its edge over the valley,
+ *                  courtyard and its pedestals A and B, area1-summit = where the slope lands, toward 部屋3's lookout (S-44),
  *                  area1-shortcut(-foot) = the shortcut's stairs from the summit / at the entrance plaza; S-41: area1-gate-court = gate 1
- *                  from the street, area1-gate-summit = gate 2 from the landing, area1-edge = the plateau's south-west corner)
+ *                  from the street, area1-gate-summit = gate 2 from the landing; S-44: area1-edge = on the lookout in front of
+ *                  the valley, toward where the drop hides)
  *   finaleHold=<s> (S-34, with a spawn) as if the drop had been taken that many seconds ago, held there: the light over
  *                  the bridge, what it has settled and the gate; &finaleOrb=hand: the vidro then taken back
  *                  (furnace/shelf/door: S-24's views of the interior)

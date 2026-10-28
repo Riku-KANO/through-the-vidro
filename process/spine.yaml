@@ -994,7 +994,8 @@ slices:
 
   - id: S-44
     title: 部屋3の端と覗く像の遠端 — 覗ける端を広く谷の正面に、目印を残して覗く像の遠端を 150m に
-    status: todo
+    status: integrated
+    accepted: レビュー2巡で、1巡目の P1（坂が着いた所から見晴らし台が見えない）と P2 を直し、2巡目は P1 なし。発案者の判断で、見晴らし台の形（2.4m の壁にはさまれた通路）は仮でこのまま（Blender の作り込みで見直す）、南の壁は残す、丘の町の泡を煙突の目印に含める（峠の玉の中の差 7.6% → 0%）、台本（autopilot.ts）の変更を認める。中庭の A で覗いたときの描画呼び出しは 274 → 203。観測口に見晴らし台を出す（提案6）は後のスライスで。全検査は実時間の音の6件（スリープ後の環境、main でも同じく落ちる）を除いて緑（2026-10-28）
     depends: [S-41]
     decided: 発案者の判断（2026-10-28、S-41 の判断待ち1・2）。部屋3の雫を見通せる端を、広い見晴らし台にして、両方の台座から同じくらいの所（谷の正面）に置く（観察で解ける、探さなくても見つかる）。覗く像の遠端は 150m にし、灯塔と煙突などの目印は遠くても覗く像に描く
     requirements:
@@ -1004,6 +1005,7 @@ slices:
     paths:
       - src/game/area1/**（部屋3の端と崩れた壁の配置）
       - src/game/orb/peek-pipeline.ts、src/game/prologue/room.ts（覗く像の遠端と目印の口。並行の S-42 も room.ts を触るので広げない）、src/game/prologue/plaza.ts（目印の印だけ）
+      - src/game/prologue/autopilot.ts（部屋3の歩く点だけ。統合で追認）
       - 上の単体テスト、tests/e2e/S-44-*.spec.ts、tests/e2e/S-41-*・S-40-*（部屋3の視点が変わる分だけ）
       - process/slices/S-44.md
     acceptance:
