@@ -148,7 +148,7 @@ for (const backend of backends) {
     test.setTimeout(180_000);
     const errors = collectConsole(page);
     await page.addInitScript(installTracer);
-    await page.goto(`/?scene=prologue-proto&autoplay=1&debug=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid&autoplay=1&debug=1${webgl}`);
     await page.waitForFunction(
       () => {
         const r = (
@@ -223,7 +223,7 @@ for (const backend of backends) {
     test.setTimeout(180_000);
     const errors = collectConsole(page);
     await page.addInitScript(installTracer);
-    await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid&debug=1${webgl}`);
     // home → dive by the same clicks a player makes (as S-06)
     await waitHome(page, 'p.load.ready === true', 90_000);
     await page.locator('[data-ui="loading-start"]').click();

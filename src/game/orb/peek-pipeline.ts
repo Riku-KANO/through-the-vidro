@@ -1,7 +1,7 @@
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js';
 import { smaa } from 'three/addons/tsl/display/SMAANode.js';
-import { pass, renderOutput, rtt, uniform, uv, vec2, vec4 } from 'three/tsl';
+import { pass, renderOutput, rtt, texture, uniform, uv, vec2, vec4 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { ownBackdropImage } from '../../core/glass';
 import type { QualityPreset } from '../../core/quality';
@@ -131,8 +131,32 @@ export class PeekPipeline {
   readonly backTarget: THREE.RenderTarget;
   /** Frames in which the back image was drawn (sensor). */
   backPassFrames = 0;
+  /**
+   * S-48: what the preset in use makes of this pipeline now (setQuality), and the peek image's size (sensor): the peek image's
+   * scale of the render size, and the anti-aliasing at the end of the finishing (`none`: ?finish=0, none at all).
+   */
+  readonly quality: {
+    peekScale: number;
+    antialias: QualityPreset['antialias'] | 'none';
+    backWidth: number;
+    backHeight: number;
+  };
 
-  private readonly pipeline: THREE.RenderPipeline;
+  /** The end of the finishing in use, to the screen; S-48: one of `aaPipelines`. */
+  private pipeline: THREE.RenderPipeline;
+  /**
+   * S-48: the finishing up to the display image (the composite, the bloom, AgX), drawn into `display` once a frame; null
+   * under ?finish=0 (the graded image goes straight to the screen). Apart from the anti-aliasing that reads it, so that the
+   * anti-aliasing can be switched in play without the bloom's materials being built again.
+   */
+  private readonly grade: THREE.RenderPipeline | null;
+  private readonly display: THREE.RenderTarget | null;
+  /**
+   * S-48: the display image to the screen through each anti-aliasing (FXAA and SMAA; `none` alone under ?finish=0), all made
+   * up front and the ones not in use drawn once on the first frame, so that a switch in play makes no shader (発案者
+   * 2026-10-28: 遊ぶ途中の品質の切り替えで AA もその場で変える).
+   */
+  private readonly aaPipelines = new Map<QualityPreset['antialias'] | 'none', THREE.RenderPipeline>();
   private readonly scenePass: ReturnType<typeof pass>;
   private readonly composite: OrbComposite;
   /** Finishing nodes that own render targets. */
@@ -163,9 +187,29 @@ export class PeekPipeline {
       back: this.backTarget.texture,
       environment: opts.environment,
     });
-    this.pipeline = new THREE.RenderPipeline(opts.renderer, this.finish(opts.finish ?? 'full'));
-    // renderOutput applies AgX and the output colour space before the anti-aliasing; not again at the end
-    this.pipeline.outputColorTransform = false;
+    const mode = opts.finish ?? 'full';
+    const graded = this.finish(mode);
+    if (mode === 'none') {
+      this.grade = null;
+      this.display = null;
+      this.aaPipelines.set('none', this.finishWith(graded));
+    } else {
+      // the display image once at the drawing-buffer size, then the preset's anti-aliasing reads it
+      this.display = new THREE.RenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+      this.display.texture.name = 'peek-display';
+      this.grade = this.finishWith(graded);
+      const image = texture(this.display.texture);
+      const fx = fxaa(image);
+      const sm = smaa(image);
+      this.finishing.push(fx, sm);
+      this.aaPipelines.set('fxaa', this.finishWith(fx));
+      this.aaPipelines.set('smaa', this.finishWith(sm));
+    }
+    const aa = mode === 'none' ? 'none' : opts.antialias;
+    const inUse = this.aaPipelines.get(aa);
+    if (!inUse) throw new Error(`PeekPipeline: no finishing for ${aa}`);
+    this.pipeline = inUse;
+    this.quality = { peekScale: opts.peekScale, antialias: aa, backWidth: 1, backHeight: 1 };
     this.orbFrame = {
       center: [0, 0, 0],
       radius: 0,
@@ -200,13 +244,30 @@ export class PeekPipeline {
       this.finishing.push(stored, glow);
       hdr = vec4(stored.rgb.add(glow.rgb), 1);
     }
-    const graded = renderOutput(hdr);
-    if (mode === 'none') return graded;
-    // the display image once at the drawing-buffer size, then the preset's anti-aliasing reads it
-    const display = rtt(graded);
-    const aa = this.opts.antialias === 'smaa' ? smaa(display) : fxaa(display);
-    this.finishing.push(display, aa);
-    return aa;
+    // the anti-aliasing reads it (constructor; S-48: in a finishing of its own)
+    return renderOutput(hdr);
+  }
+
+  /** S-48: a finishing ending in `node`. renderOutput applies AgX and the output colour space before the anti-aliasing. */
+  private finishWith(node: THREE.Node): THREE.RenderPipeline {
+    const p = new THREE.RenderPipeline(this.opts.renderer, node);
+    // not again at the end
+    p.outputColorTransform = false;
+    return p;
+  }
+
+  /**
+   * S-48: another preset in play (発案者 2026-10-28): the peek image's scale (its target sized again now, as for a render
+   * scale change; the shell has set the render scale before) and the anti-aliasing at the end of the finishing, at once.
+   * Under ?finish=0 there is none to switch.
+   */
+  setQuality(preset: Pick<QualityPreset, 'peekScale' | 'antialias'>): void {
+    this.quality.peekScale = preset.peekScale;
+    this.resize();
+    const next = this.aaPipelines.get(preset.antialias);
+    if (!next) return;
+    this.pipeline = next;
+    this.quality.antialias = preset.antialias;
   }
 
   /** Render size in pixels (drawing buffer). */
@@ -296,13 +357,17 @@ export class PeekPipeline {
 
   resize(): void {
     this.opts.renderer.getDrawingBufferSize(this.size);
-    const w = Math.max(1, Math.floor(this.size.x * this.opts.peekScale));
-    const h = Math.max(1, Math.floor(this.size.y * this.opts.peekScale));
+    const w = Math.max(1, Math.floor(this.size.x * this.quality.peekScale));
+    const h = Math.max(1, Math.floor(this.size.y * this.quality.peekScale));
     if (this.backTarget.width !== w || this.backTarget.height !== h) this.backTarget.setSize(w, h);
+    this.quality.backWidth = w;
+    this.quality.backHeight = h;
   }
 
   render(frame: PeekFrame): void {
     const { renderer, scene, field } = this.opts;
+    // S-48: the first frame also draws the finishings not in use (their shaders made before a switch in play needs them)
+    const first = this.warm;
     this.resize();
     // The first frame also draws the back image once so its pipelines compile before the first peek.
     if (frame.peek > 0 || this.warm) {
@@ -334,6 +399,16 @@ export class PeekPipeline {
     f.height = this.size.y;
     this.uTexel.value.set(1 / Math.max(1, this.size.x), 1 / Math.max(1, this.size.y));
     this.composite.update(f);
+    if (this.grade && this.display) {
+      const w = Math.max(1, this.size.x);
+      const h = Math.max(1, this.size.y);
+      if (this.display.width !== w || this.display.height !== h) this.display.setSize(w, h);
+      const previous = renderer.getRenderTarget();
+      renderer.setRenderTarget(this.display);
+      this.grade.render();
+      renderer.setRenderTarget(previous);
+    }
+    if (first) for (const p of this.aaPipelines.values()) if (p !== this.pipeline) p.render();
     this.pipeline.render();
   }
 
@@ -341,6 +416,8 @@ export class PeekPipeline {
     this.backTarget.dispose();
     this.scenePass.dispose();
     for (const n of this.finishing) n.dispose();
-    this.pipeline.dispose();
+    this.grade?.dispose();
+    this.display?.dispose();
+    for (const p of this.aaPipelines.values()) p.dispose();
   }
 }

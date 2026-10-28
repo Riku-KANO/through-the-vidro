@@ -331,7 +331,7 @@ for (const backend of backends) {
     const errors = collectErrors(page);
     await countContexts(page);
     await fakePad(page);
-    await toHome(page, webgl);
+    await toHome(page, `&quality=mid${webgl}`);
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
     expect((await settings(page)).phase).toBe('closed');
 
@@ -524,7 +524,7 @@ for (const backend of backends) {
     const errors = collectErrors(page);
     await countContexts(page);
     await fakePad(page);
-    await playThroughHome(page, `&debug=1${webgl}`);
+    await playThroughHome(page, `&quality=mid&debug=1${webgl}`);
     await countRenders(page);
 
     // ---- a game with a state: the vidro taken, a few steps walked ----
@@ -577,10 +577,10 @@ for (const backend of backends) {
       Math.hypot(atLow.position.x - before.position.x, atLow.position.z - before.position.z),
     ).toBeLessThan(0.01);
     expect(atLow.time, 'the time stands').toBe(stood);
-    // the scene was made at 中: part of 低 waits for the next time, and the panel says so under 品質
+    // the scene was made at 中: part of 低 waits (S-48: the shadows and the glass), and the panel says so under 品質
     await expect(page.locator('[data-ui="settings"] [data-part="quality-later"]')).toBeVisible();
     expect(await page.locator('[data-ui="settings"] [data-part="quality-later"]').textContent()).toBe(
-      '一部は次に開いたときから変わります',
+      '影とガラスの描き方は次回から変わります',
     );
 
     // ---- 視野角: 70 → 80 — the camera now, drawn again while the time stands ----
@@ -727,7 +727,7 @@ for (const backend of backends) {
     test.setTimeout(180_000);
     const errors = collectErrors(page);
     // a short window and a forced pick (the governor's test hooks), so that 自動 decides within the test
-    await playThroughHome(page, `&autoWindow=2&autoForce=high&dynres=0${webgl}`);
+    await playThroughHome(page, `&quality=mid&autoWindow=2&autoForce=high&dynres=0${webgl}`);
     await waitRoom(page, "r.target === 'bench'", 10_000);
     await page.keyboard.press('KeyE');
     await waitRoom(page, "r.orb === 'hand'", 5_000);
@@ -842,7 +842,7 @@ for (const backend of backends) {
         throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
       };
     });
-    await toHome(page, webgl);
+    await toHome(page, `&quality=mid${webgl}`);
     await page.locator('[data-item="settings"]').click();
     await waitSettings(page, "q.phase === 'open'");
     await page.keyboard.press('ArrowDown');
@@ -880,7 +880,7 @@ for (const backend of backends) {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
     // a target the governor lowers the render scale for (as S-42's sensor of the pause under dynamic resolution)
-    await playThroughHome(page, `&debug=1&gpuTrust=1&dynresTarget=2${webgl}`);
+    await playThroughHome(page, `&quality=mid&debug=1&gpuTrust=1&dynresTarget=2${webgl}`);
     await page.waitForTimeout(3_000);
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'open'");

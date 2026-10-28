@@ -263,7 +263,7 @@ for (const backend of backends) {
       shots[name] = await luminance(page, await page.screenshot({ path: join(shotDir, `${name}.png`) }));
     };
     const navigated = Date.now();
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
 
     // the loading screen is up at once: the room is built inside the loading, not before it
     await waitHome(page, 'true', 15_000);
@@ -625,7 +625,7 @@ for (const backend of backends) {
   }) => {
     test.setTimeout(660_000);
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid&autoplay=1&autoplayTo=area1${webgl}`);
     await waitHome(page, "p.screen === 'game' && p.transition === null", 90_000);
     const done = await waitRoom(
       page,

@@ -57,7 +57,7 @@ const report = (page: import('@playwright/test').Page) =>
   page.evaluate(() => window.__vidroDebug?.backdropRisks() ?? null);
 
 async function startScene(page: import('@playwright/test').Page, query: string, backend: string) {
-  await page.goto(`/?${query}&debug=1${backend === 'webgl2' ? '&webgl=1' : ''}`);
+  await page.goto(`/?${query}&quality=mid&debug=1${backend === 'webgl2' ? '&webgl=1' : ''}`);
   await page.waitForFunction(() => ['running', 'error'].includes(window.__vidro?.status), undefined, {
     timeout: 60_000,
   });

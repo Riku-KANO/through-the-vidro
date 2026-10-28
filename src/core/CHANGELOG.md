@@ -3,6 +3,36 @@
 `src/core/` は姉妹作「泡沫回廊」と共通の部品です。ディレクトリをまたいで参照せず、先に変更した側から
 もう一方へまとめてコピーします。コピーしたら、受け取った側の VERSION をこの版に合わせます。
 
+## 0.15.0（案。版は統合で決める）— 2026-10-29（S-48 品質の続き: 初回は自動、自動の推奨を覚える、文脈の口）
+
+**振る舞いが変わる**（`startQuality` の初期値）。**型が変わる**（`SceneContext.qualityPort` が必須、`qualityPortOf` を外した）。
+
+- `scene.ts`: `SceneContext` に `qualityPort: QualityPort` を正式に足した（必須）。シーンは `ctx.qualityPort` を読む。
+  **泡沫回廊へ写すときの注意**: 泡沫回廊の main.ts は、シーンの文脈に `qualityPort` を渡さないと型で落ちる。作り直さずに
+  プリセットを受けるシーンがなければ、`attach` は何もしない（`() => () => {}`）口でよい（`request` は作り直しへ）。
+  案1 の main.ts の `portFor` が手本（世代違いの `attach`・`request` を無視する）
+- `quality.ts`:
+  - `qualityPortOf(ctx)` を外した（形から見る判定は要らなくなった）
+  - `startQuality({ url, saved, pick?, bench? })`: URL の `?quality` が勝つ（今までどおり）。`bench` のときは中で固定（保存を
+    読まない）。保存した選択がプリセットならそれ。**自動（保存した自動、またはどちらもない初回）は、前に自動が選んだプリセット
+    （`pick`）から作り、また測る。`pick` がなければ中から**。今までは「どちらもない」は中で固定だった（設計書 技術設計 >
+    品質プリセット「初回起動時に最初の10秒間のフレーム時間を測り、推奨プリセットを自動で選びます」、発案者の判断 2026-10-28）。
+    `StartQuality.picked`（作るプリセットが前の自動の推奨か）
+  - `governorAuto(start, inPlace)`: 初回（`origin: 'default'`）の自動は、作り直さずにプリセットを受けるシーン（`attach` した
+    シーン）でだけ走らせる。作り直すしかないシーン（開発用の場面）は、作ったプリセットのまま（S-48 の前と同じ）。URL の自動と
+    保存した自動はどちらでも走る
+  - `governorTakesFrame({ idle, drawsGame, measuring, player })`: governor にフレーム（と GPU 時間）を渡すか。絵が止まって
+    いる間は渡さない（S-43）。プレイヤーの自動が測る（確かめる）間は、ゲームの絵そのものを描いているフレームだけ（ホームの
+    軽い玉の中で決めない）。測り終えた後（steady）は今までどおり全部。URL の自動は今までどおり全部
+  - `keepsAutoPick({ player, choice, bench, inPlace })`: 自動の推奨を次のために覚えるか（プレイヤーの自動を、ゲーム〈作り直さずに
+    受けるシーン〉で測ったときだけ。URL の自動・プリセット・計測・作り直すしかない開発用の場面での測りは覚えない）。覚える先は
+    ゲームの側（案1 は `ui/settings/settings-store.ts` の `writeAutoPick`、設定とは別の鍵）
+  - `waitsForRebuild(made, inUse)`: その場の切り替えの後、次に作るときまで待つものがあるか（影の地図の大きさ・分散・遠景の
+    ガラスの透過）。描画の倍率・覗く像の倍率・AA はその場で変わる前提（案1 は覗く像と AA を `PeekPipeline.setQuality` で変える）
+  - `QualityScene.drawsGame?`: 絵がゲームそのもの（立って遊んでいる）か。省くと常にゲームの絵とみなす
+- 単体テスト `quality.test.ts`（S-43 の `qualityPortOf` の 1 件を外し、`startQuality`・`governorAuto`・`governorTakesFrame`・
+  `keepsAutoPick`・`waitsForRebuild` を足した。20 件）
+
 ## 0.14.0 — 2026-10-28（S-43 設定パネル: 系統ごとの絞りの段、UI の系統、品質の切り替えの口）
 
 足しただけ。既存の呼び方の振る舞いは変えていない（音の配線に利得 1 の節点が 1 段ずつ入る。`snapshot().volumes` は今までどおり
