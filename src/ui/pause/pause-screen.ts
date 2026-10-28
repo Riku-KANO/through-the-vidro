@@ -29,6 +29,8 @@ export interface PauseView {
   page: PausePage;
   focused: PauseChoice | null;
   interactive: boolean;
+  /** The settings are open over the pause (S-43): the items step aside, the frost thins so the picture shows. */
+  yielded: boolean;
 }
 
 export interface PauseScreenEvents {
@@ -44,6 +46,9 @@ interface Line {
   /** The frosted tag the line is written on. */
   tag: HTMLElement;
   line: HTMLElement;
+  /** The words, and which they are (the language can change: S-43). */
+  ink: HTMLElement;
+  key: StringKey;
 }
 
 interface Item extends Line {
@@ -54,12 +59,13 @@ interface Item extends Line {
 
 const STRING_OF: Readonly<Record<PauseChoice, StringKey>> = {
   resume: 'pauseResume',
+  settings: 'pauseSettings',
   title: 'pauseTitle',
   yes: 'pauseYes',
   no: 'pauseNo',
 };
 
-function writtenLine(text: string): { tag: HTMLElement; line: HTMLElement } {
+function writtenLine(t: (k: StringKey) => string, key: StringKey): Line {
   const tag = document.createElement('span');
   tag.className = 'vd-pause__tag vd-frost';
   tag.dataset.part = 'tag';
@@ -68,13 +74,13 @@ function writtenLine(text: string): { tag: HTMLElement; line: HTMLElement } {
   const ink = document.createElement('span');
   ink.className = 'vd-pause__ink';
   ink.dataset.part = 'ink';
-  ink.textContent = text;
+  ink.textContent = t(key);
   const tip = document.createElement('span');
   tip.className = 'vd-pause__tip';
   tip.setAttribute('aria-hidden', 'true');
   line.append(ink, tip);
   tag.appendChild(line);
-  return { tag, line };
+  return { tag, line, ink, key };
 }
 
 export class PauseScreen {
@@ -118,7 +124,7 @@ export class PauseScreen {
     const menu = document.createElement('nav');
     menu.className = 'vd-pause__page';
     menu.dataset.page = 'menu';
-    const menuLines = PAUSE_ITEMS.map((id) => this.item(id, t(STRING_OF[id]), menu));
+    const menuLines = PAUSE_ITEMS.map((id) => this.item(id, t, menu));
 
     const confirm = document.createElement('div');
     confirm.className = 'vd-pause__page';
@@ -126,12 +132,12 @@ export class PauseScreen {
     confirm.hidden = true;
     const ask = document.createElement('p');
     ask.className = 'vd-pause__ask';
-    const asked = writtenLine(t('pauseAsk'));
+    const asked = writtenLine(t, 'pauseAsk');
     ask.appendChild(asked.tag);
     const choices = document.createElement('div');
     choices.className = 'vd-pause__choices';
     confirm.append(ask, choices);
-    const confirmLines = [asked, ...CONFIRM_ITEMS.map((id) => this.item(id, t(STRING_OF[id]), choices))];
+    const confirmLines = [asked, ...CONFIRM_ITEMS.map((id) => this.item(id, t, choices))];
 
     this.note = document.createElement('p');
     this.note.className = 'vd-pause__note';
@@ -162,6 +168,13 @@ export class PauseScreen {
 
   get hovered(): PauseChoice | null {
     return this.hoverItem;
+  }
+
+  /** Swaps the words (設定 > 言語, S-43): the items, the question, the line about the mouse. */
+  relabel(t: (k: StringKey) => string): void {
+    this.el.setAttribute('aria-label', t('pauseLabel'));
+    for (const lines of Object.values(this.lines)) for (const l of lines) l.ink.textContent = t(l.key);
+    this.noteText.textContent = t('pauseRelock');
   }
 
   /** The screen's size in CSS pixels: the frost's reach and the blur follow it. */
@@ -197,7 +210,8 @@ export class PauseScreen {
         if (active instanceof HTMLElement && this.el.contains(active)) active.blur();
       }
     }
-    this.setEnabled(view.up && view.interactive);
+    this.setEnabled(view.up && view.interactive && !view.yielded);
+    this.el.classList.toggle('is-yielded', view.up && view.yielded);
     for (const i of this.items) {
       if (i.pressTimer > 0) {
         i.pressTimer -= dt;
@@ -252,14 +266,14 @@ export class PauseScreen {
     this.el.remove();
   }
 
-  private item(id: PauseChoice, text: string, parent: HTMLElement): Line {
+  private item(id: PauseChoice, t: (k: StringKey) => string, parent: HTMLElement): Line {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'vd-pause__item';
     button.dataset.pauseItem = id;
-    const { tag, line } = writtenLine(text);
-    button.appendChild(tag);
-    const item: Item = { id, button, tag, line, pressTimer: 0 };
+    const written = writtenLine(t, STRING_OF[id]);
+    button.appendChild(written.tag);
+    const item: Item = { id, button, ...written, pressTimer: 0 };
     button.addEventListener('focus', () => {
       if (this.enabled) this.events.onFocus(id);
     });

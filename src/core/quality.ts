@@ -57,3 +57,76 @@ export const QUALITY_PRESETS: Readonly<Record<QualityLevel, Readonly<QualityPres
 export function isQualityLevel(value: unknown): value is QualityLevel {
   return value === 'low' || value === 'mid' || value === 'high';
 }
+
+/**
+ * What a player can choose (設定 > 画質: 自動・低・中・高). 自動 measures the frame times and picks a preset
+ * (技術設計 > 品質プリセット: 推奨プリセットを自動で選びます).
+ */
+export const QUALITY_CHOICES = ['auto', 'low', 'mid', 'high'] as const;
+export type QualityChoice = (typeof QUALITY_CHOICES)[number];
+
+export function isQualityChoice(value: unknown): value is QualityChoice {
+  return value === 'auto' || isQualityLevel(value);
+}
+
+/** The preset the shell starts with, whether 自動 then measures, and where that came from. */
+export interface StartQuality {
+  level: QualityLevel;
+  auto: boolean;
+  origin: 'url' | 'saved' | 'default';
+}
+
+/**
+ * Which preset the shell creates the scene with (S-43): the URL's `?quality` when it is there (a dev and sensor switch:
+ * it wins, as it always did), else the player's saved choice (自動 measures from mid, as `?quality=auto` does), else mid.
+ */
+export function startQuality(opts: {
+  url: { level: QualityLevel; auto: boolean } | null;
+  saved: QualityChoice | null;
+}): StartQuality {
+  if (opts.url) return { level: opts.url.level, auto: opts.url.auto, origin: 'url' };
+  if (opts.saved === 'auto') return { level: 'mid', auto: true, origin: 'saved' };
+  if (opts.saved) return { level: opts.saved, auto: false, origin: 'saved' };
+  return { level: 'mid', auto: false, origin: 'default' };
+}
+
+/**
+ * The shell's quality, as a scene's settings see it (S-43). The shell (main.ts) hands it to the scene on its context
+ * (`qualityPortOf`). A scene that can take another preset in place attaches itself (`attach`); a request then changes
+ * the preset in use without making the scene again (品質を変えてもゲームの状態を失わない): the render scale at once, the
+ * governor anew (自動 measures again, during play). A scene that has not attached is made again, as before.
+ */
+export interface QualityPort {
+  /** What is chosen now: a preset, or 自動. */
+  readonly choice: QualityChoice;
+  /** The preset in use (自動's pick, once it has measured). */
+  readonly level: QualityLevel;
+  request(choice: QualityChoice): void;
+  /** The scene takes presets in place, and says when its picture stands still. Returns the detach. */
+  attach(scene: QualityScene): () => void;
+}
+
+/** A scene's side of the port (S-43). */
+export interface QualityScene {
+  /**
+   * Another preset, without being made again. The shell has set the render scale before it calls; the scene changes
+   * what else it can, and keeps the rest of what it was built with.
+   */
+  applyQuality(level: QualityLevel, preset: Readonly<QualityPreset>): void;
+  /**
+   * The picture stands still (the pause holds it): the shell gives none of these frames, nor their GPU time, to the
+   * governor (S-42's 提案4: no new render scale while nothing moves).
+   */
+  readonly idle: boolean;
+}
+
+/** The shell's port on a scene's context, if the shell gave it one (`{ ...context, qualityPort }`). */
+export function qualityPortOf(ctx: object): QualityPort | null {
+  const port = (ctx as { qualityPort?: Partial<QualityPort> }).qualityPort;
+  return port &&
+    typeof port.request === 'function' &&
+    typeof port.attach === 'function' &&
+    isQualityChoice(port.choice)
+    ? (port as QualityPort)
+    : null;
+}

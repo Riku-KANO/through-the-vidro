@@ -6,6 +6,7 @@ import {
   playPauseCue,
   tickRate,
 } from '../../audio/pause';
+import { duckStage } from '../../core/audio/engine';
 import { midiToHz } from '../../core/audio/scale';
 import { padCodesPressed } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
@@ -72,6 +73,8 @@ export interface PauseProbe {
   away: number;
   /** Dev hold (screenshots): stands the opening at this many seconds in; null lets it go on. */
   hold: number | null;
+  /** The settings are open over the pause (S-43): its keys and pad are the panel's. */
+  yielded: boolean;
   /** Asks for the pause as the world's input would (tests: the autopilot holds the input). */
   ask(): void;
 }
@@ -84,6 +87,11 @@ export interface PauseHostOptions {
   world: PausableWorld;
   /** タイトルへ → はい: start the dive back to the home. False if it cannot start now. */
   leave(): boolean;
+  /**
+   * 設定 (S-43): open the settings over the pause. The pause steps aside (its keys and pad are the panel's) until
+   * `settingsClosed()`. Without it the item does nothing.
+   */
+  openSettings?(): void;
 }
 
 const MAX_SOUNDS = 40;
@@ -98,6 +106,9 @@ export class PauseHost {
   private readonly gate: AudioGate;
   private readonly world: PausableWorld;
   private readonly leaveGame: () => boolean;
+  private readonly openSettings: (() => void) | null;
+  /** The settings are open over the pause. */
+  private yielded = false;
   private menu: PauseMenu = MENU_START;
   private playing = false;
   private asked = false;
@@ -116,6 +127,7 @@ export class PauseHost {
     page: 'menu',
     focused: null,
     interactive: false,
+    yielded: false,
   };
   private lastNow = performance.now();
   private mix: PauseMix | null = null;
@@ -128,6 +140,7 @@ export class PauseHost {
     this.gate = opts.gate;
     this.world = opts.world;
     this.leaveGame = opts.leave;
+    this.openSettings = opts.openSettings ?? null;
     this.screen = new PauseScreen(opts.root, opts.t, {
       onHover: (item) => {
         this.ring('tick', { rate: tickRate(this.indexOf(item)), gain: 0.8 });
@@ -162,13 +175,15 @@ export class PauseHost {
       ducked: 0,
       away: 0,
       hold: null,
+      yielded: false,
       ask() {
         host.request();
       },
     };
     this.offRequest = this.world.onPauseRequest(() => this.request());
     this.offReady = this.gate.whenReady((engine) => {
-      this.mix = new PauseMix(engine);
+      // the turn-down on a duck stage of its own (core/audio): the settings may move the player's sliders meanwhile (S-43)
+      this.mix = new PauseMix(duckStage(engine, 'pause'));
       loadPauseBank(engine.ctx, this.abort.signal).then(
         (bank) => {
           this.bank = bank;
@@ -205,6 +220,31 @@ export class PauseHost {
     this.screen.resize(width, height);
   }
 
+  /** Something in the picture changed (a setting: the field of view, the quality): the held picture is drawn once more. */
+  redraw(): void {
+    this.needsFrame = true;
+  }
+
+  /** The time stands under the pause (the shell gives no GPU time to its governor then: S-43). */
+  get still(): boolean {
+    return this.frozen;
+  }
+
+  /** The settings opened from the pause have closed: the items are written again, on 設定 (来たときの動きの逆再生). */
+  settingsClosed(): void {
+    if (!this.yielded) return;
+    this.yielded = false;
+    // the button that closed them (B) is held now: not a new press for the pause
+    this.padHeld = this.readPad(this.padHeld);
+    this.timeline.rewrite();
+    this.focusPending = true;
+  }
+
+  /** Swaps the words (設定 > 言語, S-43). */
+  relabel(t: (k: StringKey) => string): void {
+    this.screen.relabel(t);
+  }
+
   /** Every frame, before the world's update. `playing`: in the game, no transition. */
   update(dt: number, playing: boolean): void {
     const now = performance.now();
@@ -222,8 +262,9 @@ export class PauseHost {
       this.held = held;
       this.world.setHeld(held);
     }
-    // the pad is read only while the pause is up (open() reads which buttons are held already)
-    if (held) this.pollPad();
+    // the pad is read only while the pause is up (open() reads which buttons are held already), and not while the
+    // settings have it
+    if (held && !this.yielded) this.pollPad();
 
     const hold = this.probe.hold;
     if (hold !== null && this.timeline.phase === 'opening') this.timeline.holdAt(hold);
@@ -252,8 +293,9 @@ export class PauseHost {
     view.page = this.menu.page;
     view.focused = phase === 'closed' ? null : focusedItem(this.menu);
     view.interactive = this.timeline.interactive;
+    view.yielded = this.yielded;
     this.screen.render(dt, view);
-    if (this.focusPending && this.timeline.interactive) {
+    if (this.focusPending && this.timeline.interactive && !this.yielded) {
       // after the render: the page's buttons are shown now
       this.focusPending = false;
       this.screen.focus(focusedItem(this.menu));
@@ -271,6 +313,7 @@ export class PauseHost {
     p.timeScale = this.timeline.timeScale;
     p.ducked = this.timeline.frost;
     p.away = this.awayAmount;
+    p.yielded = this.yielded;
   }
 
   dispose(): void {
@@ -334,7 +377,7 @@ export class PauseHost {
   }
 
   private apply(step: PauseStep, gesture: boolean): void {
-    if (!this.timeline.interactive) return;
+    if (!this.timeline.interactive || this.yielded) return;
     const page = this.menu.page;
     if (step.chosen) {
       this.screen.press(step.chosen);
@@ -349,6 +392,11 @@ export class PauseHost {
       if (gesture) this.world.relock();
       this.close();
     } else if (step.outcome === 'leave') this.leave();
+    else if (step.outcome === 'settings' && this.openSettings) {
+      // the pause steps aside: the panel has the keys and the pad until it closes (settingsClosed)
+      this.yielded = true;
+      this.openSettings();
+    }
   }
 
   private setFocus(item: PauseChoice): void {
@@ -365,7 +413,8 @@ export class PauseHost {
   }
 
   private readonly onKey = (e: KeyboardEvent): void => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // the settings over the pause have the keys (their own listener)
+    if (e.metaKey || e.ctrlKey || e.altKey || this.yielded) return;
     const phase = this.timeline.phase;
     if (phase !== 'opening' && phase !== 'open') return;
     const command = keyCommand(e);
@@ -395,10 +444,11 @@ export class PauseHost {
   }
 
   private ring(cue: PauseCue, opts: { rate?: number; gain?: number } = {}): void {
-    const engine = this.gate.engine;
+    // on the gate's UI bus, counted as the UI's voices (S-43: 全部の声 = UI の声 + 部屋の声, S-18)
+    const ui = this.gate.ui;
     let rang = false;
-    if (engine) {
-      rang = playPauseCue(engine, this.bank, cue, opts);
+    if (ui) {
+      rang = playPauseCue(ui, this.bank, cue, opts);
       if (!rang && !this.bank[cue]) {
         // the pause's sounds are still being made: a plain glass ping answers (UIの原則 3)
         this.gate.ping(TICK_HZ * (opts.rate ?? 1), 0.04, 0.6);

@@ -80,8 +80,16 @@ type Schedule = (ctx: FakeContext, destination: unknown, when: number) => { end:
 
 class FakeEngine {
   readonly voices: { level: number; bus?: string }[] = [];
-  /** The engine's buses (what a voice is built into). */
-  readonly buses = { music: { bus: 'music' }, sfx: { bus: 'sfx' }, ambience: { bus: 'ambience' } };
+  /** The engine's buses (what a voice is built into); `ui` once the gate has added it. */
+  readonly buses: Record<string, { bus: string }> = {
+    music: { bus: 'music' },
+    sfx: { bus: 'sfx' },
+    ambience: { bus: 'ambience' },
+  };
+  /** The sliders (the four volumes, as the player set them), the extra buses' volumes, and the ducks. */
+  readonly sliders: Record<string, number> = { ...VIDRO_VOLUMES };
+  readonly extra: Record<string, number> = {};
+  readonly ducks: Record<string, number> = {};
   accepting = true;
   dropped = 0;
   disposed = 0;
@@ -94,13 +102,39 @@ class FakeEngine {
     readonly ctx: FakeContext,
     readonly roomId: string,
   ) {}
-  startVoice(spec: { level: number; bus?: keyof FakeEngine['buses'] }, schedule: Schedule): object | null {
+  startVoice(spec: { level: number; bus?: string; extraBus?: string }, schedule: Schedule): object | null {
     if (!this.accepting) {
       this.dropped++;
       return null;
     }
-    this.voices.push({ level: spec.level, bus: spec.bus });
-    return schedule(this.ctx, this.buses[spec.bus ?? 'sfx'], 0);
+    const bus = spec.extraBus ?? spec.bus ?? 'sfx';
+    this.voices.push({ level: spec.level, bus });
+    return schedule(this.ctx, this.buses[bus], 0);
+  }
+  addBus(name: string, opts: { volume?: number } = {}): object {
+    this.buses[name] ??= { bus: name };
+    this.extra[name] ??= opts.volume ?? 1;
+    return this.buses[name];
+  }
+  setBusVolume(name: string, v: number): void {
+    this.extra[name] = v;
+  }
+  getBusVolume(name: string): number {
+    return this.extra[name] ?? 0;
+  }
+  setVolume(channel: string, v: number): void {
+    this.sliders[channel] = v;
+  }
+  setDuck(owner: string, channel: string, v: number): void {
+    this.ducks[`${owner}:${channel}`] = v;
+  }
+  getDuck(owner: string, channel: string): number {
+    return this.ducks[`${owner}:${channel}`] ?? 1;
+  }
+  mixVolume(channel: string): number {
+    let v = this.sliders[channel] ?? 1;
+    for (const [key, d] of Object.entries(this.ducks)) if (key.endsWith(`:${channel}`)) v *= d;
+    return v;
   }
   bindUnlockGestures(target: EventTarget): void {
     this.boundTo = target;
@@ -109,8 +143,8 @@ class FakeEngine {
     this.unlocks++;
     return Promise.resolve();
   }
-  getVolume(channel: keyof typeof VIDRO_VOLUMES): number {
-    return VIDRO_VOLUMES[channel];
+  getVolume(channel: string): number {
+    return this.sliders[channel] ?? 1;
   }
   snapshot(): object {
     return {
@@ -207,7 +241,7 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     r.gate.dispose();
   });
 
-  it('rings the drops on the engine’s effects bus (the four volumes) from the press on; nothing before it is kept', async () => {
+  it('rings the drops on the engine’s UI bus (its own volume, S-43) from the press on; nothing before it is kept', async () => {
     const r = rig();
     r.gate.ping(440, 0.05, 0.8);
     // the press rings at once (startOpening): the engine is a moment away, the pings still sound
@@ -217,8 +251,8 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     await r.settle();
     const engine = r.engines[0] as FakeEngine;
     expect(engine.voices).toEqual([
-      { level: 0.05, bus: 'sfx' },
-      { level: 0.03, bus: 'sfx' },
+      { level: 0.05, bus: 'ui' },
+      { level: 0.03, bus: 'ui' },
     ]);
     expect(r.gate.probe.uiVoices).toBe(2);
     r.gate.ping(660, 0.035, 0.8);
@@ -241,10 +275,10 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     const ctx = r.contexts[0] as FakeContext;
     const into = (to: unknown): FakeNode[] => ctx.links.filter(([, t]) => t === to).map(([from]) => from);
     expect(into(ctx.destination)).toEqual([]);
-    expect(into(engine.buses.sfx).length).toBeGreaterThan(0);
+    expect(into(engine.buses.ui).length).toBeGreaterThan(0);
     // every source of the ping ends up in that bus (whatever lies between)
     const reaches = (node: unknown, seen = new Set<unknown>()): boolean => {
-      if (node === engine.buses.sfx) return true;
+      if (node === engine.buses.ui) return true;
       if (seen.has(node)) return false;
       seen.add(node);
       return ctx.links.some(([from, to]) => from === node && reaches(to, seen));
@@ -368,5 +402,60 @@ describe('AudioGate: one AudioContext, made by the press of 「はじめる」 (
     expect(noEngine.gate.state).toBe('unavailable');
     expect(noEngine.contexts[0]?.closes).toBe(1);
     expect(got).toEqual([]);
+  });
+});
+
+describe('AudioGate: the player’s volumes (設定 > 音: 全体・効果音・環境音・UI, S-43)', () => {
+  it('takes the volumes before the press and sets them on the engine once it is made', async () => {
+    const r = rig();
+    r.gate.setVolume('ambience', 0.3);
+    r.gate.setVolume('ui', 0.5);
+    expect(r.gate.probe.sliders).toEqual({ ...VIDRO_VOLUMES, ambience: 0.3, ui: 0.5 });
+    r.gate.unlock();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    expect(engine.sliders.ambience).toBe(0.3);
+    expect(engine.extra.ui).toBe(0.5);
+    // and at once once it is there
+    r.gate.setVolume('master', 0.4);
+    r.gate.setVolume('ui', 0.2);
+    expect(engine.sliders.master).toBe(0.4);
+    expect(engine.extra.ui).toBe(0.2);
+    expect(r.gate.probe.sliders).toEqual({ ...VIDRO_VOLUMES, master: 0.4, ambience: 0.3, ui: 0.2 });
+    r.gate.dispose();
+  });
+
+  it('reports the volumes as the mix plays them (a duck shows) and the sliders as the player set them', async () => {
+    const r = rig();
+    r.gate.unlock();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    engine.setDuck('pause', 'ambience', 0.4);
+    expect(r.gate.probe.volumes?.ambience).toBeCloseTo(VIDRO_VOLUMES.ambience * 0.4, 9);
+    expect(r.gate.probe.sliders.ambience).toBe(VIDRO_VOLUMES.ambience);
+    r.gate.dispose();
+  });
+
+  it('the UI’s other sounds (the pause, the settings) go through the gate: on the UI bus, counted as the UI’s', async () => {
+    const r = rig();
+    r.gate.unlock();
+    await r.settle();
+    const engine = r.engines[0] as FakeEngine;
+    const ui = r.gate.ui;
+    expect(ui).not.toBeNull();
+    const voice = ui?.startVoice({ level: 0.07, bus: 'sfx' }, (_ctx, destination, when) => {
+      expect(destination).toBe(engine.buses.ui);
+      return { end: when + 1, fadeOut: () => undefined };
+    });
+    expect(voice).not.toBeNull();
+    expect(engine.voices).toEqual([{ level: 0.07, bus: 'ui' }]);
+    expect(r.gate.probe.uiVoices).toBe(1);
+    r.gate.dispose();
+  });
+
+  it('has no UI voices to give before the press', () => {
+    const r = rig();
+    expect(r.gate.ui).toBeNull();
+    r.gate.dispose();
   });
 });

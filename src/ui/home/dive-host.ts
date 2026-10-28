@@ -2,17 +2,21 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { dot, exp, mix, screenSize, screenUV, smoothstep, uniform, vec2, vec3 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { ownBackdropImage } from '../../core/glass';
+import { qualityPortOf } from '../../core/quality';
 import type { SandboxScene, SceneContext } from '../../core/scene';
 import { segment } from '../../core/transition';
 import type { DiveWorld } from '../../game/dive-world';
 import { AudioGate } from '../audio-gate';
 import { AUTOPLAY, parsePauseSpec } from '../autoplay';
 import { ScreenFlow, TRANSITIONS } from '../flow';
-import { pickLang, STRINGS, type StringKey } from '../lang';
+import { FONT_STACK, type Lang, pickLang, STRINGS, type StringKey } from '../lang';
 import { LoadingScreen } from '../loading-screen';
 import { PauseHost } from '../pause/pause-host';
 import { pausableOf } from '../pause/port';
 import type { HomeDiveProbe, PhaseName, PhaseStats } from '../probe';
+import { SettingsHost } from '../settings/settings-host';
+import { defaultSettings } from '../settings/settings-model';
+import { browserStorage, SettingsStore } from '../settings/settings-store';
 import { createUiRoot } from '../styles';
 import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './choreography';
 import { createLensUniforms } from './lens';
@@ -49,7 +53,15 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   const { renderer, overlay, params } = ctx;
   const autoplay = params.get('autoplay') === '1' ? 'full' : params.has('bench') ? 'home' : 'off';
   const pauses = autoplay === 'full' ? parsePauseSpec(params.get('pause')) : new Map<string, number[]>();
-  const lang = pickLang(navigator.languages);
+  // S-43: the player's settings, kept in the browser (the language among them: 初期値はブラウザの言語設定)
+  const store = new SettingsStore(
+    browserStorage,
+    defaultSettings({
+      lang: pickLang(navigator.languages),
+      peekMode: params.get('peek') === 'toggle' ? 'toggle' : 'hold',
+    }),
+  );
+  let lang: Lang = store.settings.lang;
   const t = (k: StringKey): string => STRINGS[lang][k];
   const gameCam = world.camera;
 
@@ -97,8 +109,50 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   // S-42: the pause, over a world that has its port (the prologue room); its タイトルへ plays the dive back to the home
   const pausable = pausableOf(world);
   const pause = pausable
-    ? new PauseHost({ root: ui.root, t, gate, world: pausable, leave: () => flow.rewindFromGame() })
+    ? new PauseHost({
+        root: ui.root,
+        t,
+        gate,
+        world: pausable,
+        leave: () => flow.rewindFromGame(),
+        // S-43: 設定 among the pause's items opens the panel over it
+        openSettings: () => settings.open('pause'),
+      })
     : null;
+  // S-43: the shell's quality. This host takes another preset in place (the world keeps everything: where the body
+  // stands, the orb, the drops taken, the gates, what the light settled): the shell sets the render scale, the held picture
+  // is drawn again. While the pause holds the picture, the shell gives the governor none of its frames.
+  const qualityPort = qualityPortOf(ctx);
+  const detachQuality =
+    qualityPort?.attach({
+      applyQuality: () => pause?.redraw(),
+      get idle() {
+        return pause?.still ?? false;
+      },
+    }) ?? null;
+  // S-43: 設定, from the home's drop and the pause's item, over the picture behind
+  const settings = new SettingsHost({
+    root: ui.root,
+    t,
+    gate,
+    world,
+    quality: qualityPort,
+    store,
+    onLang: (next) => {
+      lang = next;
+      ui.root.lang = next;
+      ui.root.style.fontFamily = FONT_STACK[next];
+      menu.relabel(t);
+      pause?.relabel(t);
+      settings.relabel(t);
+    },
+    onLayout: () => menu.invalidate(),
+    onPicture: () => pause?.redraw(),
+    onClosed: (from) => {
+      if (from === 'pause') pause?.settingsClosed();
+      else if (flow.screen === 'home' && !flow.transition) menu.focusItem('settings');
+    },
+  });
 
   // ---- probe ----
   const probe: HomeDiveProbe = {
@@ -120,6 +174,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   window.__vidro.sceneProbe = Object.assign(
     probe,
     pause ? { pause: pause.probe } : {},
+    { settings: settings.probe },
     opts.probeExtras ?? {},
   ) as unknown as Record<string, unknown>;
 
@@ -138,13 +193,15 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     onSelect: (item) => {
       probe.selected = item;
       if (flow.select(item)) gate.ping(menuPitchHz(0) / 2, 0.05, 1.8);
+      else if (item === 'settings' && flow.screen === 'home' && !flow.transition) settings.open('home');
       else gate.ping(menuPitchHz(HOME_ITEMS.indexOf(item)) / 2, 0.03, 0.5);
     },
   });
 
   // Esc is always accepted during long transitions (遷移のルール 4) and plays them back.
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || e.repeat) return;
+    // the settings panel has the keys while it is up (its own listener: Esc closes it)
+    if (e.key !== 'Escape' || e.repeat || settings.isUp) return;
     if (flow.escape()) gate.ping(menuPitchHz(4) / 2, 0.03, 0.7);
     else if (opts.rewindFromGame && flow.rewindFromGame()) gate.ping(menuPitchHz(0) / 2, 0.04, 1.2);
   };
@@ -367,9 +424,11 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       }
       // S-42: before the world's update, so that the time speed it sets is this frame's
       pause?.update(dt, playing);
+      // S-43: and the settings, so that what they change (the field of view) is in this frame's picture
+      settings.update(dt);
 
       // back at rest on the home screen (arrived, or played back there): the keyboard focus returns
-      if (hadTransition && !tr && flow.screen === 'home')
+      if (hadTransition && !tr && flow.screen === 'home' && !settings.isUp)
         menu.focusItem(menu.focused ?? probe.selected ?? 'start');
       hadTransition = tr !== null;
 
@@ -452,7 +511,10 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         });
       }
       loadingWasSeen = loadingSeen;
-      menu.setInteractive(interactiveHome);
+      // the drops step aside while the settings are open over the home
+      const homeSettings = settings.isUp && flow.screen === 'home';
+      menu.setVeiled(homeSettings);
+      menu.setInteractive(interactiveHome && !homeSettings);
       orb.group.updateMatrixWorld();
       orbCenter.setFromMatrixPosition(orb.group.matrixWorld);
       outerCam.updateMatrixWorld();
@@ -558,8 +620,10 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       window.__vidro.sceneProbe = {};
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onMove);
+      detachQuality?.();
       loading.dispose();
       menu.dispose();
+      settings.dispose();
       pause?.dispose();
       ui.dispose();
       if (ownsGate) gate.dispose();

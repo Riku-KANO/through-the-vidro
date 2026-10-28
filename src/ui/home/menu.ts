@@ -31,6 +31,7 @@ interface Drop {
   id: HomeItem;
   el: HTMLButtonElement;
   bead: HTMLElement;
+  label: HTMLElement;
   pressTimer: number;
 }
 
@@ -51,6 +52,7 @@ export class HomeMenu {
   private shown = true;
   /** Focus moved by a hover, which already answered with its own sound. */
   private quietFocus = false;
+  private veiled = false;
 
   constructor(
     root: HTMLElement,
@@ -69,8 +71,8 @@ export class HomeMenu {
       el.innerHTML =
         '<span class="vd-drop__bead" data-part="bead"><span class="vd-drop__light"></span></span>' +
         '<span class="vd-drop__label vd-frost"></span>';
-      const label = el.querySelector('.vd-drop__label');
-      if (label) label.textContent = t(id);
+      const label = el.querySelector<HTMLElement>('.vd-drop__label') ?? el;
+      label.textContent = t(id);
       const bead = el.querySelector<HTMLElement>('[data-part="bead"]') ?? el;
       el.addEventListener('pointerenter', () => {
         if (!this.interactive) return;
@@ -99,7 +101,7 @@ export class HomeMenu {
         this.events.onSelect(id);
       });
       this.el.appendChild(el);
-      return { id, el, bead, pressTimer: 0 };
+      return { id, el, bead, label, pressTimer: 0 };
     });
     this.el.addEventListener('keydown', (e) => {
       if (!this.interactive) return;
@@ -151,9 +153,26 @@ export class HomeMenu {
     d.pressTimer = PRESS_SECONDS;
   }
 
-  /** Re-measure after a resize (font size follows the viewport height). */
+  /** Re-measure after a resize (font size follows the viewport height, and the settings' text size). */
   invalidate(): void {
     this.measured = false;
+  }
+
+  /** Swaps the words (設定 > 言語, S-43). */
+  relabel(t: (k: StringKey) => string): void {
+    this.el.setAttribute('aria-label', t('menuLabel'));
+    for (const d of this.drops) d.label.textContent = t(d.id);
+    this.invalidate();
+  }
+
+  /**
+   * The settings are open over the home (S-43): the drops step aside under the panel (they fade as they came), and come
+   * back when it closes.
+   */
+  setVeiled(on: boolean): void {
+    if (on === this.veiled) return;
+    this.veiled = on;
+    this.el.classList.toggle('is-veiled', on);
   }
 
   update(dt: number, layout: MenuLayout): void {

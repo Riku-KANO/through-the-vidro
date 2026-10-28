@@ -1,4 +1,5 @@
 import { createVidroEngine } from '../audio/engine';
+import { VIDRO_VOLUMES } from '../audio/levels';
 import { VIDRO_ROOMS } from '../audio/rooms';
 import type { AudioEngine } from '../core/audio/engine';
 import { fadeAndStop, type PlannedSource } from '../core/audio/glass';
@@ -41,13 +42,26 @@ export interface AudioGateProbe {
   readonly state: AudioState;
   /** AudioContexts this gate has made (0 before the press, then 1). */
   readonly contexts: number;
-  /** Voices the UI started on the engine. */
+  /** Voices the UI started on the engine: the drops' pings, the pause's and the settings' sounds (S-43). */
   readonly uiVoices: number;
   /** Every voice the engine started: the UI's and the game's. */
   readonly voicesStarted: number;
   readonly voicesDropped: number;
   readonly room: string | null;
+  /** The four volumes as the mix plays them: the player's slider times any turn-down (the pause's duck). */
   readonly volumes: Record<VolumeChannel, number> | null;
+  /** The player's sliders (設定 > 音: 全体・効果音・環境音・UI), also before the engine is made (S-43). */
+  readonly sliders: Record<UiVolumeChannel, number>;
+}
+
+/** The bus of the UI's own sounds, beside the effects (設定 > 音: UI の音量, S-43). */
+export const UI_BUS = 'ui';
+/** The player's volumes: the engine's four, and the UI's. */
+export type UiVolumeChannel = VolumeChannel | typeof UI_BUS;
+
+/** Starts a UI sound: the engine's `startVoice`, onto the UI bus, counted as the UI's (whatever bus it asks for). */
+export interface UiVoices {
+  startVoice: AudioEngine['startVoice'];
 }
 
 /** The stand-in pings' partials: a sine with an inharmonic partial (ratio, level). */
@@ -100,6 +114,9 @@ export class AudioGate {
   private current: AudioState = 'locked';
   private disposed = false;
   private pings = 0;
+  /** The player's sliders: set on the engine when it is made, and at once after. */
+  private readonly sliders: Record<UiVolumeChannel, number> = { ...VIDRO_VOLUMES, [UI_BUS]: 1 };
+  private uiVoices: UiVoices | null = null;
   readonly probe: AudioGateProbe;
 
   constructor(opts: AudioGateOptions = {}) {
@@ -116,6 +133,9 @@ export class AudioGate {
       get uiVoices() {
         return gate.pings;
       },
+      get sliders() {
+        return { ...gate.sliders };
+      },
       get voicesStarted() {
         return gate.eng?.snapshot().voicesStarted ?? 0;
       },
@@ -129,7 +149,7 @@ export class AudioGate {
         const e = gate.eng;
         if (!e) return null;
         const v = {} as Record<VolumeChannel, number>;
-        for (const ch of VOLUME_CHANNELS) v[ch] = e.getVolume(ch);
+        for (const ch of VOLUME_CHANNELS) v[ch] = e.mixVolume(ch);
         return v;
       },
     };
@@ -142,6 +162,32 @@ export class AudioGate {
   /** The engine, once the press has made it. */
   get engine(): AudioEngine | null {
     return this.eng;
+  }
+
+  /**
+   * The UI's sounds other than the pings (the pause, the settings: S-43): `startVoice` as the engine's, but on the UI's
+   * bus (its own volume) and counted in `uiVoices`, so that every voice is the UI's or the room's (S-18). Null before the
+   * press made the engine.
+   */
+  get ui(): UiVoices | null {
+    return this.uiVoices;
+  }
+
+  /**
+   * The player's volume of a channel (設定 > 音), 0..1: on the engine now, or when the press makes it. The pause's
+   * turn-down is a duck on its own stage (core/audio engine), so this never fights it.
+   */
+  setVolume(channel: UiVolumeChannel, value: number): void {
+    const v = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+    this.sliders[channel] = v;
+    const e = this.eng;
+    if (!e) return;
+    if (channel === UI_BUS) e.setBusVolume(UI_BUS, v);
+    else e.setVolume(channel, v);
+  }
+
+  getVolume(channel: UiVolumeChannel): number {
+    return this.sliders[channel];
   }
 
   /**
@@ -194,6 +240,16 @@ export class AudioGate {
           return null;
         }
         this.eng = engine;
+        // the UI's own bus, and the player's volumes (set before the press, from the kept settings)
+        engine.addBus(UI_BUS, { volume: this.sliders[UI_BUS] });
+        for (const ch of VOLUME_CHANNELS) engine.setVolume(ch, this.sliders[ch]);
+        this.uiVoices = {
+          startVoice: (spec, schedule) => {
+            const voice = engine.startVoice({ level: spec.level, extraBus: UI_BUS }, schedule);
+            if (voice) this.pings++;
+            return voice;
+          },
+        };
         // later interruptions (a backgrounded tab, a device change) resume on the next gesture
         engine.bindUnlockGestures(this.opts.gestureTarget ?? window);
         // still inside the press's activation: start it if the browser made it suspended
@@ -250,7 +306,7 @@ export class AudioGate {
   }
 
   private ring(engine: AudioEngine, hz: number, gain: number, seconds: number): void {
-    const voice = engine.startVoice({ level: gain, bus: 'sfx' }, (ctx, destination, when) =>
+    const voice = engine.startVoice({ level: gain, extraBus: UI_BUS }, (ctx, destination, when) =>
       schedulePing(ctx, destination, hz, gain, seconds, when),
     );
     if (voice) this.pings++;
@@ -264,6 +320,7 @@ export class AudioGate {
     const ctx = this.ctx;
     const engine = this.eng;
     this.eng = null;
+    this.uiVoices = null;
     if (!ctx) return;
     ctx.removeEventListener('statechange', this.syncState);
     if (this.current !== 'unavailable') this.current = 'closed';

@@ -148,8 +148,11 @@ export function lineWriting(writing: number, k: number, n: number): number {
   return segment(writing, from, from + span);
 }
 
-/** 画面ごとの設計 > ポーズ: つづける / ヒント / 地図の玉 / 設定 / タイトルへ — this slice has つづける and タイトルへ (S-42). */
-export const PAUSE_ITEMS = ['resume', 'title'] as const;
+/**
+ * 画面ごとの設計 > ポーズ: つづける / ヒント / 地図の玉 / 設定 / タイトルへ — つづける and タイトルへ (S-42), 設定 (S-43); ヒント
+ * and 地図の玉 come with the slices that make them, in this order.
+ */
+export const PAUSE_ITEMS = ['resume', 'settings', 'title'] as const;
 /** 細部の振る舞い > 確認ダイアログ: 曇りガラスに2択の文字を書く. */
 export const CONFIRM_ITEMS = ['yes', 'no'] as const;
 
@@ -168,8 +171,8 @@ export type PauseCommand = 'up' | 'down' | 'left' | 'right' | 'choose' | 'back' 
 
 export interface PauseStep {
   menu: PauseMenu;
-  /** What the pause does now: resume the game, leave for the title, or nothing (a move, a page). */
-  outcome: 'resume' | 'leave' | null;
+  /** What the pause does now: resume the game, open the settings, leave for the title, or nothing (a move, a page). */
+  outcome: 'resume' | 'settings' | 'leave' | null;
   /** The item chosen by this step (it sinks and rings), if any. */
   chosen: PauseChoice | null;
   /** The focus moved to another item (it lights and rings). */
@@ -198,6 +201,9 @@ function choose(menu: PauseMenu): PauseStep {
   switch (item) {
     case 'resume':
       return { menu, outcome: 'resume', chosen: item, moved: false };
+    case 'settings':
+      // the panel opens over the pause; closed, it comes back here, on 設定
+      return { menu, outcome: 'settings', chosen: item, moved: false };
     case 'title':
       // 取り消せない操作だけ確認する
       return { menu: { page: 'confirm', focus: NO_INDEX }, outcome: null, chosen: item, moved: false };

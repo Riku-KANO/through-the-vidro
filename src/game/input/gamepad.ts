@@ -64,6 +64,19 @@ export interface LookDelta {
 }
 
 /** Mouse movement in pixels → look delta. Moving right turns right, moving down looks down. */
+/** 調整値 (S-03): radians per pixel of mouse movement — the settings' マウスの感度 ×1. */
+export const MOUSE_RADIANS_PER_PIXEL = 0.0022;
+/** 仮 (S-43, 設定 > 操作 > マウスの感度): how far the player may scale it. */
+export const MOUSE_SENSITIVITY_RANGE = { min: 0.25, max: 3 } as const;
+
+/** The mouse's radians per pixel for the settings' sensitivity (×, clamped to its range; ×1 if not a number). */
+export function mouseSensitivityFor(scale: number): number {
+  const s = Number.isFinite(scale)
+    ? Math.min(MOUSE_SENSITIVITY_RANGE.max, Math.max(MOUSE_SENSITIVITY_RANGE.min, scale))
+    : 1;
+  return MOUSE_RADIANS_PER_PIXEL * s;
+}
+
 export function mouseLookDelta(dx: number, dy: number, sensitivity: number, invertY: boolean): LookDelta {
   return { yaw: -dx * sensitivity, pitch: (invertY ? dy : -dy) * sensitivity };
 }

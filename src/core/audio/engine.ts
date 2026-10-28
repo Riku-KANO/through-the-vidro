@@ -1,14 +1,19 @@
 /**
  * Audio foundation shared by both games (design doc: 技術設計 > ディレクトリ構成, core = 音の仕組み).
  *
- *  voices ─▶ [emitter: HRTF panner ▶ fade] ─▶ bus (music | sfx | ambience) ─┬─▶ master ─▶ limiter ─▶ out
- *                                                                           └─▶ send ─▶ RoomReverb ─▶ master
+ *  voices ─▶ [emitter: HRTF panner ▶ fade] ─▶ bus (music | sfx | ambience) ▶ duck ─┬─▶ master ▶ duck ─▶ limiter ─▶ out
+ *                                                                                  └─▶ send ─▶ RoomReverb ─▶ master
+ *  voices ─▶ extra bus (e.g. the UI's sounds) ─┬─▶ master
+ *                                              └─▶ send ─▶ RoomReverb
  *
  * - A context the engine creates stays suspended until the first user gesture (browsers block sound
  *   before one; design doc: UI/UX設計 > 画面ごとの設計 > 読み込み). Later gestures resume it again if the
  *   browser suspended or interrupted it.
  * - Works on an OfflineAudioContext too (no unlock needed), so the whole mix can be rendered and measured.
- * - Four volumes: master / music / sfx / ambience (サウンドデザイン > 制作方法).
+ * - Four volumes: master / music / sfx / ambience (サウンドデザイン > 制作方法): the player's sliders.
+ * - Ducks: turn-downs of a channel by an owner (a pause), on a stage of their own after the slider, so they never fight
+ *   over the player's volume; several owners multiply (S-43).
+ * - Extra buses beside the three, added at run time with a volume of their own (the UI's sounds: S-43).
  * - 3D sound with HRTF (サウンドデザイン > 環境音) and per-space reverb with synthesized IRs.
  * No game rules here: callers decide what plays where.
  */
@@ -70,6 +75,22 @@ export interface VoiceSpec {
   emitter?: Emitter;
   /** Bus for a non-positioned voice (default sfx). */
   bus?: BusName;
+  /** An extra bus (addBus) for a non-positioned voice, instead of `bus`. Unknown names throw. */
+  extraBus?: string;
+}
+
+/** An extra bus (addBus): its volume and its reverb send. */
+export interface ExtraBusOptions {
+  /** Slider position 0..1 (default 1). */
+  volume?: number;
+  /** How much feeds the room reverb, 0..1 (default 1). */
+  reverbSend?: number;
+}
+
+interface ExtraBus {
+  node: GainNode;
+  send: GainNode;
+  volume: number;
 }
 
 interface EmitterRecord {
@@ -114,6 +135,15 @@ export class AudioEngine {
   private readonly buses: Record<BusName, GainNode>;
   private readonly sends: GainNode[] = [];
   private readonly volumes: Record<VolumeChannel, number> = { master: 1, music: 1, sfx: 1, ambience: 1 };
+  /** Each channel's duck stage (after its slider), and the ducks on it by owner (slider positions; 1 = none). */
+  private readonly duckNodes: Record<VolumeChannel, GainNode>;
+  private readonly ducks: Record<VolumeChannel, Map<string, number>> = {
+    master: new Map(),
+    music: new Map(),
+    sfx: new Map(),
+    ambience: new Map(),
+  };
+  private readonly extraBuses = new Map<string, ExtraBus>();
   private readonly voices: VoiceAllocator<ScheduledVoice>;
   private readonly emitters = new Set<EmitterRecord>();
   private readonly listenerPose = {
@@ -165,21 +195,27 @@ export class AudioEngine {
     this.limiter.connect(ctx.destination);
     this.master = ctx.createGain();
     this.master.gain.value = volumeToGain(this.volumes.master);
-    this.master.connect(this.limiter);
+    const ducks = {} as Record<VolumeChannel, GainNode>;
+    ducks.master = unityGain(ctx);
+    this.master.connect(ducks.master).connect(this.limiter);
     this.reverb = new RoomReverb(ctx, opts.room);
     this.reverb.output.connect(this.master);
     const buses = {} as Record<BusName, GainNode>;
     for (const name of BUSES) {
       const bus = ctx.createGain();
       bus.gain.value = volumeToGain(this.volumes[name]);
-      bus.connect(this.master);
+      // the duck after the slider: what it turns down also feeds the reverb less (the whole bus is quieter)
+      const duck = unityGain(ctx);
+      bus.connect(duck).connect(this.master);
       const send = ctx.createGain();
       send.gain.value = Math.min(1, Math.max(0, opts.reverbSend?.[name] ?? 1));
-      bus.connect(send).connect(this.reverb.input);
+      duck.connect(send).connect(this.reverb.input);
       this.sends.push(send);
       buses[name] = bus;
+      ducks[name] = duck;
     }
     this.buses = buses;
+    this.duckNodes = ducks;
     ctx.addEventListener('statechange', this.onStateChange);
   }
 
@@ -250,6 +286,74 @@ export class AudioEngine {
 
   getVolume(channel: VolumeChannel): number {
     return this.volumes[channel];
+  }
+
+  /**
+   * Turns a channel down for `owner` (a slider position 0..1 on a stage after the player's slider: 1 = not at all). The
+   * player's volume is left as it is; ducks of different owners multiply. Used by the pause (S-42) through duckStage.
+   */
+  setDuck(owner: string, channel: VolumeChannel, value: number): void {
+    const v = Number.isFinite(value) ? unit(value) : 1;
+    const ducks = this.ducks[channel];
+    if (v === 1) ducks.delete(owner);
+    else ducks.set(owner, v);
+    let gain = 1;
+    for (const d of ducks.values()) gain *= volumeToGain(d);
+    this.glide(this.duckNodes[channel].gain, gain);
+  }
+
+  getDuck(owner: string, channel: VolumeChannel): number {
+    return this.ducks[channel].get(owner) ?? 1;
+  }
+
+  /** The channel as the mix plays it, as a slider position: the player's volume times every duck on it. */
+  mixVolume(channel: VolumeChannel): number {
+    let v = this.volumes[channel];
+    for (const d of this.ducks[channel].values()) v *= d;
+    return v;
+  }
+
+  /**
+   * A bus beside music / sfx / ambience (the UI's sounds: S-43), into the master and the room's reverb, with a volume of
+   * its own (setBusVolume). Asked again by name, the same bus (its options then are ignored). Voices go in with
+   * `startVoice({ extraBus: name })`.
+   */
+  addBus(name: string, opts: ExtraBusOptions = {}): AudioNode {
+    const had = this.extraBuses.get(name);
+    if (had) return had.node;
+    const volume = unit(opts.volume ?? 1);
+    const node = this.ctx.createGain();
+    node.gain.value = volumeToGain(volume);
+    node.connect(this.master);
+    const send = this.ctx.createGain();
+    send.gain.value = unit(opts.reverbSend ?? 1);
+    node.connect(send).connect(this.reverb.input);
+    this.extraBuses.set(name, { node, send, volume });
+    return node;
+  }
+
+  /** Slider position 0..1 of an extra bus (no-op for a name never added). */
+  setBusVolume(name: string, value: number): void {
+    const bus = this.extraBuses.get(name);
+    if (!bus) return;
+    bus.volume = Number.isFinite(value) ? unit(value) : 0;
+    this.glide(bus.node.gain, volumeToGain(bus.volume));
+  }
+
+  /** Slider position of an extra bus; 0 for a name never added. */
+  getBusVolume(name: string): number {
+    return this.extraBuses.get(name)?.volume ?? 0;
+  }
+
+  /** Moves a gain: smoothly while playing, at once otherwise (offline before rendering, or suspended). */
+  private glide(param: AudioParam, value: number): void {
+    const t = this.ctx.currentTime;
+    if (this.realtime && this.running) {
+      param.setTargetAtTime(value, t, SMOOTH);
+    } else {
+      param.cancelScheduledValues(t);
+      param.setValueAtTime(value, t);
+    }
   }
 
   get room(): RoomPreset {
@@ -401,17 +505,25 @@ export class AudioEngine {
     }
     const now = this.ctx.currentTime;
     const group = spec.emitter ?? null;
+    // where it goes, first: an unknown extra bus throws before anything is stolen or counted
+    const destination = spec.emitter?.input ?? this.destinationOf(spec);
     const when = this.now();
     // Fade stolen voices from the same instant the new one starts (a time the renderer has not reached).
     for (const victim of this.voices.makeRoom(now, group)) {
       victim.fadeOut(when);
       this.voicesStolen++;
     }
-    const destination = spec.emitter?.input ?? this.buses[spec.bus ?? 'sfx'];
     const voice = schedule(this.ctx, destination, when);
     this.voices.add({ start: when, end: voice.end, level: spec.level, group, data: voice });
     this.voicesStarted++;
     return voice;
+  }
+
+  private destinationOf(spec: VoiceSpec): AudioNode {
+    if (spec.extraBus === undefined) return this.buses[spec.bus ?? 'sfx'];
+    const extra = this.extraBuses.get(spec.extraBus);
+    if (!extra) throw new Error(`AudioEngine: no bus named ${spec.extraBus} (addBus first)`);
+    return extra.node;
   }
 
   /** Scheduling time for a sound that should start "now" (a few ms ahead to avoid clipped attacks). */
@@ -462,10 +574,42 @@ export class AudioEngine {
     this.reverb.dispose();
     for (const s of this.sends) s.disconnect();
     for (const b of Object.values(this.buses)) b.disconnect();
+    for (const d of Object.values(this.duckNodes)) d.disconnect();
+    for (const x of this.extraBuses.values()) {
+      x.node.disconnect();
+      x.send.disconnect();
+    }
+    this.extraBuses.clear();
     this.master.disconnect();
     this.limiter.disconnect();
     if (this.ownsContext && this.ctx.state !== 'closed') await (this.ctx as AudioContext).close();
   }
+}
+
+/** A gain node at 1 (set, not assumed: a stand-in context may start its params elsewhere). */
+function unityGain(ctx: BaseAudioContext): GainNode {
+  const g = ctx.createGain();
+  g.gain.value = 1;
+  return g;
+}
+
+function unit(v: number): number {
+  return Math.min(1, Math.max(0, v));
+}
+
+/**
+ * A duck stage of `owner` in the shape of the four volumes (getVolume / setVolume), for a mix written against the player's
+ * volumes: the pause's (src/audio/pause.ts PauseMix, S-42) turns the game down here instead of moving the player's sliders,
+ * so a slider moved by the settings meanwhile is not overwritten when the pause gives the volume back (S-43).
+ */
+export function duckStage(
+  engine: Pick<AudioEngine, 'getDuck' | 'setDuck'>,
+  owner: string,
+): Pick<AudioEngine, 'getVolume' | 'setVolume'> {
+  return {
+    getVolume: (channel) => engine.getDuck(owner, channel),
+    setVolume: (channel, value) => engine.setDuck(owner, channel, value),
+  };
 }
 
 function disconnectEmitter(rec: EmitterRecord): void {
