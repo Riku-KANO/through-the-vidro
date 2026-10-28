@@ -80,7 +80,11 @@ async function meanOf(page: Page, jpeg: Buffer): Promise<number> {
 }
 
 /** Plays the script with 点滅を抑える `calm`, sampling the screen around the place and the take. */
-async function play(page: Page, webgl: string, calm: boolean): Promise<{ samples: Sample[]; final: RoomProbe }> {
+async function play(
+  page: Page,
+  webgl: string,
+  calm: boolean,
+): Promise<{ samples: Sample[]; final: RoomProbe }> {
   await page.addInitScript((on) => {
     window.localStorage.setItem('vidro.settings', JSON.stringify({ v: 1, settings: { reduceFlashes: on } }));
   }, calm);
@@ -131,7 +135,9 @@ function windowOf(samples: Sample[], starts: (s: Sample) => boolean, seconds: nu
 for (const backend of backends) {
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
 
-  test(`S-45 点滅を抑える: the place, the take and the sweep rise less, under 10 % [${backend}]`, async ({ page }) => {
+  test(`S-45 点滅を抑える: the place, the take and the sweep rise less, under 10 % [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(420_000);
     mkdirSync(join(root, 'artifacts/S-45'), { recursive: true });
     const errors = collectErrors(page);

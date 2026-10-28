@@ -50,6 +50,12 @@ const OUTSIDE_BLUR_PX = 3;
 const BACK_GRADE = new THREE.Color(1.1, 1.02, 0.88);
 /** 透明ガラス: 断面の縁がわずかに緑. */
 const EDGE_TINT = new THREE.Color(0.82, 0.96, 0.9);
+/**
+ * 仮 (S-45, コントラスト強化: ガラスの縁を太く明るく): the band of light added along the hand orb's rim — from this share of its
+ * radius out to the edge, warm white, linear 0.55 (below the bloom's threshold 0.9: an edge, not a light).
+ */
+const RIM_CONTRAST = new THREE.Color(0.55, 0.53, 0.5);
+const RIM_CONTRAST_FROM = 0.8;
 /** 気泡入りガラス (手の玉): a few small bubbles inside, in orb-local units (radius = 1). */
 const BUBBLES: readonly [number, number, number, number][] = [
   [0.32, 0.18, 0.12, 0.05],
@@ -102,6 +108,10 @@ export class OrbComposite {
   private readonly uCamRot = uniform(new THREE.Matrix3());
   private readonly uSunView = uniform(new THREE.Vector3(0, 1, 0));
   private readonly uBackTexel = uniform(new THREE.Vector2(1, 1));
+  /** S-45 覗いたときの歪みの強さ (3D酔い対策): 0..1 of the refraction and colour fringes while peeking (1 as before). */
+  private readonly uDistort = uniform(1);
+  /** S-45 コントラスト強化: 0 / 1 — the orb's rim thicker and brighter (発案者の判断 2026-10-28: 手の玉の縁). */
+  private readonly uContrast = uniform(0);
   private readonly sunView = new THREE.Vector3();
   private readonly backTexture: THREE.Texture;
   private readonly viewRot = new THREE.Matrix3();
@@ -169,7 +179,8 @@ export class OrbComposite {
         const N = normalize(P.sub(C));
         const cosI = clamp(dot(N, D.negate()), 0, 1);
         const T = refract(D, N, 1 / IOR);
-        const s = mix(float(REFRACT_REST), float(REFRACT_PEEK), uPeek);
+        // S-45: the setting scales the peek's refraction (the orb at rest in the hand stays as it is); the fringes follow it
+        const s = mix(float(REFRACT_REST), float(REFRACT_PEEK).mul(this.uDistort), uPeek);
         const spread = s.mul(uPeek.mul(ABERRATION));
         const uvR = refracted(D, T, s.sub(spread));
         const uvG = refracted(D, T, s);
@@ -213,12 +224,24 @@ export class OrbComposite {
           .mul(float(1).sub(fresnel))
           .add(envCol.mul(fresnel))
           .add(vec3(1, 0.96, 0.9).mul(bubbles.mul(float(0.16).mul(float(1).sub(uPeek.mul(0.75))))))
-          .add(vec3(1, 0.97, 0.92).mul(spec));
+          .add(vec3(1, 0.97, 0.92).mul(spec))
+          // S-45 コントラスト強化: a band of light along the rim, a fifth of the radius wide, under the bloom's threshold
+          .add(
+            vec3(RIM_CONTRAST.r, RIM_CONTRAST.g, RIM_CONTRAST.b).mul(
+              smoothstep(RIM_CONTRAST_FROM, 0.97, rim).mul(this.uContrast),
+            ),
+          );
         color.assign(mix(color, glass, cover));
       });
 
       return vec4(color, 1);
     })();
+  }
+
+  /** S-45: the player's settings that change how the orb draws (uniforms: no shader is made again). */
+  setAccess(a: { distortion: number; contrast: boolean }): void {
+    this.uDistort.value = Number.isFinite(a.distortion) ? Math.min(1, Math.max(0, a.distortion)) : 1;
+    this.uContrast.value = a.contrast ? 1 : 0;
   }
 
   update(frame: OrbFrame): void {

@@ -1,4 +1,6 @@
 import type { StringKey } from '../lang';
+import type { KeysFocus } from './keys-logic';
+import { KeysPage, type KeysView } from './keys-page';
 import {
   CONTROLS,
   type PanelFocus,
@@ -27,7 +29,9 @@ export type PanelTarget =
   | { kind: 'tab'; tab: number }
   | { kind: 'option'; row: SettingsRow; value: RowValue }
   | { kind: 'row'; row: SettingsRow }
-  | { kind: 'back' };
+  | { kind: 'back' }
+  /** S-45: a row's button that opens its page (キーの割り当て). */
+  | { kind: 'page'; row: SettingsRow };
 
 export interface PanelEvents {
   /** The pointer reached something that answers (ホバーすると膨らんで鳴る). */
@@ -38,6 +42,9 @@ export interface PanelEvents {
   onSlide(row: SettingsRow, fraction: number, done: boolean): void;
   /** The browser moved the focus (Tab) onto a tab or a row. */
   onFocus(focus: PanelFocus): void;
+  /** S-45: a cell or a button of the key page was clicked, or the pointer reached one. */
+  onKeysPick?(at: KeysFocus): void;
+  onKeysHover?(at: KeysFocus): void;
 }
 
 export interface PanelView {
@@ -51,6 +58,8 @@ export interface PanelView {
   notice: number;
   /** The preset in use is not the one the scene was made with: part of it waits for the next time (S-43). */
   qualityLater: boolean;
+  /** S-45: the key page, shown in place of the tab's rows (null: not open). */
+  keys?: KeysView | null;
 }
 
 interface RowParts {
@@ -83,6 +92,12 @@ const ROW_KEY: Readonly<Record<SettingsRow, StringKey>> = {
   lang: 'setLang',
   textSize: 'setTextSize',
   contrast: 'setContrast',
+  keys: 'setKeysRow',
+  headBob: 'setHeadBob',
+  reticle: 'setReticle',
+  distortion: 'setDistortion',
+  reduceFlashes: 'setReduceFlashes',
+  simpleTransitions: 'setSimpleTransitions',
 };
 
 /** The words of each option of the choices. */
@@ -135,6 +150,10 @@ export class SettingsPanel {
   private readonly pressed = new Map<HTMLElement, number>();
   /** Last values written to the DOM, by element and property. */
   private readonly last = new Map<HTMLElement, Map<string, string>>();
+  /** S-45: the key page and whether it is shown (in place of the tab's rows and the foot). */
+  private readonly keysPage: KeysPage;
+  private readonly foot: HTMLElement;
+  private keysShown = false;
 
   constructor(
     root: HTMLElement,
@@ -211,7 +230,13 @@ export class SettingsPanel {
     this.notice.setAttribute('role', 'status');
     this.notice.textContent = t('setCannotSave');
     foot.append(this.back, this.keys);
-    this.body.append(foot);
+    // S-45: the key page, on the same pane in place of the tab's rows (and of this foot: it has its own 戻る)
+    this.keysPage = new KeysPage(t, {
+      onPick: (at) => this.events.onKeysPick?.(at),
+      onHover: (at) => this.events.onKeysHover?.(at),
+    });
+    this.foot = foot;
+    this.body.append(this.keysPage.el, foot);
     // the notice hangs under the pane (outside the body's clip), on its own frost, only while it is shown
     this.notice.hidden = true;
     this.el.append(this.glass, this.body, this.notice);
@@ -253,11 +278,27 @@ export class SettingsPanel {
     this.keys.textContent = t('setKeys');
     this.notice.textContent = t('setCannotSave');
     this.qualityLater.textContent = t('setQualityLater');
+    this.keysPage.relabel(t);
+    for (const b of this.el.querySelectorAll<HTMLElement>('[data-keys-open]'))
+      b.textContent = t('setKeysOpen');
   }
 
   /** Moves the browser's focus onto the focused tab or row (screen readers and Tab follow). */
   focus(focus: PanelFocus): void {
     this.elementOf(focus)?.focus({ preventScroll: true });
+  }
+
+  /** S-45: the same on the key page. */
+  focusKeys(at: KeysFocus): void {
+    this.keysPage.focus(at);
+  }
+
+  /** S-45: a cell or a button of the key page sinks for a moment (選ぶと沈み込む). */
+  pressKeys(at: KeysFocus): void {
+    const el = this.keysPage.elementOf(at);
+    if (!el) return;
+    el.classList.add('is-pressed');
+    this.pressed.set(el, PRESS_SECONDS);
   }
 
   /** The option (or the tab) chosen sinks for a moment. */
@@ -289,6 +330,24 @@ export class SettingsPanel {
     this.set(this.el, '--open', view.open.toFixed(3));
     this.notice.hidden = view.notice <= 0;
     this.set(this.notice, '--notice', view.notice.toFixed(3));
+
+    // S-45: the key page in place of the tab's rows and the foot (the tabs stay, 操作 shown)
+    const keys = view.keys ?? null;
+    if ((keys !== null) !== this.keysShown) {
+      this.keysShown = keys !== null;
+      this.foot.hidden = this.keysShown;
+      this.el.classList.toggle('is-keys', this.keysShown);
+      this.shownTab = -1;
+      this.drawnFocus = undefined;
+    }
+    this.keysPage.render(keys);
+    if (keys) {
+      this.pages.forEach((p) => {
+        p.el.hidden = true;
+      });
+      for (const tb of this.tabs) tb.el.classList.remove('is-focus');
+      return;
+    }
 
     if (view.focus.tab !== this.shownTab) {
       this.shownTab = view.focus.tab;
@@ -376,6 +435,19 @@ export class SettingsPanel {
       control.append(track, value);
       parts.track = track;
       parts.value = value;
+    } else if (c.kind === 'page') {
+      // S-45: a frosted tag that opens the row's page (キーの割り当て → 変える)
+      el.setAttribute('role', 'group');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'vd-settings__chip vd-settings__open';
+      b.dataset.keysOpen = '';
+      b.tabIndex = -1;
+      b.textContent = t('setKeysOpen');
+      b.addEventListener('click', () => {
+        if (this.enabled) this.events.onPick({ kind: 'page', row });
+      });
+      control.appendChild(b);
     } else {
       el.setAttribute('role', 'group');
       const options: { value: RowValue; key: StringKey }[] =
@@ -429,6 +501,8 @@ export class SettingsPanel {
         return this.rows.get(target.row)?.el ?? null;
       case 'back':
         return this.back;
+      case 'page':
+        return this.rows.get(target.row)?.el.querySelector<HTMLElement>('[data-keys-open]') ?? null;
     }
   }
 
@@ -453,6 +527,9 @@ export class SettingsPanel {
         if (parts.track === track) return { el: track, target: { kind: 'row', row: parts.row } };
     }
     if (el.closest('[data-settings-back]')) return { el: this.back, target: { kind: 'back' } };
+    const open = el.closest<HTMLElement>('[data-keys-open]');
+    const openRow = open?.closest<HTMLElement>('[data-row]')?.dataset.row;
+    if (open && openRow === 'keys') return { el: open, target: { kind: 'page', row: openRow } };
     return null;
   }
 

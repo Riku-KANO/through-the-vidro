@@ -245,7 +245,17 @@ describe('S-45 assignBinding: the settings’ key page (すべてのキーは設
   });
 
   it('bindableCode: keys, mouse buttons and the wheel for the keyboard and mouse; the pad’s buttons for the pad', () => {
-    for (const code of ['KeyI', 'Digit4', 'Space', 'ShiftLeft', 'ArrowUp', 'Mouse0', 'Mouse2', 'Mouse3', 'WheelUp'])
+    for (const code of [
+      'KeyI',
+      'Digit4',
+      'Space',
+      'ShiftLeft',
+      'ArrowUp',
+      'Mouse0',
+      'Mouse2',
+      'Mouse3',
+      'WheelUp',
+    ])
       expect(bindableCode('keyboardMouse', code), code).toBe(true);
     // Esc is the pause and the way back; the modifiers are the browser's shortcuts (the input ignores them)
     for (const code of ['Escape', 'ControlLeft', 'AltRight', 'MetaLeft', 'PadA', '', 'Unidentified'])

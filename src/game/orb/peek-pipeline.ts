@@ -197,6 +197,7 @@ export class PeekPipeline {
       const block = at(-1, -1).add(at(1, -1)).add(at(-1, 1)).add(at(1, 1)).mul(0.25);
       const glow = bloom(block, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
       glow.setResolutionScale(BLOOM_RESOLUTION);
+      this.bloomNode = glow;
       this.finishing.push(stored, glow);
       hdr = vec4(stored.rgb.add(glow.rgb), 1);
     }
@@ -212,6 +213,24 @@ export class PeekPipeline {
   /** Render size in pixels (drawing buffer). */
   get renderSize(): Readonly<THREE.Vector2> {
     return this.size;
+  }
+
+  /** S-45: the finishing's bloom (its strength is a uniform), when the finishing has one. */
+  private bloomNode: ReturnType<typeof bloom> | null = null;
+
+  /**
+   * S-45 (UI/UX設計 > アクセシビリティ, 3D酔い対策): the player's settings as the frame takes them — 覗いたときの歪みの強さ and
+   * コントラスト強化 in the orb's composite, 点滅を抑える as a quieter bloom (`calmBloom` of its strength). Uniforms only: no
+   * pipeline is made again.
+   */
+  setAccess(a: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number }): void {
+    this.composite.setAccess(a);
+    if (this.bloomNode) this.bloomNode.strength.value = BLOOM_STRENGTH * (a.calm ? a.calmBloom : 1);
+  }
+
+  /** S-45 (sensor): the bloom's strength now (null without a bloom). */
+  get bloomStrength(): number | null {
+    return this.bloomNode ? (this.bloomNode.strength.value as number) : null;
   }
 
   /**

@@ -25,6 +25,7 @@ import type { LayerField } from '../../layers/field';
 import type { Box } from '../../layers/footing';
 import type { LayerKind } from '../../layers/layers';
 import type { SurfaceDecl } from '../area';
+import { focusCore, focusRim } from '../area/access';
 import type { MeshData } from '../player/walk-lab-field';
 import { stoneMaterial } from '../prologue/room-art';
 import {
@@ -365,10 +366,10 @@ export function* buildArea1(
         .material as THREE.NodeMaterial,
     ),
   ) as THREE.MeshPhysicalNodeMaterial;
-  const rim = pow(float(1).sub(abs(dot(normalView, positionViewDirection))), 2.5);
   const isFocused = float(1).sub(step(0.5, abs(cupIndex.sub(focusCup))));
+  // (S-45: the rim thicker and brighter with コントラスト強化, as the prologue's: game/area/access.ts focusRim)
   cupMilk.emissiveNode = (cupMilk.emissiveNode as THREE.Node<'vec3'>).add(
-    vec3(1.0, 0.82, 0.58).mul(rim.mul(focus.pedestal).mul(isFocused).mul(1.6)),
+    focusRim(focus.pedestal.mul(isFocused)).mul(1.6),
   );
   // the back layer's glass: frosted, a faint thin-film sheen, a faint warmth (as the prologue's bridge deck, room-art.ts)
   const deck = keep(
@@ -1115,7 +1116,7 @@ export function* buildArea1(
     dropFocus.set(d.id, lit);
     const amount = focus.drop.mul(lit);
     const coreMat = keep(appearing(new THREE.MeshBasicNodeMaterial()));
-    coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(amount.mul(0.5).add(1)), 1);
+    coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(focusCore(amount)), 1);
     drop.add(new THREE.Mesh(dropParts.coreGeometry, coreMat));
     drop.add(new THREE.Mesh(dropParts.shellGeometry, dropParts.shellMaterial));
     // the halo: a ball of warm light added over what is behind, strongest through its middle, gone at its rim and near the eye

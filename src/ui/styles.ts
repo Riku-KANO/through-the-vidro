@@ -21,6 +21,9 @@ export const UI_TOKENS = {
   numerals: '"Helvetica Neue", "Segoe UI", "Hiragino Sans", system-ui, sans-serif',
 } as const;
 
+/** S-45: a key's name — its letters in the thin sans-serif (数字と英字), its Japanese words (右クリック) in the Mincho. */
+const KEY_FONT = `"Helvetica Neue", "Segoe UI", ${FONT_STACK.ja}`;
+
 const CSS = `
 .vd-root { position: absolute; inset: 0; pointer-events: none; color: ${UI_TOKENS.ink};
   font-size: ${UI_TOKENS.fontSize}; font-weight: 300; letter-spacing: 0.08em;
@@ -244,6 +247,60 @@ const CSS = `
 /* the chosen tag is told by its shape too (色だけに頼らない): a second ring, a brighter fill */
 .vd-contrast .vd-settings button.vd-settings__option.is-chosen { background: rgba(255, 244, 222, 0.42);
   border-color: rgba(255, 236, 190, 1); box-shadow: 0 0 0 2px rgba(16, 22, 30, 0.9), 0 0 0 4px rgba(255, 236, 190, 0.95); }
+
+/* ---- S-45 キーの割り当て: a page on the same pane — a list of frosted tags, the one that waits breathing ----
+   In place of the tabs and the tab's rows (a page of its own); a little wider, so the keys' names fit. Every word at the
+   UI's size (文字と色: 最小18px). */
+.vd-settings.is-keys { width: min(calc(100vw - 32px), max(33em, 44vw)); }
+.vd-root:lang(en) .vd-settings.is-keys { width: min(calc(100vw - 32px), max(35em, 46vw)); }
+.vd-settings.is-keys .vd-settings__tabs { display: none; }
+.vd-settings button.vd-settings__open { margin-left: auto; }
+.vd-keys { gap: 0.3em; }
+.vd-keys__title { margin: 0; letter-spacing: 0.12em; }
+.vd-keys__hint { margin: 0 0 0.2em; opacity: 0.8; line-height: 1.35; }
+.vd-keys__hint.is-waiting { opacity: 1; color: #fff6e6; }
+.vd-keys__list { display: flex; flex-direction: column; gap: 0.14em; max-height: calc(100vh - 12.5em); overflow-y: auto;
+  overscroll-behavior: contain; padding: 0.15em 0.2em; scrollbar-width: thin; }
+.vd-keys__row { display: grid; grid-template-columns: 10.2em repeat(3, minmax(0, 1fr)); align-items: center;
+  gap: 0.35em; }
+.vd-keys__head { padding: 0 0.2em; opacity: 0.72; }
+.vd-keys__colhead { text-align: center; white-space: nowrap; }
+.vd-keys__action { white-space: nowrap; }
+.vd-settings button.vd-keys__cell, .vd-keys__cell { display: block; width: 100%; padding: 0.06em 0.45em 0.1em; border-radius: 999px;
+  line-height: 1.35; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: ${KEY_FONT}; font-weight: 300; letter-spacing: 0.03em; }
+.vd-keys__cell--fixed { opacity: 0.62; border: 1px dashed rgba(255, 255, 255, 0.28); font-family: inherit; }
+.vd-keys__row--fixed .vd-keys__action { opacity: 0.72; }
+.vd-settings button.vd-keys__cell.is-focus, .vd-settings button.vd-keys__button.is-focus {
+  background-color: rgba(255, 255, 255, 0.2); border-color: rgba(255, 240, 214, 0.75);
+  box-shadow: inset 0 0 12px rgba(255, 226, 170, 0.25), 0 0 16px rgba(255, 222, 160, 0.45); }
+/* the cell that waits for its key: lit, its light breathing slowly (under once a second: nothing blinks) */
+.vd-settings button.vd-keys__cell.is-waiting { background-color: rgba(255, 242, 218, 0.3); border-color: rgba(255, 240, 214, 0.9);
+  animation: vd-keys-wait 1.6s ${UI_TOKENS.ease} infinite alternate; }
+@keyframes vd-keys-wait { from { box-shadow: 0 0 8px rgba(255, 222, 160, 0.3); } to { box-shadow: 0 0 20px rgba(255, 222, 160, 0.7); } }
+.vd-keys__notice { margin: 0.1em 0 0; padding: 0.22em 0.9em 0.26em; border-radius: 0.8em; background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 244, 226, 0.4); line-height: 1.35; }
+.vd-keys__notice[hidden] { display: none; }
+.vd-keys__foot { display: flex; justify-content: space-between; gap: 0.5em 1em; padding-top: 0.5em;
+  border-top: 1px solid rgba(255, 255, 255, 0.16); }
+.vd-settings__foot[hidden] { display: none; }
+.vd-contrast .vd-settings button.vd-keys__cell.is-focus, .vd-contrast .vd-settings button.vd-keys__button.is-focus {
+  border: 2px solid rgba(255, 240, 214, 0.95); }
+.vd-contrast .vd-keys__cell--fixed { border: 2px dashed rgba(255, 255, 255, 0.7); opacity: 0.85; }
+
+/* ---- S-45 視点の基準の点 (3D酔い対策): a small glass bead in the middle of the screen while playing ---- */
+.vd-reticle { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  z-index: 40; pointer-events: none; opacity: 0; transition: opacity 0.15s ${UI_TOKENS.ease};
+  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.95) 0 18%, rgba(255, 255, 255, 0.4) 34%,
+    rgba(214, 232, 240, 0.28) 62%, rgba(230, 250, 244, 0.7) 100%);
+  box-shadow: 0 0 0 1px rgba(20, 30, 40, 0.35), 0 1px 3px rgba(10, 20, 30, 0.45); }
+.vd-reticle.is-on { opacity: 0.92; }
+.vd-contrast .vd-reticle { box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.95), 0 0 0 3px rgba(10, 14, 20, 0.85); }
+
+/* ---- S-45 簡易トランジション (遷移のルール 1): a white sheet over everything, as white as the fade (never black) ---- */
+.vd-fade { position: absolute; inset: 0; z-index: 50; pointer-events: none; opacity: 0; visibility: hidden;
+  background: #f7f5f0; }
+.vd-fade.is-on { visibility: visible; }
 `;
 
 /** Injects the shared stylesheet once and returns a root element for one screen set. */

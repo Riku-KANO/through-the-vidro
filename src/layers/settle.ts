@@ -63,6 +63,17 @@ export function sweepFront(sweep: SettleSweep, progress: number): number {
   return lo + (hi - lo) * u;
 }
 
+/**
+ * 仮 (S-45, UI/UX設計 > アクセシビリティ: 光の点滅や強い閃光を抑えるモード): the share of the band of light at the front that stays
+ * with the mode on — a dim line still runs over what it fixes (its shape is the clue), with nothing bright enough to flash.
+ */
+export const CALM_SWEEP = 0.35;
+
+/** The band's brightness (the room's settleGlow × its own strength), with 点滅を抑える on (`calm`) or off. */
+export function sweepGlowFor(glow: number, calm: boolean): number {
+  return calm ? glow * CALM_SWEEP : glow;
+}
+
 /** A point is settled when it lies in the box and the front has passed it. */
 export function settledAt(p: Vec3, sweep: SettleSweep, front: number): boolean {
   const { min, max } = sweep.box;

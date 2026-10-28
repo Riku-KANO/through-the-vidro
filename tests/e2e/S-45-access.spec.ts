@@ -28,6 +28,7 @@ interface V3 {
 interface RoomProbe {
   ready: boolean;
   playing: boolean;
+  locked: boolean;
   time: number;
   position: V3;
   eyeHeight: number;
@@ -160,11 +161,21 @@ async function toHome(page: Page, query: string): Promise<void> {
 async function playThroughHome(page: Page, query: string): Promise<void> {
   await toHome(page, query);
   await page.locator('[data-item="start"]').click();
-  await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing", 60_000);
+  await waitProbe(
+    page,
+    "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
+    60_000,
+  );
 }
 
+/** Where the mouse is (with the view locked, its moves turn the view). */
+const cursor = { x: 640, y: 360 };
+
 async function lock(page: Page): Promise<void> {
-  await page.mouse.move(640, 360);
+  if ((await room(page)).locked) return;
+  cursor.x = 640;
+  cursor.y = 360;
+  await page.mouse.move(cursor.x, cursor.y);
   await page.mouse.down();
   await page.mouse.up();
   await waitRoom(page, 'r.locked === true');
@@ -224,7 +235,14 @@ function ringMean(l: Float32Array, cx: number, cy: number, r0: number, r1: numbe
   return n > 0 ? sum / n : 0;
 }
 /** Share of the pixels within r of (cx, cy) whose luminance differs by more than `by`. */
-function changedShare(a: Float32Array, b: Float32Array, cx: number, cy: number, r: number, by = 0.06): number {
+function changedShare(
+  a: Float32Array,
+  b: Float32Array,
+  cx: number,
+  cy: number,
+  r: number,
+  by = 0.06,
+): number {
   let changed = 0;
   let n = 0;
   for (let y = Math.max(0, Math.floor(cy - r)); y < Math.min(H, Math.ceil(cy + r)); y++)
@@ -252,18 +270,19 @@ function spread(l: Float32Array, cx: number, cy: number, r: number): number {
 }
 
 /** Where a world point is on the screen (pixels) and how many pixels `radius` there spans, from the room's camera. */
-function project(r: RoomProbe, p: readonly number[], radius: number): { x: number; y: number; r: number } {
-  const eye = [r.position.x, r.position.y + r.eyeHeight, r.position.z];
+type T3 = readonly [number, number, number];
+function project(r: RoomProbe, p: T3, radius: number): { x: number; y: number; r: number } {
+  const eye: T3 = [r.position.x, r.position.y + r.eyeHeight, r.position.z];
   const cp = Math.cos(r.pitch);
-  const fwd = [-Math.sin(r.yaw) * cp, Math.sin(r.pitch), -Math.cos(r.yaw) * cp];
-  const right = [Math.cos(r.yaw), 0, -Math.sin(r.yaw)];
-  const up = [
-    right[1]! * fwd[2]! - right[2]! * fwd[1]!,
-    right[2]! * fwd[0]! - right[0]! * fwd[2]!,
-    right[0]! * fwd[1]! - right[1]! * fwd[0]!,
+  const fwd: T3 = [-Math.sin(r.yaw) * cp, Math.sin(r.pitch), -Math.cos(r.yaw) * cp];
+  const right: T3 = [Math.cos(r.yaw), 0, -Math.sin(r.yaw)];
+  const up: T3 = [
+    right[1] * fwd[2] - right[2] * fwd[1],
+    right[2] * fwd[0] - right[0] * fwd[2],
+    right[0] * fwd[1] - right[1] * fwd[0],
   ];
-  const d = [p[0]! - eye[0]!, p[1]! - eye[1]!, p[2]! - eye[2]!];
-  const dot = (a: number[], b: number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+  const d: T3 = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+  const dot = (a: T3, b: T3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const z = dot(d, fwd);
   const tanY = Math.tan((r.fov * Math.PI) / 360);
   const tanX = tanY * (W / H);
@@ -275,14 +294,34 @@ function project(r: RoomProbe, p: readonly number[], radius: number): { x: numbe
 }
 
 /** Samples the eye's height above the feet while walking for `ms` toward (x, z) (the room's probe, ~30 ms apart). */
+/** Turns the (locked) view toward a world point with the mouse. */
+async function lookAt(page: Page, p: T3): Promise<void> {
+  await lock(page);
+  for (let i = 0; i < 6; i++) {
+    const r = await room(page);
+    const dx = p[0] - r.position.x;
+    const dy = p[1] - (r.position.y + r.eyeHeight);
+    const dz = p[2] - r.position.z;
+    const yaw = Math.atan2(-dx, -dz) - r.yaw;
+    const dYaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+    const dPitch = Math.atan2(dy, Math.hypot(dx, dz)) - r.pitch;
+    if (Math.abs(dYaw) < 0.008 && Math.abs(dPitch) < 0.008) return;
+    cursor.x += -dYaw / 0.0022;
+    cursor.y += -dPitch / 0.0022;
+    await page.mouse.move(cursor.x, cursor.y, { steps: 6 });
+    await page.waitForTimeout(80);
+  }
+}
+
 async function walkSampling(page: Page, x: number, z: number, ms: number): Promise<number[]> {
+  await lock(page);
   const r0 = await room(page);
-  // turn toward (x, z) with the mouse (the view is locked)
+  // turn toward (x, z) with the mouse (the view is locked), level
   const dYaw = Math.atan2(-(x - r0.position.x), -(z - r0.position.z)) - r0.yaw;
   const wrap = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
-  const dx = -wrap / 0.0022;
-  const dy = r0.pitch / 0.0022;
-  await page.mouse.move(640 + dx, 360 + dy, { steps: 8 });
+  cursor.x += -wrap / 0.0022;
+  cursor.y += r0.pitch / 0.0022;
+  await page.mouse.move(cursor.x, cursor.y, { steps: 8 });
   await page.waitForTimeout(150);
   const heights: number[] = [];
   await page.keyboard.down('KeyW');
@@ -296,10 +335,10 @@ async function walkSampling(page: Page, x: number, z: number, ms: number): Promi
   } finally {
     await page.keyboard.up('KeyW');
   }
-  await page.mouse.move(640, 360);
   await waitRoom(page, 'r.speed < 0.05', 3_000);
   return heights;
 }
+
 const range = (v: number[]): number => Math.max(...v) - Math.min(...v);
 
 for (const backend of backends) {
@@ -350,12 +389,16 @@ for (const backend of backends) {
     expect(Math.abs(r1.yaw - r0.yaw)).toBeLessThan(1e-3);
     const onA = await shot(page, join(shotDir, 'contrast-rim.png'));
     const rimRise = ring(onA) - ring(offA);
-    expect(rimRise, 'the rim of what can be acted on is brighter').toBeGreaterThan(Math.max(0.01, rimNoise * 3));
+    expect(rimRise, 'the rim of what can be acted on is brighter').toBeGreaterThan(
+      Math.max(0.01, rimNoise * 3),
+    );
 
     // ---- the hand orb's rim: take it, then contrast off ----
     await page.keyboard.press('KeyE');
     await waitRoom(page, "r.orb === 'hand' && r.handPresence > 0.99", 5_000);
-    await page.waitForTimeout(500);
+    // the view locked again (after the pause): the one-line hint at the bottom goes, nothing over the orb
+    await lock(page);
+    await page.waitForTimeout(600);
     const hand = (await room(page)).orbScreen;
     expect(hand.visible).toBe(true);
     const hx = hand.x * W;
@@ -363,7 +406,8 @@ for (const backend of backends) {
     const hr = hand.r * H;
     const handOnA = await shot(page, join(shotDir, 'contrast-hand.png'));
     const handOnB = await shot(page);
-    const handRing = (l: Float32Array) => ringMean(l, hx, hy, hr * 0.8, hr * 0.98);
+    // (the orb this close to the eye is drawn larger than its angular radius: its rim lies a little out of `r`)
+    const handRing = (l: Float32Array) => ringMean(l, hx, hy, hr * 0.9, hr * 1.25);
     const handNoise = Math.abs(handRing(handOnA) - handRing(handOnB));
     const p1 = await pipelines(page);
     await displayRow(page, 2);
@@ -372,6 +416,8 @@ for (const backend of backends) {
     await backToPlay(page);
     await page.waitForTimeout(700);
     const madeByHandContrast = (await pipelines(page)) - p1;
+    await lock(page);
+    await page.waitForTimeout(600);
     const handOff = await shot(page, join(shotDir, 'contrast-hand-off.png'));
     const handRise = handRing(handOnA) - handRing(handOff);
     expect(handRise, 'the hand orb’s rim is brighter').toBeGreaterThan(Math.max(0.01, handNoise * 3));
@@ -407,10 +453,14 @@ for (const backend of backends) {
     await page.screenshot({ path: join(shotDir, 'reticle.png') });
     const still = await walkSampling(page, -1.2, -1.9, 1200);
     expect(still.length).toBeGreaterThan(10);
-    expect(range(still), 'no bob at 0').toBeLessThan(1e-4);
+    // no bob at 0: what is left is the eye easing after the floor's millimetres (S-03 followEye), not a bob of ±1 cm
+    expect(range(still), 'no bob at 0').toBeLessThan(0.002);
+    expect(range(still)).toBeLessThan(range(bobbing) * 0.25);
     const madeByBob = (await pipelines(page)) - p2;
 
-    // ---- 覗いたときの歪み: the picture through the orb at full strength, then at 0 ----
+    // ---- 覗いたときの歪み: the picture through the orb at full strength, then at 0 (looking at the workbench and its tools) ----
+    await lookAt(page, [BENCH_ORB[0], BENCH_ORB[1] - 0.1, BENCH_ORB[2]]);
+    await page.waitForTimeout(300);
     await page.mouse.down({ button: 'right' });
     await waitRoom(page, 'r.peekAmount > 0.999', 3_000);
     await page.waitForTimeout(300);
@@ -428,6 +478,8 @@ for (const backend of backends) {
     for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowLeft');
     await waitSettings(page, 'q.values.distortion === 0');
     await backToPlay(page);
+    // the view locked again (the same view: an unlocked mouse moving turns nothing)
+    await lock(page);
     await page.waitForTimeout(400);
     await page.mouse.down({ button: 'right' });
     await waitRoom(page, 'r.peekAmount > 0.999', 3_000);
@@ -469,7 +521,9 @@ for (const backend of backends) {
     expect(madeByDistortion, 'no pipeline made by the distortion').toBe(0);
     expect(panel.frameMs.open).toBeLessThan(100);
     expect(final.drawCalls).toBeLessThanOrEqual(300);
-    expect(await page.evaluate(() => (window as unknown as { __s45Contexts: () => number }).__s45Contexts())).toBe(1);
+    expect(
+      await page.evaluate(() => (window as unknown as { __s45Contexts: () => number }).__s45Contexts()),
+    ).toBe(1);
     expect(errors).toEqual([]);
   });
 
@@ -480,7 +534,10 @@ for (const backend of backends) {
     const errors = collectErrors(page);
     // kept from before (読み込み画面の分は保存した設定で次に開いたときから)
     await page.addInitScript(() => {
-      window.localStorage.setItem('vidro.settings', JSON.stringify({ v: 1, settings: { simpleTransitions: true } }));
+      window.localStorage.setItem(
+        'vidro.settings',
+        JSON.stringify({ v: 1, settings: { simpleTransitions: true } }),
+      );
     });
     await page.goto(`/?scene=prologue-proto${webgl}`);
     await waitProbe(page, 'p.load.ready === true', 90_000);
@@ -502,7 +559,9 @@ for (const backend of backends) {
     await page.evaluate(() => {
       (window.__vidro.sceneProbe as { access: { hold: number | null } }).access.hold = 0.5;
     });
-    const pings0 = await page.evaluate(() => (window.__vidro.sceneProbe as { audioGate: { uiVoices: number } }).audioGate.uiVoices);
+    const pings0 = await page.evaluate(
+      () => (window.__vidro.sceneProbe as { audioGate: { uiVoices: number } }).audioGate.uiVoices,
+    );
     await page.locator('[data-ui="loading-start"]').click();
     await waitProbe(page, 'p.access.white > 0.99');
     await page.waitForTimeout(200);
@@ -513,7 +572,9 @@ for (const backend of backends) {
       (window.__vidro.sceneProbe as { access: { hold: number | null } }).access.hold = null;
     });
     await waitProbe(page, "p.screen === 'home' && p.transition === null", 10_000);
-    const pings1 = await page.evaluate(() => (window.__vidro.sceneProbe as { audioGate: { uiVoices: number } }).audioGate.uiVoices);
+    const pings1 = await page.evaluate(
+      () => (window.__vidro.sceneProbe as { audioGate: { uiVoices: number } }).audioGate.uiVoices,
+    );
     expect(pings1, 'the opening rang').toBeGreaterThan(pings0);
 
     // ---- ホーム → ゲーム (潜る): no flight, a fade of 0.3 s; Esc while it fades plays it back (遷移のルール 4) ----
@@ -615,7 +676,10 @@ for (const backend of backends) {
     expect(seconds(again), 'the dive lasts 0.3 s').toBeGreaterThan(0.24);
     expect(seconds(again)).toBeLessThan(0.45);
     expect(seconds(opening)).toBeGreaterThan(0.24);
-    writeFileSync(join(root, `artifacts/S-45/fades-${backend}.json`), JSON.stringify({ backend, fades, errors }, null, 2));
+    writeFileSync(
+      join(root, `artifacts/S-45/fades-${backend}.json`),
+      JSON.stringify({ backend, fades, errors }, null, 2),
+    );
     expect(errors).toEqual([]);
   });
 }

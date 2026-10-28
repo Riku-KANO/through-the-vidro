@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CALM, calmedWave, FIRE_FLICKER_HZ_MAX, fireBreath, orbFlash, WORLD_ACCESS } from './access';
 
 /** The fire's breath as S-37 wrote it (room-art.ts, before S-45). */
-const before = (t: number, flicker: number): number =>
+const asBefore = (t: number, flicker: number): number =>
   1 + flicker * (0.5 * Math.sin(t * 2.3) + 0.3 * Math.sin(t * 5.9 + 1.3) + 0.2 * Math.sin(t * 11.7 + 0.4));
 
 /** Turns of a signal per second: half its local extremes. */
@@ -27,7 +27,8 @@ describe('S-45 光の点滅や強い閃光を抑えるモード (UI/UX設計 > �
   });
 
   it('off, the fire breathes as it did', () => {
-    for (const t of [0, 0.37, 1.9, 12.5]) expect(fireBreath(t, 0.08, false)).toBeCloseTo(before(t, 0.08), 12);
+    for (const t of [0, 0.37, 1.9, 12.5])
+      expect(fireBreath(t, 0.08, false)).toBeCloseTo(asBefore(t, 0.08), 12);
   });
 
   it('on, the fire breathes slower than 3 times a second and less deeply (1 秒に 3 回を超える明滅をなくす)', () => {
@@ -39,7 +40,7 @@ describe('S-45 光の点滅や強い閃光を抑えるモード (UI/UX設計 > �
     for (let i = 0; i < 4800; i++) {
       const t = i / 240;
       maxCalm = Math.max(maxCalm, Math.abs(calm(t) - 1));
-      maxBefore = Math.max(maxBefore, Math.abs(before(t, 0.08) - 1));
+      maxBefore = Math.max(maxBefore, Math.abs(asBefore(t, 0.08) - 1));
     }
     expect(maxCalm).toBeGreaterThan(0);
     expect(maxCalm).toBeLessThanOrEqual(maxBefore * CALM.fire + 1e-9);

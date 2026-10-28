@@ -15,10 +15,12 @@ import { LoadingScreen } from '../loading-screen';
 import { PauseHost } from '../pause/pause-host';
 import { pausableOf } from '../pause/port';
 import type { HomeDiveProbe, PhaseName, PhaseStats } from '../probe';
+import { fadeArrived, fadeStep, fadeWhite, simpleSpeed } from '../settings/fade';
 import { SettingsHost } from '../settings/settings-host';
 import { defaultSettings } from '../settings/settings-model';
 import { browserStorage, SettingsStore } from '../settings/settings-store';
 import { createUiRoot } from '../styles';
+import { createAccessLayer } from './access-layer';
 import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './choreography';
 import { createLensUniforms } from './lens';
 import { createMembrane } from './membrane';
@@ -175,10 +177,12 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     release: false,
     phases: {},
   };
+  // S-45: the white of the simple fades over everything, and the dot in the middle of the screen (視点の基準)
+  const access = createAccessLayer(ui.root);
   window.__vidro.sceneProbe = Object.assign(
     probe,
     pause ? { pause: pause.probe } : {},
-    { settings: settings.probe },
+    { settings: settings.probe, access: access.probe },
     opts.probeExtras ?? {},
   ) as unknown as Record<string, unknown>;
 
@@ -421,7 +425,22 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       recordFrame();
       elapsed += dt;
       runAutoplay(dt);
-      flow.update(feed(dt));
+      // S-45 簡易トランジション (kept: the loading's from the setting kept before the page opened): the screens' transitions
+      // run on their own clock that much faster, to last the white fade of 0.3 s; the access probe's hold stands one there
+      const simple = settings.current.simpleTransitions;
+      if (pause) pause.simple = simple;
+      let flowDt = feed(dt);
+      const running = flow.transition;
+      if (simple && running && running.spec.seconds > 0) {
+        const s = running.spec.seconds;
+        // (landing on the fade's middle for a frame when it would step over it: the screen is all white there)
+        const u = running.elapsed / s;
+        flowDt = Math.abs(fadeStep(u, (running.direction * flowDt * simpleSpeed(s)) / s) - u) * s;
+        const hold = access.probe.hold;
+        if (hold !== null && running.direction === 1)
+          flowDt = Math.max(0, Math.min(flowDt, hold * s - running.elapsed));
+      }
+      flow.update(flowDt);
       const tr = flow.transition;
       const nowPlaying = flow.screen === 'game' && !tr;
       if (nowPlaying !== playing) {
@@ -438,10 +457,13 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         menu.focusItem(menu.focused ?? probe.selected ?? 'start');
       hadTransition = tr !== null;
 
-      // where each transition stands
+      // where each transition stands (S-45: under the simple fade, where it came from until the white is full, then where it
+      // goes — the dive's flight and the opening's clearing are not played)
+      const at = (t: NonNullable<typeof tr>): number =>
+        simple ? (fadeArrived(t.progress) && t.progress > 0 ? 1 : 0) : t.value;
       const openingP =
-        tr?.spec.id === TRANSITIONS.loadingToHome.id ? tr.value : flow.screen === 'loading' ? 0 : 1;
-      const diveP = tr?.spec.id === TRANSITIONS.homeToGame.id ? tr.value : flow.screen === 'game' ? 1 : 0;
+        tr?.spec.id === TRANSITIONS.loadingToHome.id ? at(tr) : flow.screen === 'loading' ? 0 : 1;
+      const diveP = tr?.spec.id === TRANSITIONS.homeToGame.id ? at(tr) : flow.screen === 'game' ? 1 : 0;
       const op = openingChoreography(openingP);
       const dv = diveChoreography(diveP);
 
@@ -578,6 +600,28 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       probe.dive.distortion = dv.distortion;
       probe.dive.inner = dv.inner;
       probe.paused = paused;
+
+      // S-45: the white of the simple fades (the screens', the pause's, the panel's) and the dot while playing
+      const flowWhite = (id: string): number => (simple && tr?.spec.id === id ? fadeWhite(tr.progress) : 0);
+      const pauseUp = pause !== null && pause.probe.phase !== 'closed';
+      access.update(
+        [
+          {
+            source: TRANSITIONS.loadingToHome.id,
+            white: flowWhite(TRANSITIONS.loadingToHome.id),
+            reversed: tr?.direction === -1,
+          },
+          {
+            source: TRANSITIONS.homeToGame.id,
+            white: flowWhite(TRANSITIONS.homeToGame.id),
+            reversed: tr?.direction === -1,
+          },
+          { source: 'pause', white: pause?.white ?? 0 },
+          { source: 'settings', white: settings.white },
+        ],
+        settings.current.reticle && playing && !pauseUp && !settings.isUp,
+        simple,
+      );
     },
     render() {
       const phase = phaseOf();
@@ -642,6 +686,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onMove);
       detachQuality?.();
+      access.dispose();
       loading.dispose();
       menu.dispose();
       settings.dispose();

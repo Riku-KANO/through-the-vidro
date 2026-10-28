@@ -61,8 +61,8 @@ describe('S-45 stepKeys: moving on the page (キーボード・パッドだけ�
     const peekRow = KEY_ROWS.indexOf('peek');
     expect(stepKeys({ row: peekRow, col: 1 }, 'right').focus).toEqual({ row: peekRow, col: 2 });
     expect(stepKeys({ row: 0, col: 0 }, 'left').moved).toBe(false);
-    // down from the pad's column of 覗く into a move row would land on the stick: it lands on the key beside it
-    expect(stepKeys({ row: 1, col: 2 }, 'up').focus).toEqual({ row: 0, col: 1 });
+    // up from the pad's column of 覗く into a move row would land on the stick: it lands on the key beside it
+    expect(stepKeys({ row: peekRow, col: 2 }, 'up').focus).toEqual({ row: peekRow - 1, col: 1 });
   });
 
   it('the foot has two buttons: 初期に戻す and 戻る', () => {

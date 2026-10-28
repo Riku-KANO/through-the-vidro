@@ -138,7 +138,11 @@ async function waitProbe(page: Page, fn: string, timeout = 20_000): Promise<void
 const waitSettings = (page: Page, fn: string, timeout = 10_000) =>
   waitProbe(page, `p.settings && (() => { const q = p.settings; return ${fn}; })()`, timeout);
 const waitKeys = (page: Page, fn: string, timeout = 10_000) =>
-  waitProbe(page, `p.settings && p.settings.keys && (() => { const k = p.settings.keys; return ${fn}; })()`, timeout);
+  waitProbe(
+    page,
+    `p.settings && p.settings.keys && (() => { const k = p.settings.keys; return ${fn}; })()`,
+    timeout,
+  );
 const waitRoom = (page: Page, fn: string, timeout = 10_000) =>
   waitProbe(page, `p.room && (() => { const r = p.room; return ${fn}; })()`, timeout);
 
@@ -156,7 +160,9 @@ async function pageText(page: Page): Promise<{ actions: string[]; cells: string[
     if (!el || (el as HTMLElement).hidden) return { actions: [], cells: [], title: '' };
     return {
       title: el.querySelector('[data-part="keys-title"]')?.textContent ?? '',
-      actions: [...el.querySelectorAll<HTMLElement>('[data-part="keys-action"]')].map((a) => a.textContent ?? ''),
+      actions: [...el.querySelectorAll<HTMLElement>('[data-part="keys-action"]')].map(
+        (a) => a.textContent ?? '',
+      ),
       cells: [...el.querySelectorAll<HTMLElement>('[data-key-cell]')].map((c) => c.textContent ?? ''),
     };
   });
@@ -194,16 +200,47 @@ for (const backend of backends) {
     await page.waitForTimeout(300);
     const ja = await pageText(page);
     expect(ja.title).toBe('キーの割り当て');
-    expect(ja.actions.slice(0, 6)).toEqual(['前へ進む', '後ろへ下がる', '左へ', '右へ', '覗く', '置く・拾う・調べる']);
+    expect(ja.actions.slice(0, 6)).toEqual([
+      '前へ進む',
+      '後ろへ下がる',
+      '左へ',
+      '右へ',
+      '覗く',
+      '置く・拾う・調べる',
+    ]);
     // the first row: W, (none), the left stick
     expect(ja.cells.slice(0, 3)).toEqual(['W', '—', '左スティック']);
+    // every word at the UI's size (文字と色: 最小の文字サイズは1080p基準で18px), every row on the pane, nothing cut short
+    const fit = await page.evaluate(() => {
+      const el = document.querySelector('[data-ui="settings"] [data-page="keys"]') as HTMLElement;
+      const pane = (document.querySelector('[data-ui="settings"]') as HTMLElement).getBoundingClientRect();
+      const texts = [...el.querySelectorAll<HTMLElement>('p, span, button')].filter(
+        (t) =>
+          t.childElementCount === 0 && (t.textContent ?? '').trim() !== '' && t.getClientRects().length > 0,
+      );
+      return {
+        fontPx: texts.map((t) => Number.parseFloat(getComputedStyle(t).fontSize)),
+        cut: texts.filter((t) => t.scrollWidth > t.clientWidth + 1).map((t) => t.textContent),
+        inside: pane.top >= 0 && pane.bottom <= window.innerHeight,
+      };
+    });
+    for (const px of fit.fontPx) expect(px).toBeGreaterThanOrEqual(18);
+    expect(fit.cut, 'no key or action name cut short').toEqual([]);
+    expect(fit.inside, 'the pane within the screen').toBe(true);
     await page.screenshot({ path: join(shotDir, 'keys-ja.png') });
 
     // ---- the waiting (キーを押してください), and Esc gives it up: back to the list, nothing changed ----
     await page.keyboard.press('Enter');
-    await waitKeys(page, "k.waiting && k.waiting.action === 'moveForward' && k.waiting.device === 'keyboardMouse'");
+    await waitKeys(
+      page,
+      "k.waiting && k.waiting.action === 'moveForward' && k.waiting.device === 'keyboardMouse'",
+    );
     const waitingCell = page.locator('[data-key-cell="0:0"]');
-    expect(await waitingCell.textContent()).toBe('キーを押してください');
+    // the cell lights and waits; over the list: 「前へ進む」に割り当てるキーを押してください (Esc・B でやめる)
+    await expect(waitingCell).toHaveText('…', { timeout: 2_000 });
+    await expect(page.locator('[data-ui="settings"] [data-part="keys-prompt"]')).toContainText(
+      '「前へ進む」に割り当てるキーを押してください',
+    );
     await page.screenshot({ path: join(shotDir, 'keys-waiting.png') });
     await page.keyboard.press('Escape');
     await waitKeys(page, 'k.waiting === null && k.open === true');
@@ -239,8 +276,9 @@ for (const backend of backends) {
     expect(s.values.bindings.keyboardMouse.moveLeft).toEqual(['KeyE']);
     expect(s.keys.notice).toBe('A を「左へ」から移し、「左へ」は E にしました');
     const notice = page.locator('[data-ui="settings"] [data-part="keys-notice"]');
-    expect(await notice.textContent()).toBe(s.keys.notice);
-    expect(await notice.isVisible()).toBe(true);
+    // (the page is written at the next frame)
+    await expect(notice).toHaveText(s.keys.notice ?? '', { timeout: 2_000 });
+    await expect(notice).toBeVisible();
     await page.screenshot({ path: join(shotDir, 'keys-swapped.png') });
     expect(s.saves.kept).toBeGreaterThanOrEqual(3);
 
@@ -264,7 +302,11 @@ for (const backend of backends) {
     await page.locator('[data-ui="loading-start"]').click();
     await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
     await page.locator('[data-item="start"]').click();
-    await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing", 60_000);
+    await waitProbe(
+      page,
+      "p.screen === 'game' && p.transition === null && p.room.ready && p.room.playing",
+      60_000,
+    );
     await page.mouse.move(640, 360);
     await page.mouse.down();
     await page.mouse.up();
@@ -282,13 +324,17 @@ for (const backend of backends) {
       Math.hypot(afterW.position.x - before.position.x, afterW.position.z - before.position.z),
       'W no longer walks',
     ).toBeLessThan(0.02);
+    // turn away from the workbench (the mouse is locked: half a turn), then I walks on
+    await page.mouse.move(640 + Math.PI / 0.0022, 360, { steps: 12 });
+    await page.waitForTimeout(200);
     await page.keyboard.down('KeyI');
     await waitRoom(page, 'r.speed > 0.5', 3_000);
+    await page.waitForTimeout(400);
     await page.keyboard.up('KeyI');
     const afterI = await room(page);
-    expect(Math.hypot(afterI.position.x - before.position.x, afterI.position.z - before.position.z)).toBeGreaterThan(
-      0.1,
-    );
+    expect(
+      Math.hypot(afterI.position.x - before.position.x, afterI.position.z - before.position.z),
+    ).toBeGreaterThan(0.1);
     await waitRoom(page, 'r.speed < 0.05', 3_000);
     await page.keyboard.down('KeyP');
     await waitRoom(page, 'r.peeking === true', 3_000);
@@ -348,7 +394,9 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
-  test(`S-45 keys by a pad alone: the page, 覗く to X, B gives the waiting up [${backend}]`, async ({ page }) => {
+  test(`S-45 keys by a pad alone: the page, 覗く to X, B gives the waiting up [${backend}]`, async ({
+    page,
+  }) => {
     test.setTimeout(180_000);
     const errors = collectErrors(page);
     await fakePad(page);
@@ -373,7 +421,10 @@ for (const backend of backends) {
     // A waits; B gives the waiting up (fixed: it is the way back)
     await padPress(page, PAD.A);
     await waitKeys(page, "k.waiting && k.waiting.device === 'gamepad'");
-    expect(await page.locator(`[data-key-cell="${ROW.peek}:2"]`).textContent()).toBe('ボタンを押してください');
+    await expect(page.locator('[data-ui="settings"] [data-part="keys-prompt"]')).toContainText(
+      '「覗く」に割り当てるボタンを押してください',
+      { timeout: 2_000 },
+    );
     await padPress(page, PAD.B);
     await waitKeys(page, 'k.waiting === null && k.open === true');
     // A again, X
@@ -384,7 +435,7 @@ for (const backend of backends) {
     const s = await settings(page);
     expect(s.values.bindings.gamepad.peek).toEqual(['PadX']);
     expect(s.values.bindings.gamepad.interact).toEqual(['PadA']);
-    expect(await page.locator(`[data-key-cell="${ROW.peek}:2"]`).textContent()).toBe('X');
+    await expect(page.locator(`[data-key-cell="${ROW.peek}:2"]`)).toHaveText('X', { timeout: 2_000 });
     // B: back to 操作; B: the pane closes
     await padPress(page, PAD.B);
     await waitKeys(page, 'k.open === false');

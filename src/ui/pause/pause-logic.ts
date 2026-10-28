@@ -1,4 +1,5 @@
 import { glassEase, segment } from '../../core/transition';
+import { fadeArrived, fadeStep, fadeWhite, SIMPLE_FADE_SECONDS } from '../settings/fade';
 
 /**
  * The pause screen's rules (S-42), pure: no DOM, no GPU, no sound. src/ui/pause/pause-host.ts plays them.
@@ -43,12 +44,37 @@ export class PauseTimeline {
   /** Seconds along the opening's curve, 0..stop: frost = glassEase(frostTime / stop). */
   private frostTime = 0;
   private writeValue = 0;
+  /**
+   * S-45 簡易トランジション (src/ui/settings/fade.ts): the pause opens and closes as a white fade of 0.3 s instead — the game runs
+   * until the white is full, then the pause is all there (frost and words), and the other way round. `fadeU` is the time
+   * along it (0..1).
+   */
+  private simpleValue = false;
+  private fadeU = 0;
 
   get phase(): PausePhase {
     return this.phaseValue;
   }
 
+  /** S-45: the simple fade in place of the glass's own (it may change while the pause is open: the settings over it). */
+  get simple(): boolean {
+    return this.simpleValue;
+  }
+
+  set simple(on: boolean) {
+    if (on === this.simpleValue) return;
+    // carried over at the nearest end (the setting only changes while the pause stands open)
+    if (on) this.fadeU = this.frost >= 0.5 ? 1 : 0;
+    else {
+      const arrived = fadeArrived(this.fadeU) && this.fadeU > 0;
+      this.frostTime = arrived ? PAUSE_SECONDS.stop : 0;
+      this.writeValue = arrived ? 1 : 0;
+    }
+    this.simpleValue = on;
+  }
+
   get frost(): number {
+    if (this.simpleValue) return fadeArrived(this.fadeU) && this.fadeU > 0 ? 1 : 0;
     return glassEase(this.frostTime / PAUSE_SECONDS.stop);
   }
 
@@ -58,14 +84,19 @@ export class PauseTimeline {
   }
 
   get writing(): number {
-    return this.writeValue;
+    return this.simpleValue ? this.frost : this.writeValue;
+  }
+
+  /** S-45: how white the screen is under the simple fade (0 under the glass's own). */
+  get white(): number {
+    return this.simpleValue ? fadeWhite(this.fadeU) : 0;
   }
 
   /** The items take commands once the frost is all there (while they are being written too). */
   get interactive(): boolean {
-    return (
-      (this.phaseValue === 'opening' || this.phaseValue === 'open') && this.frostTime >= PAUSE_SECONDS.stop
-    );
+    const up = this.phaseValue === 'opening' || this.phaseValue === 'open';
+    if (this.simpleValue) return up && this.frost === 1;
+    return up && this.frostTime >= PAUSE_SECONDS.stop;
   }
 
   /** Esc / Start in play. From a clearing it spreads again from where it is. */
@@ -96,6 +127,10 @@ export class PauseTimeline {
 
   update(dt: number): void {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
+    if (this.simpleValue) {
+      this.updateFade(dt);
+      return;
+    }
     const stop = PAUSE_SECONDS.stop;
     switch (this.phaseValue) {
       case 'opening':
@@ -128,9 +163,40 @@ export class PauseTimeline {
     }
   }
 
+  /** S-45: the simple fade's time, on and back (the same 0.3 s both ways: a fade has no slow stop of its own). */
+  private updateFade(dt: number): void {
+    const step = dt / SIMPLE_FADE_SECONDS;
+    switch (this.phaseValue) {
+      case 'opening':
+      case 'open':
+        this.fadeU = fadeStep(this.fadeU, step);
+        if (this.phaseValue === 'opening' && this.fadeU >= 1 - EPSILON) {
+          this.fadeU = 1;
+          this.phaseValue = 'open';
+        }
+        break;
+      case 'closing':
+      case 'leaving':
+        this.fadeU = fadeStep(this.fadeU, -step);
+        if (this.fadeU <= EPSILON) {
+          this.fadeU = 0;
+          this.frostTime = 0;
+          this.writeValue = 0;
+          this.phaseValue = 'closed';
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
   /** Dev hold (screenshots): stands the opening at this many seconds in. */
   holdAt(seconds: number): void {
     if (this.phaseValue !== 'opening') return;
+    if (this.simpleValue) {
+      this.fadeU = Math.min(1, Math.max(0, seconds / SIMPLE_FADE_SECONDS));
+      return;
+    }
     const s = Math.min(PAUSE_SECONDS.stop + PAUSE_SECONDS.write, Math.max(0, seconds));
     this.frostTime = Math.min(PAUSE_SECONDS.stop, s);
     this.writeValue = Math.max(0, s - PAUSE_SECONDS.stop) / PAUSE_SECONDS.write;

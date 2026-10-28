@@ -1,6 +1,7 @@
 import { VIDRO_VOLUMES } from '../../audio/levels';
 import { isQualityChoice, type QualityChoice } from '../../core/quality';
 import type { WorldSettings } from '../../game/dive-world';
+import { type Bindings, cloneBindings, DEFAULT_BINDINGS, sanitizeBindings } from '../../game/input/bindings';
 import { MOUSE_SENSITIVITY_RANGE, mouseSensitivityFor } from '../../game/input/gamepad';
 import { FOV_DEFAULT, FOV_MAX, FOV_MIN } from '../../game/player/constants';
 import { FONT_STACK, type Lang } from '../lang';
@@ -40,8 +41,20 @@ export interface Settings {
   /** 言語 (英語版: 初期値はブラウザの言語設定). */
   lang: Lang;
   textSize: TextSize;
-  /** コントラスト強化モード: ガラスの縁を太く明るくし、曇りガラスの背景を濃くする. */
+  /** コントラスト強化モード: ガラスの縁を太く明るくし、曇りガラスの背景を濃くする (S-45: the world's glass rims too). */
   contrast: boolean;
+  /** S-45 歩行の揺れ: 0 (止まる) .. 1 (the weak bob as it was: 操作とカメラ > カメラ). */
+  headBob: number;
+  /** S-45 視点の基準の点: a small glass bead in the middle of the screen while playing (3D酔い対策). */
+  reticle: boolean;
+  /** S-45 覗いたときの歪みの強さ: 0 .. 1 (the refraction and the colour fringes through the orb as they were). */
+  distortion: number;
+  /** S-45 光の点滅や強い閃光を抑えるモード (アクセシビリティ). */
+  reduceFlashes: boolean;
+  /** S-45 簡易トランジション: every transition a white fade of 0.3 s (遷移のルール 1). */
+  simpleTransitions: boolean;
+  /** S-45 キーの割り当て (すべてのキーは設定で割り当て直せる). */
+  bindings: Bindings;
 }
 
 /** The settings before the player changed anything. */
@@ -62,6 +75,12 @@ export function defaultSettings(opts: { lang: Lang; peekMode?: 'hold' | 'toggle'
     lang: opts.lang,
     textSize: 'normal',
     contrast: false,
+    headBob: 1,
+    reticle: false,
+    distortion: 1,
+    reduceFlashes: false,
+    simpleTransitions: false,
+    bindings: cloneBindings(DEFAULT_BINDINGS),
   };
 }
 
@@ -98,6 +117,13 @@ export function sanitizeSettings(raw: unknown, defaults: Settings): Settings {
     lang: oneOf(r.lang, ['ja', 'en'] as const, defaults.lang),
     textSize: oneOf(r.textSize, TEXT_SIZES, defaults.textSize),
     contrast: bool(r.contrast, defaults.contrast),
+    // S-45: fields kept before them read as their defaults (the shape stays { v: 1, settings })
+    headBob: num(r.headBob, 0, 1, defaults.headBob),
+    reticle: bool(r.reticle, defaults.reticle),
+    distortion: num(r.distortion, 0, 1, defaults.distortion),
+    reduceFlashes: bool(r.reduceFlashes, defaults.reduceFlashes),
+    simpleTransitions: bool(r.simpleTransitions, defaults.simpleTransitions),
+    bindings: r.bindings === undefined ? cloneBindings(defaults.bindings) : sanitizeBindings(r.bindings),
   };
 }
 
@@ -112,5 +138,9 @@ export function worldSettingsOf(s: Settings): WorldSettings {
     textScale: TEXT_SCALE[s.textSize],
     contrast: s.contrast,
     fontFamily: FONT_STACK[s.lang],
+    headBob: s.headBob,
+    distortion: s.distortion,
+    reduceFlashes: s.reduceFlashes,
+    bindings: s.bindings,
   };
 }

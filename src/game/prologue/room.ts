@@ -7,7 +7,7 @@ import { LayerField } from '../../layers/field';
 import type { Box, FootingSegment, Vec3 } from '../../layers/footing';
 import { viewMask } from '../../layers/layers';
 import { boundaryGlow, MAIN_ORB_RADIUS, materializedRadius } from '../../layers/materialize';
-import { sweepSpan } from '../../layers/settle';
+import { sweepGlowFor, sweepSpan } from '../../layers/settle';
 import { glassEase } from '../../layers/tween';
 import {
   type AreaCount,
@@ -19,6 +19,7 @@ import {
   surfaceSegments,
   surfaceWallsOf,
 } from '../area';
+import { CALM, calmedWave, orbFlash, WORLD_ACCESS } from '../area/access';
 import { type Area1Art, buildArea1, hazeOf } from '../area1/art';
 import {
   AREA1,
@@ -65,7 +66,9 @@ import {
 import { type Area1Colliders, Area1Gates, addArea1Colliders, area1Footing } from '../area1/physics';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
 import type { DiveWorld, WorldSettings } from '../dive-world';
+import { cloneBindings } from '../input/bindings';
 import { type InputEvent, InputSystem } from '../input/input-system';
+import { controlWords } from '../input/key-labels';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { peekMoveSpeedMultiplier } from '../orb/peek';
 import { finishModeFrom, PeekPipeline } from '../orb/peek-pipeline';
@@ -282,6 +285,8 @@ export interface RoomProbe {
   peekFar: { far: number; leftOut: number; leftOutBack: number; keptBack: number; keptLandmarks: number };
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
+  /** S-45: the accessibility settings as the room took them (歩行の揺れ, 歪み, 点滅を抑える, コントラスト強化). */
+  access: { headBob: number; distortion: number; calm: boolean; contrast: boolean };
   /**
    * The script's step, whether it is done, and (S-34 review: where a long frame falls) the longest frame of the play so
    * far, in which step it fell and when (room clock), and the longest frame of each step. A frame is the time between two
@@ -569,23 +574,6 @@ export function towardEye(
   target.set(pos.x - Math.sin(yaw) * c, pos.y + Math.sin(pitch), pos.z - Math.cos(yaw) * c);
   return placed;
 }
-const STRINGS = {
-  ja: {
-    lock: 'クリックで視点を固定 ・ WASD 歩く ・ 右クリック 覗く ・ E 置く／拾う／調べる ・ Esc 解除',
-    take: 'E　手に取る',
-    place: 'E　置く',
-    pickup: 'E　拾う',
-    touch: 'E　触れる',
-  },
-  en: {
-    lock: 'Click to look around · WASD walk · Right click peek · E place / pick up / touch · Esc release',
-    take: 'E  Take',
-    place: 'E  Place',
-    pickup: 'E  Pick up',
-    touch: 'E  Touch',
-  },
-} as const;
-
 /** ゲーム中の操作表示: a small frosted label at the bottom, 0.2 s in and out (UI/UX設計 > 画面ごとの設計). */
 function createPrompt(overlay: HTMLElement): HTMLElement {
   const el = document.createElement('div');
@@ -722,6 +710,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     fallRescues: 0,
     peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0, keptLandmarks: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
+    access: { headBob: 1, distortion: 1, calm: false, contrast: false },
     autoplay: opts.autopilot
       ? { step: '', done: false, worstMs: 0, worstStep: '', worstAt: 0, steps: {} }
       : null,
@@ -1060,7 +1049,11 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const queue: InputEvent['type'][] = [];
   const offInput = input.on((e) => queue.push(e.type));
 
-  let text = STRINGS[opts.lang];
+  // the prompt's words, with the keys bound (S-45: ゲーム中の操作表示が割り当てたキーを示す; on the pad, its buttons)
+  let text = controlWords(opts.lang, input.bindings, 'keyboardMouse');
+  let padText = controlWords(opts.lang, input.bindings, 'gamepad');
+  /** S-45 点滅を抑える: the room's own flashes calmer (the placing wave, the vidro's flash, the sweep's band). */
+  let calm = false;
   const prompt = createPrompt(overlay);
 
   // dev holds (screenshots): a placed orb frozen mid-growth
@@ -1291,7 +1284,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       view.sweep = leg.sweep;
       view.front = leg.front;
       // (the shortcut's in the morning, over 40 m: brighter than the bridge's at dawn, so it reads from the summit)
-      view.glow = running ? settleGlow(leg.progress) * (leg.area !== null ? SHORTCUT_GLOW : 1) : 0;
+      view.glow = running
+        ? sweepGlowFor(settleGlow(leg.progress) * (leg.area !== null ? SHORTCUT_GLOW : 1), calm)
+        : 0;
       view.width = leg.area !== null ? SHORTCUT_BAND_WIDTH : 1;
       field.setSettled(view, i);
       if (running && ofArea1) {
@@ -1341,13 +1336,14 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     // the controls hint shows only for a few seconds while the mouse is free (ゲーム中は常時表示なし), and
     // never in the dev holds (clean screenshots)
     const hint = !opts.autopilot && opts.peekHold === null && opts.growHold === null;
+    const words = input.lastDevice === 'gamepad' ? padText : text;
     // S-42: nothing under the pause
     if (held) next = '';
     else if (playing && !input.locked && hint && hintFor < HINT_SECONDS) next = text.lock;
-    else if (playing && target === 'bench') next = text.take;
-    else if (playing && target === 'drop') next = text.touch;
+    else if (playing && target === 'bench') next = words.take;
+    else if (playing && target === 'drop') next = words.touch;
     else if (playing && target === 'pedestal')
-      next = session.orbPlace === 'pedestal' ? text.pickup : text.place;
+      next = session.orbPlace === 'pedestal' ? words.pickup : words.place;
     if (next !== promptText) {
       if (next) prompt.textContent = next;
       prompt.style.opacity = next ? '1' : '0';
@@ -1693,7 +1689,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const stage = (dt = 0): void => {
     const spheres = session.spheres();
     const shake = session.shake;
-    const flash = shake * shake * 1.6 + (arrivalGlow / DROP_ARRIVAL_GLOW_SECONDS) * 1.4;
+    // (S-45 点滅を抑える: a faint glow instead; the vidro still trembles, the drop still flies into it)
+    const flash = orbFlash(shake, arrivalGlow / DROP_ARRIVAL_GLOW_SECONDS, calm);
     // S-35: left behind while the film holds you at the gate, the vidro calls: a faint glow, breathing — in the vidro, its
     // cup and its light, and on its sphere's film, which shows from the gate whatever stands in front of the vidro itself
     const call = session.call;
@@ -1709,7 +1706,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       const m = frozen ? { progress: opts.growHold ?? 1, target: 1 as const } : sp.materialize;
       f.center = sp.center;
       f.radius = frozen ? materializedRadius(m, MAIN_ORB_RADIUS) : sp.radius;
-      f.glow = boundaryGlow(m) + (sp.kind === 'main' ? flash + calling * CALL_FILM : 0);
+      f.glow = calmedWave(boundaryGlow(m), calm) + (sp.kind === 'main' ? flash + calling * CALL_FILM : 0);
       if (sp.kind === 'main') {
         mainGlow = f.glow;
         mainRadius = f.radius;
@@ -1872,8 +1869,16 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       input.settings.peekMode = s.peekMode;
       input.settings.mouseSensitivity = s.mouseSensitivity;
       input.settings.invertY = s.invertY;
-      player.settings = { fovDeg: s.fovDeg };
-      text = STRINGS[s.lang];
+      // S-45: the keys bound, the walking bob, the orb's distortion, the world's rims and flashes (uniforms: no shader)
+      input.bindings = cloneBindings(s.bindings);
+      player.settings = { fovDeg: s.fovDeg, headBob: s.headBob };
+      text = controlWords(s.lang, s.bindings, 'keyboardMouse');
+      padText = controlWords(s.lang, s.bindings, 'gamepad');
+      calm = s.reduceFlashes;
+      WORLD_ACCESS.contrast.value = s.contrast ? 1 : 0;
+      WORLD_ACCESS.calm.value = calm ? 1 : 0;
+      pipeline.setAccess({ distortion: s.distortion, contrast: s.contrast, calm, calmBloom: CALM.bloom });
+      probe.access = { headBob: s.headBob, distortion: s.distortion, calm, contrast: s.contrast };
       // the prompt's frosted label follows the UI's text size and contrast (アクセシビリティ)
       prompt.style.fontSize = `calc(max(18px, 1.85vh) * ${s.textScale})`;
       prompt.style.fontFamily = s.fontFamily;
