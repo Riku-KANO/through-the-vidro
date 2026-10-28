@@ -812,9 +812,11 @@ function pauseSpeeds(): { speeds: [number, number][]; played: (t: number) => num
   return { speeds, played: (t) => playedAt[Math.min(playedAt.length - 1, Math.round(t / step))] ?? 0 };
 }
 
-for (const backend of backends) {
+{
+  // an OfflineAudioContext has nothing to do with the render path: once, on the first
+  const backend = backends[0] ?? 'webgpu';
   const webgl = backend === 'webgl2' ? '&webgl=1' : '';
-  test(`S-42 a sound of the room's time caught by the pause stands with it, and goes on with it (offline) [${backend}]`, async ({
+  test(`S-42 a sound of the room's time caught by the pause stands with it, and goes on with it (offline)`, async ({
     page,
   }) => {
     test.setTimeout(120_000);

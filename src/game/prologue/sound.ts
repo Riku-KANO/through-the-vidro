@@ -297,16 +297,19 @@ export interface TimedVoice {
 
 /**
  * 仮 (S-42; 発案者の判断 2026-10-28, 判断待ち 2 の a): a sound of the room's time follows the time's speed s (0..1; the pause
- * stops it in 0.4 s on the glass curve and starts it again in 0.3 s): it plays at s times its speed — slowing, its pitch
- * sinking, with the light or the gate it belongs to — and its own gain is s, so it is silent and held where it was while
- * the time stands; on resume it goes on from there, in step with the light again. (Only turning it down would let it run
- * on unheard and come back ahead of the light it follows.) Changes glide over `tau` seconds (no zipper); the speed never
- * goes quite to 0 (`minRate`: a held source).
+ * stops it in 0.4 s on the glass curve and starts it again in 0.3 s): it plays at s times its speed — slowing with the light
+ * or the gate it belongs to — and its own gain is s³, so it is silent and held where it was while the time stands; on resume
+ * it goes on from there, in step with the light again. (Only turning it down would let it run on unheard and come back ahead
+ * of the light it follows.) The gain falls faster than the speed: its pitch sinks as it slows, and by half speed (an
+ * octave down) it is 18 dB under, so the slide is a fading breath under the pause's own sound, not a heard glissando (S-42
+ * review 3). Changes glide over `tau` seconds (no zipper); the speed never goes quite to 0 (`minRate`: a held source; an
+ * hour's pause moves it on 3.6 s, unheard).
+ * When play is left (タイトルへ), they fade out over `leaveFade` and stop: the home has no room sounds (S-42 判断待ち 5).
  */
-export const TIME_FOLLOW = { minRate: 1e-3, tau: 0.02 } as const;
+export const TIME_FOLLOW = { minRate: 1e-3, tau: 0.02, leaveFade: 0.3 } as const;
 
 const rateOf = (scale: number): number => Math.max(TIME_FOLLOW.minRate, Math.min(1, scale));
-const gainOf = (scale: number): number => Math.max(0, Math.min(1, scale));
+const gainOf = (scale: number): number => Math.max(0, Math.min(1, scale)) ** 3;
 
 /**
  * Plays `buffer` once into `destination` from `when` at `gain` (as bank.ts scheduleBuffer), following the time's speed
@@ -329,8 +332,9 @@ export function scheduleTimed(
   const out = ctx.createGain();
   out.gain.value = gain;
   source.connect(time).connect(out).connect(destination);
-  // at its speed now (it ends later if the time slows on the way)
-  const end = when + buffer.duration / rateOf(scale);
+  // the engine counts it as ending when it would at the time's own speed: a pause makes it end later than counted (only
+  // the engine's voice count sees that)
+  const end = when + buffer.duration;
   source.start(when);
   const timed: TimedVoice = { source, time };
   source.onended = () => {
@@ -346,6 +350,15 @@ export function followTime(voices: Iterable<TimedVoice>, scale: number, at: numb
   for (const v of voices) {
     v.source.playbackRate.setTargetAtTime(rateOf(scale), at, TIME_FOLLOW.tau);
     v.time.gain.setTargetAtTime(gainOf(scale), at, TIME_FOLLOW.tau);
+  }
+}
+
+/** Fades the sounds of the room's time out from `at` and stops them (play is left: タイトルへ). */
+export function letTimeGo(voices: Iterable<TimedVoice>, at: number): void {
+  for (const v of voices) {
+    v.time.gain.cancelScheduledValues(at);
+    v.time.gain.setTargetAtTime(0, at, TIME_FOLLOW.leaveFade / 3);
+    v.source.stop(at + TIME_FOLLOW.leaveFade * 2);
   }
 }
 
@@ -1317,6 +1330,11 @@ export function createPrologueSound(room: SoundRoom, opts: SoundOptions = {}): P
     if (scale !== timeScale) {
       timeScale = scale;
       followTime(timed, scale, e.ctx.currentTime);
+    }
+    // and leaving play (タイトルへ) they fade out instead of going on over the dive back and the home
+    if (!roomProbe.playing && timed.size > 0) {
+      letTimeGo(timed, e.ctx.currentTime);
+      timed.clear();
     }
     if (steps) {
       const n = roomProbe.footfalls;

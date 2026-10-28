@@ -1452,7 +1452,9 @@ describe('the sounds of the room’s time stand with it under the pause, and go 
     r.frame();
     playAll(r);
     expect(r.sound.probe.time.voices).toBe(4);
-    // the pause: the time slows on the glass curve to a stop
+    // the pause: the time slows on the glass curve to a stop. Each plays at the time's speed (in step with its light) and
+    // grows quieter with it — at least as fast (its sinking pitch fades under), to silence when the time stands
+    const gains: Record<string, number[]> = {};
     for (const s of [0.8, 0.4, 0.1, 0]) {
       r.room.probe.timeScale = s;
       r.frame();
@@ -1462,8 +1464,15 @@ describe('the sounds of the room’s time stand with it under the pause, and go 
           Math.max(TIME_FOLLOW.minRate, s),
           9,
         );
-        expect(last(v.time?.gain.targets), `${tag} at ${s}`).toBeCloseTo(s, 9);
+        const g = last(v.time?.gain.targets) ?? Number.NaN;
+        expect(g, `${tag} at ${s}`).toBeLessThanOrEqual(s + 1e-12);
+        gains[tag] = [...(gains[tag] ?? []), g];
       }
+    }
+    for (const tag of TAGS) {
+      const g = gains[tag] ?? [];
+      for (let i = 1; i < g.length; i++) expect(g[i], tag).toBeLessThan(g[i - 1] ?? 0);
+      expect(last(g), `${tag} silent while the time stands`).toBe(0);
     }
     expect(r.sound.probe.time.scale).toBe(0);
     // held, not stopped: none was cut, and they are still there to go on
@@ -1512,6 +1521,42 @@ describe('the sounds of the room’s time stand with it under the pause, and go 
     expect(v.source?.playbackRate.targets).toEqual([]);
     v.source?.onended?.();
     expect(r.sound.probe.time.voices).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('leaving play (タイトルへ) fades them out and stops them: the home has no room sounds', async () => {
+    const r = soundscapeRig(false, withAll);
+    await r.begin();
+    r.frame();
+    playAll(r);
+    r.room.probe.timeScale = 0;
+    r.frame();
+    // the dive back: play is left, and the time runs again behind the clearing frost
+    r.room.probe.playing = false;
+    r.room.probe.timeScale = 1;
+    r.frame();
+    for (const tag of TAGS) {
+      const v = voiceOf(r, tag);
+      expect(last(v.time?.gain.targets), tag).toBe(0);
+      expect(v.source?.stopped, tag).not.toBeNull();
+    }
+    expect(r.sound.probe.time.voices).toBe(0);
+    r.sound.dispose();
+  });
+
+  it('every long sound the room’s own events start (not the S-16 cues) is one of them (a guard for sounds added later)', async () => {
+    const r = soundscapeRig(false, withAll);
+    await r.begin();
+    r.frame();
+    const before = r.engine.ctx.sources.length;
+    // every event of the room's buses that sounds (the close, the hints, the shortcut; add a new bus's here)
+    playAll(r);
+    r.room.finale.emit({ type: 'settled' });
+    r.room.finale.emit({ type: 'gateOpened' });
+    r.room.shortcut.emit({ type: 'settled', area: 'area1' });
+    const long = r.engine.ctx.sources.slice(before).filter((s) => (s.buffer?.duration ?? 0) > 1 && !s.loop);
+    expect(long.map(tagOf).sort()).toEqual([...TAGS].sort());
+    expect(r.sound.probe.time.voices).toBe(long.length);
     r.sound.dispose();
   });
 
