@@ -253,9 +253,10 @@ const DUCKED: readonly VolumeChannel[] = [
 
 /**
  * The pause's turn-down of the game's sounds, on top of the player's volumes: `set(amount)` for the pause (0 = none, 1 = all
- * there) and `setAway(amount)` for the home after タイトルへ, every frame. The player's slider is read when a turn-down starts
- * and given back exactly when both are gone. S-43 (設定はポーズからも開く): while one is on, change a volume through
- * `setUserVolume`, so that the slider the player set is the one given back.
+ * there) and `setAway(amount)` for the home after タイトルへ, every frame. The target's level is read when a turn-down starts
+ * and given back exactly when both are gone. Since S-43 the pause hands it core's duck stage (`duckStage(engine, 'pause')`),
+ * so it writes the pause's own turn-down, not the player's volumes: the settings' sliders (`AudioGate.setVolume`) and the
+ * pause never fight over one value. `setUserVolume` is from before that and nothing calls it now.
  */
 export class PauseMix {
   private pause = 0;

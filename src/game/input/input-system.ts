@@ -11,7 +11,14 @@ import {
   type Stick,
   type Vec2,
 } from './bindings';
-import { mouseLookDelta, nextSprintLatch, padCodesPressed, radialDeadzone, stickLookDelta } from './gamepad';
+import {
+  MOUSE_RADIANS_PER_PIXEL,
+  mouseLookDelta,
+  nextSprintLatch,
+  padCodesPressed,
+  radialDeadzone,
+  stickLookDelta,
+} from './gamepad';
 
 /**
  * DOM side of input (操作とカメラ > 入力の割り当て): keyboard, mouse with Pointer Lock, wheel and the
@@ -35,7 +42,7 @@ export interface InputSettings {
 /** 調整値 except peekMode, whose default (長押し) is the first option in the design table. */
 export const DEFAULT_INPUT_SETTINGS: Readonly<InputSettings> = Object.freeze({
   peekMode: 'hold',
-  mouseSensitivity: 0.0022,
+  mouseSensitivity: MOUSE_RADIANS_PER_PIXEL,
   padLookSpeed: 2.6,
   invertY: false,
   padDeadzone: 0.15,

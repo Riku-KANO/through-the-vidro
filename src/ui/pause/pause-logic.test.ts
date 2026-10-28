@@ -208,23 +208,38 @@ describe('lineWriting (指でなぞった文字: 文の左から右へ光の筆�
   });
 });
 
-describe('the items (画面ごとの設計: ポーズ — this slice: つづける / タイトルへ; 確認ダイアログ: 2択)', () => {
-  it('lists つづける and タイトルへ, and the two answers', () => {
-    expect(PAUSE_ITEMS).toEqual(['resume', 'title']);
+describe('the items (画面ごとの設計: ポーズ — つづける / 設定 / タイトルへ so far; 確認ダイアログ: 2択)', () => {
+  it('lists つづける, 設定 and タイトルへ in the design’s order (ヒント・地図の玉 come with their slices), and the two answers', () => {
+    expect(PAUSE_ITEMS).toEqual(['resume', 'settings', 'title']);
     expect(CONFIRM_ITEMS).toEqual(['yes', 'no']);
     expect(focusedItem(MENU_START)).toBe('resume');
   });
+});
+
+/** The items' page, focused on `item`. */
+const on = (item: (typeof PAUSE_ITEMS)[number]): PauseMenu => ({
+  page: 'menu',
+  focus: PAUSE_ITEMS.indexOf(item),
 });
 
 describe('stepMenu (キーボード・パッド操作, 戻る操作, 確認ダイアログ)', () => {
   it('moves the focus up and down through the items, around the ends', () => {
     let m: PauseMenu = MENU_START;
     m = stepMenu(m, 'down').menu;
+    expect(focusedItem(m)).toBe('settings');
+    m = stepMenu(m, 'down').menu;
     expect(focusedItem(m)).toBe('title');
     m = stepMenu(m, 'down').menu;
     expect(focusedItem(m)).toBe('resume');
     m = stepMenu(m, 'up').menu;
     expect(focusedItem(m)).toBe('title');
+  });
+
+  it('設定 opens the settings (S-43), the focus staying on it for when they close', () => {
+    const s = stepMenu(on('settings'), 'choose');
+    expect(s.outcome).toBe('settings');
+    expect(s.chosen).toBe('settings');
+    expect(s.menu).toEqual(on('settings'));
   });
 
   it('says when the focus moved (it answers with light and sound)', () => {
@@ -240,11 +255,11 @@ describe('stepMenu (キーボード・パッド操作, 戻る操作, 確認ダ�
 
   it('Esc / B on the items resumes (one step back is the game)', () => {
     expect(stepMenu(MENU_START, 'back').outcome).toBe('resume');
-    expect(stepMenu({ page: 'menu', focus: 1 }, 'back').outcome).toBe('resume');
+    expect(stepMenu(on('title'), 'back').outcome).toBe('resume');
   });
 
   it('タイトルへ asks first, with いいえ chosen to begin with', () => {
-    const s = stepMenu({ page: 'menu', focus: 1 }, 'choose');
+    const s = stepMenu(on('title'), 'choose');
     expect(s.outcome).toBeNull();
     expect(s.chosen).toBe('title');
     expect(s.menu.page).toBe('confirm');
@@ -274,7 +289,7 @@ describe('stepMenu (キーボード・パッド操作, 戻る操作, 確認ダ�
     for (const command of ['choose', 'back'] as const) {
       const s = stepMenu({ page: 'confirm', focus: 1 }, command);
       expect(s.outcome).toBeNull();
-      expect(s.menu).toEqual({ page: 'menu', focus: 1 });
+      expect(s.menu).toEqual(on('title'));
     }
   });
 });
@@ -282,9 +297,10 @@ describe('stepMenu (キーボード・パッド操作, 戻る操作, 確認ダ�
 describe('pickItem (マウス: 選ぶと沈み込む)', () => {
   it('chooses the item clicked, wherever the focus was', () => {
     expect(pickItem(MENU_START, 'title').menu.page).toBe('confirm');
-    expect(pickItem({ page: 'menu', focus: 1 }, 'resume').outcome).toBe('resume');
+    expect(pickItem(on('title'), 'resume').outcome).toBe('resume');
+    expect(pickItem(MENU_START, 'settings').outcome).toBe('settings');
     expect(pickItem({ page: 'confirm', focus: 1 }, 'yes').outcome).toBe('leave');
-    expect(pickItem({ page: 'confirm', focus: 0 }, 'no').menu).toEqual({ page: 'menu', focus: 1 });
+    expect(pickItem({ page: 'confirm', focus: 0 }, 'no').menu).toEqual(on('title'));
   });
 
   it('ignores an item of the other page', () => {

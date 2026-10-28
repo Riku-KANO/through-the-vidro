@@ -53,7 +53,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **見た目の確認**: スクリーンショットは必ず Read で開いて目で見る。数値が緑でも絵が設計の柱に反していれば未完了。
 - **シーン固有の検証**: シーンは `window.__vidro.sceneProbe` に状態（例: 覗いているか、実体化半径、プレイヤー位置）を公開できる。
   入力を送って状態を確かめるテストは `tests/e2e/<slice-id>.spec.ts` に書く。
-- **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
+- **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。パスのハッシュなので並行の worktree と重なることがある（S-43 で 4371 が重なった）。起動で `Port … is already in use` や別の worktree の絵が出たら、`SENSOR_PORT` で別の番号にする。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
 - **長い全検査の前に機械のスリープを止める（S-35）。** Mac がアイドルで Maintenance Sleep に入ると、ブラウザとテストの時計が 15 分ずつ止まり、
   無関係なテストが時間切れで落ちる。`caffeinate -i -s scripts/check.sh --full`。スリープの後は AudioContext の時計が進まないことがある
   （S-22・S-25 の生の音の検査が 0 で落ちる）。
@@ -90,7 +90,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/core/` | 共通部品（描画の初期化、品質プリセット、計測、ガラス材質、遷移の曲線、音の仕組み `core/audio`）。案2と共有。ゲーム固有の規則や調整値は持たない | 変更は CHANGELOG に記録 |
 | `src/layers/` | 表と裏の層、実体化 | S-02 |
 | `src/game/` | 手の玉、プレイヤー、入力、ギミック、進行、セーブ | S-02, S-03 |
-| `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主） | S-04, S-18 |
+| `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主）、ポーズ（`pause/`）、設定（`settings/`、保存は `settings-store.ts`） | S-04, S-18, S-42, S-43 |
 | `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値、炉の音・扉の風鈴と吹き込み。生成音楽は M1以降 | S-09, S-21, S-22, S-25 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）、焼いた光の受け口（`lightmap.ts`）。案2と共有 | 変更は CHANGELOG に記録 |
@@ -164,6 +164,15 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   任せる（自分では作らない・閉じない）。自分で作るのは単独で開くシーン（試作部屋の `?direct=1`、audio-lab）だけ。e2e は `window.AudioContext` を
   `addInitScript` で包み、数・作った瞬間の活性化・エンジンの数・スピーカーへの線の数を確かめる（`tests/e2e/S-18-*.spec.ts`）。
   このゲームのエンジンは `createVidroEngine(context, room)`（`src/audio/engine.ts`）で作る。`context` に `undefined` を渡すのは audio-lab だけ（S-21）。
+- **プレイヤーの音量は設定だけが書き、演出の絞りは core の絞りの段に書く（S-43）。** プレイヤーの音量（エンジンの `setVolume`）は設定
+  （`AudioGate.setVolume`）だけが書く。ポーズなど音を下げる演出は `setDuck(owner, channel, value)` か `duckStage(engine, owner)` に書く
+  （持ち主ごとに掛け合わせる）。UI の音はゲートの `ui.startVoice`（UI の系統、`uiVoices` に数える）で鳴らし、エンジンの `startVoice` を
+  直に使わない。
+- **遊ぶ途中で品質を変えるときは、シーンを作り直さない（S-43）。** 殻（main.ts）がシーンの文脈に `qualityPort` を渡し、作り直さずに
+  受けられるシーン（ホームの殻）は `qualityPortOf(ctx).attach` で `applyQuality` と `idle`（絵が止まっている間。殻は governor にフレームも
+  GPU 時間も渡さない）を知らせる。URL の `?quality=auto` だけは今までどおり作り直す（S-16・S-18 の片付けのセンサー）。品質は URL の
+  `?quality` が勝ち、なければ設定の保存（`readSavedQuality`。`?bench` のときは読まない）。今その場で変わるのは描画の倍率と動的解像度の
+  範囲だけで、ほかは次に作るときから（`QualityPort.sceneLevel`）。
 - **何が光るかは、ブルームのしきい値ではなく美術で決める（S-17）。** しきい値は線形の輝度 0.9（`PeekPipeline`、負荷シーン）。光として滲ませたい物
   （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
   光源が滲むかは、同じ視点を仕上げのブルームありと `finish=aa` で比べ、その辺りを照らす灯りを黒くして確かめる。点光源は真鍮から離す

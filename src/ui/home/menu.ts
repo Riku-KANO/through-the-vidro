@@ -8,6 +8,8 @@ const ARC_TO_DEG = 142;
 const ARC_RADIUS = 1.3; // × orb radius on screen
 /** Time a chosen drop stays sunk before it rises again (細部の振る舞い: 選ぶと弾けずに沈み込む). */
 const PRESS_SECONDS = 0.38;
+/** The drops' fade when the settings open over the home and close again (styles.ts .vd-home.is-veiled, S-43). */
+const UNVEIL_SECONDS = 0.3;
 
 export interface MenuLayout {
   /** Orb centre and radius on screen, in CSS pixels. */
@@ -31,6 +33,7 @@ interface Drop {
   id: HomeItem;
   el: HTMLButtonElement;
   bead: HTMLElement;
+  label: HTMLElement;
   pressTimer: number;
 }
 
@@ -51,6 +54,9 @@ export class HomeMenu {
   private shown = true;
   /** Focus moved by a hover, which already answered with its own sound. */
   private quietFocus = false;
+  private veiled = false;
+  /** Seconds left of the drops' coming back after the settings closed. */
+  private unveiling = 0;
 
   constructor(
     root: HTMLElement,
@@ -69,8 +75,8 @@ export class HomeMenu {
       el.innerHTML =
         '<span class="vd-drop__bead" data-part="bead"><span class="vd-drop__light"></span></span>' +
         '<span class="vd-drop__label vd-frost"></span>';
-      const label = el.querySelector('.vd-drop__label');
-      if (label) label.textContent = t(id);
+      const label = el.querySelector<HTMLElement>('.vd-drop__label') ?? el;
+      label.textContent = t(id);
       const bead = el.querySelector<HTMLElement>('[data-part="bead"]') ?? el;
       el.addEventListener('pointerenter', () => {
         if (!this.interactive) return;
@@ -99,7 +105,7 @@ export class HomeMenu {
         this.events.onSelect(id);
       });
       this.el.appendChild(el);
-      return { id, el, bead, pressTimer: 0 };
+      return { id, el, bead, label, pressTimer: 0 };
     });
     this.el.addEventListener('keydown', (e) => {
       if (!this.interactive) return;
@@ -138,6 +144,30 @@ export class HomeMenu {
     if (!on) this.hoverIndex = -1;
   }
 
+  /** Moves the focus as an arrow key would (the pad's 十字, S-43). */
+  moveFocus(key: string): void {
+    if (!this.interactive || this.refocus()) return;
+    const next = nextFocus(this.focusIndex, key, this.drops.length);
+    if (next !== this.focusIndex) this.drops[next]?.el.focus({ preventScroll: true });
+  }
+
+  /** Chooses the focused drop as a click would (the pad's A, S-43). */
+  chooseFocused(): void {
+    if (!this.interactive || this.refocus()) return;
+    this.drops[this.focusIndex]?.el.click();
+  }
+
+  /**
+   * The drop last focused lost the browser's focus (a click elsewhere): the pad's press first lights it again (with its
+   * sound) instead of moving or choosing what is not lit. Returns whether it did.
+   */
+  private refocus(): boolean {
+    const d = this.drops[this.focusIndex];
+    if (!d || document.activeElement === d.el) return false;
+    d.el.focus({ preventScroll: true });
+    return true;
+  }
+
   focusItem(item: HomeItem): void {
     const d = this.drops.find((x) => x.id === item);
     d?.el.focus({ preventScroll: true });
@@ -151,12 +181,37 @@ export class HomeMenu {
     d.pressTimer = PRESS_SECONDS;
   }
 
-  /** Re-measure after a resize (font size follows the viewport height). */
+  /** Re-measure after a resize (font size follows the viewport height, and the settings' text size). */
   invalidate(): void {
     this.measured = false;
   }
 
+  /** Swaps the words (設定 > 言語, S-43). */
+  relabel(t: (k: StringKey) => string): void {
+    this.el.setAttribute('aria-label', t('menuLabel'));
+    for (const d of this.drops) d.label.textContent = t(d.id);
+    this.invalidate();
+  }
+
+  /**
+   * The settings are open over the home (S-43): the drops step aside under the panel (they fade as they came), and come
+   * back when it closes.
+   */
+  setVeiled(on: boolean): void {
+    if (on === this.veiled) return;
+    this.veiled = on;
+    this.el.classList.toggle('is-veiled', on);
+    // they come back the way they went (戻るときは、来たときの動きを逆再生する): the same fade, for its length only (the
+    // drops' appearing is set per frame and must not lag behind a transition)
+    this.unveiling = on ? 0 : UNVEIL_SECONDS;
+    this.el.classList.toggle('is-unveiling', !on);
+  }
+
   update(dt: number, layout: MenuLayout): void {
+    if (this.unveiling > 0) {
+      this.unveiling -= dt;
+      if (this.unveiling <= 0) this.el.classList.remove('is-unveiling');
+    }
     if (!this.measured) {
       const first = this.drops[0];
       if (first) {

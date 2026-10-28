@@ -32,4 +32,39 @@ export interface DiveWorld {
   setPlaying(on: boolean): void;
   resize(width: number, height: number): void;
   dispose(): void;
+
+  // ---- optional ports (a world without them plays without a pause or settings: S-04's placeholder city) ----
+
+  /** S-42: the world's input asks for the pause (Esc, the mouse let go, Start). Returns the unsubscribe. */
+  onPauseRequest?(listener: () => void): () => void;
+  /** S-42: the game's time speed, 0..1. */
+  setTimeScale?(scale: number): void;
+  /** S-42: holds the player's input back (and lets the mouse go) while the pause is up. */
+  setHeld?(held: boolean): void;
+  /** S-42: asks for the mouse lock again, inside the click or key press that resumes. */
+  relock?(): void;
+  /**
+   * S-43: the player's settings, as the world takes them (設定: 視野角, 覗く, マウスの感度, 上下の反転, 言語). Applied at
+   * once, also before the world is built; the camera's field of view at the end of the dive follows `standingFov`.
+   */
+  applySettings?(settings: WorldSettings): void;
+}
+
+/** The settings a world takes (S-43), in its own terms. */
+export interface WorldSettings {
+  /** Vertical field of view when standing, 60..100 (操作とカメラ > カメラ). Peeking narrows it by 6 as ever. */
+  fovDeg: number;
+  /** 覗く操作は「長押し」と「押すたびに切り替え」を設定で選べる. */
+  peekMode: 'hold' | 'toggle';
+  /** Radians per pixel of mouse movement. */
+  mouseSensitivity: number;
+  invertY: boolean;
+  /** Language of the world's own words (the prompts). */
+  lang: 'ja' | 'en';
+  /** The UI's text size (×1, ×1.2, ×1.4) for the world's own words (the prompts: アクセシビリティ). */
+  textScale: number;
+  /** コントラスト強化: the world's own frosted labels (the prompts) denser, their edges brighter. */
+  contrast: boolean;
+  /** The UI's typeface for that language (英語版: 細めのセリフ体), for the world's own words. */
+  fontFamily: string;
 }

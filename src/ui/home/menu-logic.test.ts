@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { HOME_ITEMS, menuPitchHz, nextFocus } from './menu-logic';
+import { HOME_ITEMS, menuPitchHz, nextFocus, padMenuKey } from './menu-logic';
+
+describe('padMenuKey (ゲームパッド on the home, S-43)', () => {
+  it('moves with the 十字 as the arrows do, chooses with A, ignores the rest', () => {
+    expect(padMenuKey('PadUp')).toBe('ArrowUp');
+    expect(padMenuKey('PadLeft')).toBe('ArrowUp');
+    expect(padMenuKey('PadDown')).toBe('ArrowDown');
+    expect(padMenuKey('PadRight')).toBe('ArrowDown');
+    expect(padMenuKey('PadA')).toBe('choose');
+    expect(padMenuKey('PadB')).toBeNull();
+    expect(padMenuKey('PadStart')).toBeNull();
+  });
+});
 
 describe('HOME_ITEMS (UI/UX設計 > 画面ごとの設計: ホーム)', () => {
   it('lists the five drops in the design order', () => {

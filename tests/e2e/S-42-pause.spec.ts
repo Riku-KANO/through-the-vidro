@@ -381,7 +381,7 @@ for (const backend of backends) {
     const open = await snap('open');
     // the text: written on frosted glass, at least 18 px; the small line about the mouse is there
     const lines = await writtenLines(page);
-    expect(lines.map((l) => l.text)).toEqual(['つづける', 'タイトルへ']);
+    expect(lines.map((l) => l.text)).toEqual(['つづける', '設定', 'タイトルへ']);
     for (const l of lines) {
       expect(l.fontPx, l.text).toBeGreaterThanOrEqual(MIN_TEXT_PX);
       expect(l.tag, `${l.text}: the tag holds its words`).toBeGreaterThan(l.ink);
@@ -405,7 +405,7 @@ for (const backend of backends) {
     // ---- keyboard: down, up, Enter on つづける ----
     let sounds = (await pause(page)).sounds.length;
     await page.keyboard.press('ArrowDown');
-    await waitPause(page, "q.focused === 'title'");
+    await waitPause(page, "q.focused === 'settings'");
     await page.keyboard.press('ArrowUp');
     await waitPause(page, "q.focused === 'resume'");
     expect(
@@ -466,7 +466,7 @@ for (const backend of backends) {
     // ---- pad: Start opens, D-pad, A asks, B back, B resumes; Start closes too ----
     await padPress(page, PAD.START);
     await waitPause(page, "q.phase === 'open'");
-    await padPress(page, PAD.DOWN);
+    await padPress(page, PAD.UP);
     await waitPause(page, "q.focused === 'title'");
     await padPress(page, PAD.A);
     await waitPause(page, "q.page === 'confirm' && q.focused === 'no'");
@@ -477,7 +477,7 @@ for (const backend of backends) {
     // Start closes from the question too (it closes as it opened)
     await padPress(page, PAD.START);
     await waitPause(page, "q.phase === 'open'");
-    await padPress(page, PAD.DOWN);
+    await padPress(page, PAD.UP);
     await padPress(page, PAD.A);
     await waitPause(page, "q.page === 'confirm'");
     await padPress(page, PAD.START);
@@ -489,7 +489,7 @@ for (const backend of backends) {
     await waitPause(page, "q.phase === 'open'");
     await page.waitForTimeout(350);
     // where はい will stand: ask once by keyboard to measure it, then go back
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
     await page.keyboard.press('Enter');
     await waitPause(page, "q.page === 'confirm' && q.writing === 1");
     const yesBox = await page.locator('[data-pause-item="yes"]').boundingBox();
@@ -527,7 +527,7 @@ for (const backend of backends) {
     // ---- タイトルへ: asked first (いいえ chosen), Esc goes back, はい leaves through the dive played back ----
     await page.keyboard.press('Escape');
     await waitPause(page, "q.phase === 'open'");
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
     await page.keyboard.press('Enter');
     await waitPause(page, "q.page === 'confirm' && q.focused === 'no' && q.writing === 1");
     const confirm = await snap('confirm');
@@ -676,7 +676,7 @@ for (const backend of backends) {
     });
     await page.evaluate(() => (window.__vidro.sceneProbe as { pause: { ask(): void } }).pause.ask());
     await waitPause(page, "q.phase === 'open'");
-    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
     await page.keyboard.press('Enter');
     await waitPause(page, "q.page === 'confirm' && q.writing === 1");
     await page.keyboard.press('ArrowLeft');
@@ -901,8 +901,8 @@ test.describe('in English', () => {
       await page.keyboard.press('Escape');
       await waitPause(page, "q.phase === 'open'");
       const menu = await writtenLines(page);
-      expect(menu.map((l) => l.text)).toEqual(['Resume', 'Back to title']);
-      await page.keyboard.press('ArrowDown');
+      expect(menu.map((l) => l.text)).toEqual(['Resume', 'Settings', 'Back to title']);
+      await page.keyboard.press('ArrowUp');
       await page.keyboard.press('Enter');
       await waitPause(page, "q.page === 'confirm' && q.writing === 1");
       const asked = await writtenLines(page);

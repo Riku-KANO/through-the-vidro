@@ -64,7 +64,7 @@ import {
 } from '../area1/layout';
 import { type Area1Colliders, Area1Gates, addArea1Colliders, area1Footing } from '../area1/physics';
 import { type AreaAsset, addAssetColliders, loadAreaAsset } from '../assets';
-import type { DiveWorld } from '../dive-world';
+import type { DiveWorld, WorldSettings } from '../dive-world';
 import { type InputEvent, InputSystem } from '../input/input-system';
 import { HAND_ORB_RADIUS, handOrbCenter, orbScreenCircle } from '../orb/hand-pose';
 import { peekMoveSpeedMultiplier } from '../orb/peek';
@@ -426,6 +426,8 @@ export interface PrologueRoom extends DiveWorld {
   setHeld(held: boolean): void;
   /** S-42: asks for the mouse lock again (inside the click or key press that resumes). */
   relock(): void;
+  /** S-43: the player's settings (視野角, 覗く, マウスの感度, 上下の反転; the prompt's language, size, contrast), at once. */
+  applySettings(settings: WorldSettings): void;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
@@ -621,6 +623,7 @@ interface BuiltRoom {
   setPlaying(on: boolean): void;
   setHeld(held: boolean): void;
   relock(): void;
+  applySettings(settings: WorldSettings): void;
   /** S-42: where play stands — the eye, a point it looks at, and the haze there. */
   eyePose(outPos: THREE.Vector3, outTarget: THREE.Vector3, outFog: { near: number; far: number }): void;
   update(dt: number, t: number): void;
@@ -821,6 +824,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   let timeScale = 1;
   let clock: number | null = null;
   let held = false;
+  // S-43: the player's settings, kept for the room once it is built
+  let settings: WorldSettings | null = null;
   const eye = { pos: new THREE.Vector3(), target: new THREE.Vector3(), fog: { near: 0, far: 0 } };
   const landing: Pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
   dive.pose(1, landing.pos, landing.target);
@@ -832,7 +837,9 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     camera,
     pivot: dive.pivot,
     miniatureFov,
-    standingFov: FOV_DEFAULT,
+    get standingFov() {
+      return settings?.fovDeg ?? FOV_DEFAULT;
+    },
     probe,
     events,
     finale,
@@ -865,6 +872,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
         built = b;
         b.setPlaying(playing);
         b.setHeld(held);
+        if (settings) b.applySettings(settings);
       });
       return building;
     },
@@ -890,6 +898,10 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
       built?.setHeld(on);
     },
     relock: () => built?.relock(),
+    applySettings(s) {
+      settings = s;
+      built?.applySettings(s);
+    },
     dispose() {
       disposed = true;
       built?.dispose();
@@ -1048,7 +1060,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
   const queue: InputEvent['type'][] = [];
   const offInput = input.on((e) => queue.push(e.type));
 
-  const text = STRINGS[opts.lang];
+  let text = STRINGS[opts.lang];
   const prompt = createPrompt(overlay);
 
   // dev holds (screenshots): a placed orb frozen mid-growth
@@ -1855,6 +1867,20 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     relock() {
       if (playing && !opts.autopilot && !input.locked) input.requestLock();
+    },
+    applySettings(s) {
+      input.settings.peekMode = s.peekMode;
+      input.settings.mouseSensitivity = s.mouseSensitivity;
+      input.settings.invertY = s.invertY;
+      player.settings = { fovDeg: s.fovDeg };
+      text = STRINGS[s.lang];
+      // the prompt's frosted label follows the UI's text size and contrast (アクセシビリティ)
+      prompt.style.fontSize = `calc(max(18px, 1.85vh) * ${s.textScale})`;
+      prompt.style.fontFamily = s.fontFamily;
+      prompt.style.background = s.contrast ? 'rgba(16,22,30,.62)' : 'rgba(255,255,255,.14)';
+      prompt.style.border = s.contrast
+        ? '2px solid rgba(255,255,255,.82)'
+        : '1px solid rgba(255,255,255,.28)';
     },
     eyePose(outPos, outTarget, outFog) {
       const e = player.eye;

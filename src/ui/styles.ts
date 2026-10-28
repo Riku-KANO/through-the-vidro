@@ -12,8 +12,13 @@ export const UI_TOKENS = {
   frost: 'rgba(255, 255, 255, 0.14)',
   frostBlur: '14px',
   ease: GLASS_EASE_CSS,
-  /** Scales with the viewport height (20px at 1080p), never below the 18px minimum of 文字と色. */
-  fontSize: 'max(18px, 1.85vh)',
+  /**
+   * Scales with the viewport height (20px at 1080p), never below the 18px minimum of 文字と色; and with the settings'
+   * text size (--vd-text: 1, 1.2, 1.4 — アクセシビリティ: 文字の大きさを3段階で, S-43).
+   */
+  fontSize: 'calc(max(18px, 1.85vh) * var(--vd-text, 1))',
+  /** 数字と英字は細身のサンセリフ (文字と色). */
+  numerals: '"Helvetica Neue", "Segoe UI", "Hiragino Sans", system-ui, sans-serif',
 } as const;
 
 const CSS = `
@@ -69,6 +74,9 @@ const CSS = `
 
 .vd-loading .vd-drop { left: 50%; top: calc(44% + 78px); }
 .vd-home { position: absolute; inset: 0; margin: 0; padding: 0; }
+/* the settings are open over the home (S-43): the drops step aside under the panel */
+.vd-home.is-veiled .vd-drop > * { opacity: 0; transition: opacity 0.25s ${UI_TOKENS.ease}; }
+.vd-home.is-unveiling .vd-drop > * { transition: opacity 0.25s ${UI_TOKENS.ease}; }
 
 /* ---- pause (S-42): a breath of frost from the middle, the items written on it with a finger ----
    No ancestor of a frosted part may have opacity, a filter or a mask: it would cut the frost off from the backdrop. */
@@ -84,9 +92,16 @@ const CSS = `
     radial-gradient(circle at 45% 48%, #000 calc(var(--core, 0px) * 0.85), transparent calc(var(--r, 0px) * 0.92)),
     radial-gradient(circle at 56% 47%, #000 calc(var(--core, 0px) * 0.8), transparent calc(var(--r, 0px) * 0.88));
   -webkit-mask-image: var(--mask); mask-image: var(--mask); }
-.vd-pause__breath.is-full { -webkit-mask-image: none; mask-image: none; }
+.vd-pause__breath.is-full { -webkit-mask-image: none; mask-image: none;
+  transition: background 0.3s ${UI_TOKENS.ease}, -webkit-backdrop-filter 0.3s ${UI_TOKENS.ease},
+    backdrop-filter 0.3s ${UI_TOKENS.ease}; }
+/* the settings open over the pause (S-43): the items step aside and the breath thins, so the picture shows through */
+.vd-pause.is-yielded .vd-pause__page, .vd-pause.is-yielded .vd-pause__note { visibility: hidden; }
+.vd-pause.is-yielded .vd-pause__breath { background: rgba(255, 255, 255, 0.03);
+  -webkit-backdrop-filter: blur(1.5px) brightness(0.94); backdrop-filter: blur(1.5px) brightness(0.94); }
 .vd-pause__page { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex;
-  flex-direction: column; align-items: center; gap: 0.85em; margin: 0; font-size: max(22px, 2.5vh); }
+  flex-direction: column; align-items: center; gap: 0.85em; margin: 0;
+  font-size: calc(max(22px, 2.5vh) * var(--vd-text, 1)); }
 .vd-pause__page[hidden] { display: none; }
 .vd-pause__choices { display: flex; gap: 1.1em; }
 .vd-pause__ask { margin: 0; }
@@ -127,6 +142,108 @@ const CSS = `
 .vd-pause__note { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%); margin: 0;
   font-size: ${UI_TOKENS.fontSize}; white-space: nowrap; }
 .vd-pause__note > span { display: inline-block; padding: 0.3em 1.1em 0.34em; border-radius: 999px; opacity: var(--note, 0); }
+
+/* ---- settings (S-43): a pane of frosted glass spreading sideways (--open), the tabs and the settings on it ----
+   The pane (glass) is the only frosted part: the body over it is revealed by a clip-path and holds no backdrop filter. */
+.vd-settings { position: absolute; top: 50%; right: max(4vw, 16px); transform: translateY(-50%);
+  width: min(calc(100vw - 32px), max(30em, 38vw)); visibility: hidden; pointer-events: none; --open: 0; }
+/* 英語版: the words run longer (札は文字の長さに合わせて伸びる): a slightly wider pane and closer tabs keep them on one line
+   (without covering more of the picture behind) */
+.vd-root:lang(en) .vd-settings { width: min(calc(100vw - 32px), max(32em, 40vw)); }
+.vd-root:lang(en) .vd-settings button.vd-settings__tab { padding-left: 0.6em; padding-right: 0.6em; letter-spacing: 0.04em; }
+.vd-settings.is-up { visibility: visible; }
+.vd-settings.is-interactive { pointer-events: auto; }
+.vd-settings__glass { position: absolute; inset: 0; border-radius: 1.3em; background: rgba(255, 255, 255, 0.13);
+  -webkit-backdrop-filter: blur(16px) brightness(0.74) saturate(0.9); backdrop-filter: blur(16px) brightness(0.74) saturate(0.9);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 10px 40px rgba(10, 16, 26, 0.28);
+  transform: scaleX(var(--open)); transform-origin: 50% 50%; }
+.vd-settings__body { position: relative; display: flex; flex-direction: column; gap: 0.8em; padding: 1em 1.4em 1.1em;
+  clip-path: inset(0 calc((1 - var(--open)) * 50%) round 1.3em);
+  opacity: clamp(0, calc((var(--open) - 0.3) * 1.5), 1);
+  text-shadow: 0 1px 2px rgba(20, 26, 34, 0.4); }
+.vd-settings button { padding: 0; border: 0; background: none; cursor: pointer; outline: none; }
+.vd-settings__tabs { display: flex; flex-wrap: wrap; gap: 0.35em 0.5em; padding-bottom: 0.7em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18); }
+.vd-settings button.vd-settings__tab { padding: 0.28em 0.95em 0.32em; border-radius: 999px; border: 1px solid transparent;
+  opacity: 0.74; white-space: nowrap;
+  transition: transform 0.26s ${UI_TOKENS.ease}, opacity 0.26s ${UI_TOKENS.ease}, background-color 0.26s ${UI_TOKENS.ease},
+    box-shadow 0.26s ${UI_TOKENS.ease}; }
+.vd-settings button.vd-settings__tab.is-shown { opacity: 1; background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.32); }
+.vd-settings__page { display: flex; flex-direction: column; gap: 0.3em; }
+.vd-settings__page[hidden] { display: none; }
+.vd-settings__row { display: flex; align-items: center; justify-content: space-between; gap: 0.6em 1.2em; flex-wrap: wrap;
+  padding: 0.42em 0.8em; border-radius: 0.8em; outline: none; border: 1px solid transparent;
+  transition: background-color 0.26s ${UI_TOKENS.ease}, box-shadow 0.26s ${UI_TOKENS.ease}; }
+.vd-settings__label { white-space: nowrap; }
+.vd-settings__control { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.4em;
+  margin-left: auto; }
+/* focus lights from inside (選択中の項目は、内部に光が灯る) */
+.vd-settings button.vd-settings__tab.is-focus, .vd-settings__row.is-focus { background-color: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 240, 214, 0.55); opacity: 1;
+  box-shadow: inset 0 0 18px rgba(255, 226, 170, 0.22), 0 0 22px rgba(255, 222, 160, 0.4); }
+/* the options: small frosted tags; the chosen one is lit */
+.vd-settings button.vd-settings__chip { padding: 0.2em 0.85em 0.26em; border-radius: 999px; white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.07);
+  transition: transform 0.26s ${UI_TOKENS.ease}, background-color 0.26s ${UI_TOKENS.ease}, box-shadow 0.26s ${UI_TOKENS.ease}; }
+.vd-settings button.vd-settings__option.is-chosen { background: rgba(255, 242, 218, 0.28); border-color: rgba(255, 240, 214, 0.78);
+  box-shadow: 0 0 14px rgba(255, 222, 160, 0.42); }
+/* hover swells (表面張力), a choice sinks (細部の振る舞い) */
+.vd-settings .is-hover { transform: scale(1.07); }
+.vd-settings .is-pressed { transform: translateY(0.1em) scale(0.93); }
+/* a slider: a groove of clear glass, a drop riding it (--at: 0..1) */
+.vd-settings__track { position: relative; display: inline-block; width: 10.5em; height: 1.5em; cursor: pointer;
+  touch-action: none; --at: 0; transition: transform 0.26s ${UI_TOKENS.ease}; }
+.vd-settings__track.is-hover { transform: scale(1.04); }
+.vd-settings__groove { position: absolute; left: 0; right: 0; top: 50%; height: 0.34em; transform: translateY(-50%);
+  border-radius: 999px; background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 2px rgba(10, 20, 30, 0.4), 0 1px 0 rgba(255, 255, 255, 0.22); }
+.vd-settings__fill { position: absolute; left: 0; top: 50%; height: 0.34em; width: calc(var(--at) * 100%);
+  transform: translateY(-50%); border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 232, 196, 0.2), rgba(255, 236, 204, 0.62)); }
+.vd-settings__bead { position: absolute; top: 50%; left: calc(var(--at) * 100%); width: 1.15em; height: 1.15em;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.95) 0 9%, rgba(255, 255, 255, 0.3) 16%,
+    rgba(214, 232, 240, 0.2) 52%, rgba(160, 200, 190, 0.36) 86%, rgba(230, 250, 244, 0.6) 100%);
+  box-shadow: inset 0 -2px 5px rgba(255, 255, 255, 0.35), inset 0 2px 6px rgba(40, 70, 80, 0.25),
+    0 3px 10px rgba(10, 20, 30, 0.25); }
+.vd-settings__row.is-focus .vd-settings__bead { box-shadow: inset 0 -2px 5px rgba(255, 255, 255, 0.45),
+  inset 0 2px 6px rgba(40, 70, 80, 0.2), 0 0 16px rgba(255, 228, 180, 0.6); }
+.vd-settings__value { min-width: 3.4em; text-align: right; font-family: ${UI_TOKENS.numerals}; font-weight: 300;
+  font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.vd-settings__foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5em 1em;
+  padding-top: 0.7em; border-top: 1px solid rgba(255, 255, 255, 0.16); }
+.vd-settings__keys { opacity: 0.78; }
+.vd-settings__notice { position: absolute; left: 50%; top: calc(100% + 0.7em); transform: translateX(-50%); margin: 0;
+  padding: 0.3em 1.1em 0.34em; border-radius: 999px; white-space: nowrap; opacity: var(--notice, 0);
+  background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 244, 226, 0.5);
+  -webkit-backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.62); backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.62); }
+.vd-settings__notice[hidden] { display: none; }
+/* under 品質, while part of the preset waits for the next time */
+.vd-settings__hint { margin: -0.1em 0.8em 0.2em; opacity: 0.82; text-align: right; }
+.vd-settings__hint[hidden] { display: none; }
+/* a frosted tag reached by Tab (the 戻る button): lit like a focused row */
+.vd-settings button.vd-settings__chip:focus-visible { border-color: rgba(255, 240, 214, 0.75);
+  box-shadow: 0 0 16px rgba(255, 222, 160, 0.5); }
+
+/* ---- コントラスト強化 (アクセシビリティ, S-43): the glass's edges thicker and brighter, the frost behind the text denser ---- */
+.vd-root.vd-contrast { text-shadow: 0 1px 3px rgba(8, 12, 18, 0.7); }
+.vd-contrast .vd-frost { background: rgba(16, 22, 30, 0.62); border: 2px solid rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.5); backdrop-filter: blur(${UI_TOKENS.frostBlur}) brightness(0.5); }
+.vd-contrast .vd-drop__bead { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), inset 0 2px 6px rgba(40, 70, 80, 0.25); }
+.vd-contrast .vd-pause__breath { background: rgba(10, 14, 20, 0.42); }
+.vd-contrast .vd-pause__tag { background-color: rgba(16, 22, 30, 0.62); border: 2px solid rgba(255, 255, 255, 0.82); }
+.vd-contrast .vd-settings__glass { background: rgba(12, 18, 26, 0.74); border: 2px solid rgba(255, 255, 255, 0.85);
+  -webkit-backdrop-filter: blur(16px) brightness(0.5); backdrop-filter: blur(16px) brightness(0.5); }
+.vd-contrast .vd-settings button.vd-settings__chip, .vd-contrast .vd-settings button.vd-settings__tab.is-shown {
+  border: 2px solid rgba(255, 255, 255, 0.78); }
+.vd-contrast .vd-settings__row.is-focus, .vd-contrast .vd-settings button.vd-settings__tab.is-focus {
+  border: 2px solid rgba(255, 240, 214, 0.95); }
+.vd-contrast .vd-settings__groove { background: rgba(255, 255, 255, 0.3); box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7); }
+/* the chosen tag is told by its shape too (色だけに頼らない): a second ring, a brighter fill */
+.vd-contrast .vd-settings button.vd-settings__option.is-chosen { background: rgba(255, 244, 222, 0.42);
+  border-color: rgba(255, 236, 190, 1); box-shadow: 0 0 0 2px rgba(16, 22, 30, 0.9), 0 0 0 4px rgba(255, 236, 190, 0.95); }
 `;
 
 /** Injects the shared stylesheet once and returns a root element for one screen set. */

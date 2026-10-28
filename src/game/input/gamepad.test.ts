@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mouseLookDelta, nextSprintLatch, padCodesPressed, radialDeadzone, stickLookDelta } from './gamepad';
+import {
+  MOUSE_RADIANS_PER_PIXEL,
+  MOUSE_SENSITIVITY_RANGE,
+  mouseLookDelta,
+  mouseSensitivityFor,
+  nextSprintLatch,
+  padCodesPressed,
+  radialDeadzone,
+  stickLookDelta,
+} from './gamepad';
 
 const button = (value: number) => ({ pressed: value > 0.5, value });
 const buttons = (pressedIndices: Record<number, number>) =>
@@ -35,6 +44,16 @@ describe('radialDeadzone', () => {
     const v = radialDeadzone(0.16, 0, 0.15);
     expect(v.x).toBeGreaterThan(0);
     expect(v.x).toBeLessThan(0.05);
+  });
+});
+
+describe('mouseSensitivityFor (設定 > 操作: マウスの感度, S-43)', () => {
+  it('×1 is the tuned rate; the scale multiplies it, within its range', () => {
+    expect(mouseSensitivityFor(1)).toBeCloseTo(MOUSE_RADIANS_PER_PIXEL, 12);
+    expect(mouseSensitivityFor(2)).toBeCloseTo(2 * MOUSE_RADIANS_PER_PIXEL, 12);
+    expect(mouseSensitivityFor(100)).toBeCloseTo(MOUSE_SENSITIVITY_RANGE.max * MOUSE_RADIANS_PER_PIXEL, 12);
+    expect(mouseSensitivityFor(0)).toBeCloseTo(MOUSE_SENSITIVITY_RANGE.min * MOUSE_RADIANS_PER_PIXEL, 12);
+    expect(mouseSensitivityFor(Number.NaN)).toBeCloseTo(MOUSE_RADIANS_PER_PIXEL, 12);
   });
 });
 

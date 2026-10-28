@@ -11,13 +11,21 @@ import { parseParams } from './core/params';
 import { PerfGovernor } from './core/perf/governor';
 import { GpuSpanTimer, type GpuTimeSource } from './core/perf/gpu-span';
 import type { QualityDecision } from './core/perf/quality-select';
-import { QUALITY_PRESETS, type QualityLevel } from './core/quality';
+import {
+  QUALITY_PRESETS,
+  type QualityChoice,
+  type QualityLevel,
+  type QualityPort,
+  type QualityScene,
+  startQuality,
+} from './core/quality';
 import { type Backend, createRenderer } from './core/renderer';
-import type { SandboxScene, SceneModule } from './core/scene';
+import type { SandboxScene, SceneContext, SceneModule } from './core/scene';
 import type { BackdropReport } from './dev/backdrop-risks';
 import { type StatsExtras, StatsOverlay } from './dev/stats';
 import { PassTimestampDrain } from './dev/timestamp-drain';
 import { loadScene, sceneNames } from './scenes/registry';
+import { browserStorage, readSavedQuality } from './ui/settings/settings-store';
 
 /**
  * Machine-readable probe for the browser sensor (tests/e2e) and the dev loop.
@@ -46,8 +54,16 @@ export interface VidroProbe {
   status: 'booting' | 'running' | 'benchmarking' | 'done' | 'error';
   scene: string | null;
   backend: Backend | null;
-  /** Preset the current scene instance was created with. */
+  /** Preset in use: the one the scene was created with, or switched to in place (S-43). */
   quality: QualityLevel;
+  /** What is chosen: a preset or 自動 (the URL's ?quality, the player's saved choice or the settings; S-43). */
+  qualityChoice: QualityChoice;
+  /** Where the starting preset came from: the URL, the player's saved settings, or the default (mid). */
+  qualityOrigin: 'url' | 'saved' | 'default';
+  /** Presets switched without making the scene again (the settings, or 自動 chosen there: S-43). */
+  qualitySwitchesInPlace: number;
+  /** Frames whose picture stood still (the pause): none of them, nor their GPU time, went to the governor (S-43). */
+  idleFrames: number;
   /** Current render scale (preset × dynamic resolution), relative to the device pixel ratio. */
   renderScale: number;
   gpuName: string;
@@ -116,12 +132,23 @@ const GPU_POLL_EVERY_FRAMES = 8;
 const SWITCH_TIMEOUT_MS = 15_000;
 
 const params = parseParams(window.location.search);
+// S-43: the URL's ?quality (a dev and sensor switch) wins; else the preset the player chose in the settings, kept in the
+// browser; else mid. The saved choice is read only for a scene (the scene list keeps nothing), and never for a bench
+// (計測は固定のプリセットで: a 自動 kept from playing must not switch presets in the middle of a measurement).
+const startPreset = startQuality({
+  url: params.raw.has('quality') ? { level: params.quality, auto: params.autoQuality } : null,
+  saved: params.scene && params.benchSeconds === null ? readSavedQuality(browserStorage) : null,
+});
 const probe: VidroProbe = {
   status: 'booting',
   scene: params.scene,
   backend: null,
-  quality: params.quality,
-  renderScale: QUALITY_PRESETS[params.quality].renderScale,
+  quality: startPreset.level,
+  qualityChoice: startPreset.auto ? 'auto' : startPreset.level,
+  qualityOrigin: startPreset.origin,
+  qualitySwitchesInPlace: 0,
+  idleFrames: 0,
+  renderScale: QUALITY_PRESETS[startPreset.level].renderScale,
   gpuName: '',
   gpuTiming: false,
   gpuSource: 'none',
@@ -189,7 +216,7 @@ async function main(): Promise<void> {
   const { renderer, backend, baseDpr, gpuName, gpuTiming, gpuSource, gpuTimingTrusted, spanDevice } =
     await createRenderer(app, {
       forceWebGL: params.forceWebGL,
-      renderScale: QUALITY_PRESETS[params.quality].renderScale,
+      renderScale: QUALITY_PRESETS[startPreset.level].renderScale,
       frameSpan: params.gpuSpan,
     });
   probe.backend = backend;
@@ -229,7 +256,7 @@ async function main(): Promise<void> {
     texturesBytes: 0,
     buffersBytes: 0,
     renderScale: probe.renderScale,
-    quality: params.quality,
+    quality: startPreset.level,
   };
   const counters: RenderCounters = { drawCalls: 0, triangles: 0 };
 
@@ -253,18 +280,55 @@ async function main(): Promise<void> {
     updateViewport();
   };
 
+  // S-43: the scene's side of the quality (a scene that takes presets in place attaches itself through the port)
+  let attached: QualityScene | null = null;
+  /** The preset the current scene instance was made with (an in-place switch leaves it). */
+  let sceneLevel: QualityLevel = startPreset.level;
+  /** Set once the governor exists: the player's choice of quality (the settings). */
+  let requestQuality: ((choice: QualityChoice) => void) | null = null;
+  let pendingChoice: QualityChoice | null = null;
+  /**
+   * The port handed to the scene instance of `generation`: one made late (a quality switch overtook it, and it is
+   * disposed unseen) cannot attach over the live one.
+   */
+  const portFor = (generation: number): QualityPort => ({
+    get choice() {
+      return probe.qualityChoice;
+    },
+    get level() {
+      return probe.quality;
+    },
+    get sceneLevel() {
+      return sceneLevel;
+    },
+    request(choice) {
+      if (generation !== sceneGeneration) return;
+      if (requestQuality) requestQuality(choice);
+      else pendingChoice = choice;
+    },
+    attach(scene) {
+      if (generation !== sceneGeneration) return () => undefined;
+      attached = scene;
+      return () => {
+        if (attached === scene) attached = null;
+      };
+    },
+  });
+
   /** Creates (or recreates, for a quality switch) the scene with a whole preset. A late result is discarded. */
   const createScene = async (level: QualityLevel): Promise<void> => {
     const generation = ++sceneGeneration;
     if (sandbox) sandbox.dispose();
     overlay?.remove();
     sandbox = null;
+    attached = null;
     drawnRoots.clear();
     const nextOverlay = document.createElement('div');
     nextOverlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:5';
     document.body.appendChild(nextOverlay);
     overlay = nextOverlay;
-    const next = await mod.default({
+    // the scene contract (core/scene.ts) and the quality port beside it (S-43: core/quality.ts qualityPortOf)
+    const sceneContext: SceneContext & { qualityPort: QualityPort } = {
       renderer,
       backend,
       canvas: renderer.domElement,
@@ -272,13 +336,16 @@ async function main(): Promise<void> {
       quality: QUALITY_PRESETS[level],
       qualityLevel: level,
       params: params.raw,
-    });
+      qualityPort: portFor(generation),
+    };
+    const next = await mod.default(sceneContext);
     if (generation !== sceneGeneration) {
       next.dispose();
       nextOverlay.remove();
       return;
     }
     sandbox = next;
+    sceneLevel = level;
     probe.quality = level;
     probe.sceneInstances++;
     extras.quality = probe.qualityDecision ? `auto→${level}` : level;
@@ -322,19 +389,29 @@ async function main(): Promise<void> {
     };
   }
 
-  await createScene(params.quality);
+  await createScene(startPreset.level);
   window.addEventListener('resize', resize);
 
-  const governor = new PerfGovernor({
-    level: params.quality,
-    auto: params.autoQuality,
-    autoWindowSec: params.autoWindowSeconds,
-    dynres: params.dynres,
-    gpuTiming: gpuTimingTrusted || (params.gpuTrust && gpuTiming),
-    dynresTargetMs: params.dynresTargetMs ?? undefined,
-    dynresRequireResponse: params.dynresResponse,
-    forceLevel: params.autoForce ?? undefined,
-  });
+  const makeGovernor = (level: QualityLevel, auto: boolean): PerfGovernor =>
+    new PerfGovernor({
+      level,
+      auto,
+      autoWindowSec: params.autoWindowSeconds,
+      dynres: params.dynres,
+      gpuTiming: gpuTimingTrusted || (params.gpuTrust && gpuTiming),
+      dynresTargetMs: params.dynresTargetMs ?? undefined,
+      dynresRequireResponse: params.dynresResponse,
+      forceLevel: params.autoForce ?? undefined,
+    });
+  let governor = makeGovernor(startPreset.level, startPreset.auto);
+  /**
+   * Whose governor this is: the URL's ?quality=auto switches by making the scene again (M0's path, which the sensors of
+   * S-16 and S-18 use to see a scene let go); the player's (the settings, or 自動 kept from them) switches in place when
+   * the scene has attached, so that the game keeps its state (S-43).
+   */
+  let governorOrigin: 'url' | 'player' = startPreset.origin === 'url' ? 'url' : 'player';
+  /** Bumped with each new governor: GPU samples requested for an old one are dropped. */
+  let governorGeneration = 0;
 
   // GPU timing: sample every few frames, one readback in flight per source, only while something uses the value.
   // The frame span (WebGPU) feeds the governor and the overlay; three's per-pass sum is kept as a bench reference
@@ -347,15 +424,17 @@ async function main(): Promise<void> {
   let benchRecording = false;
   let gpuEpoch = 0;
   let spanEpoch = 0;
-  const feedGovernor = (ms: number, epoch: number): void => {
+  let gpuGeneration = 0;
+  let spanGeneration = 0;
+  const feedGovernor = (ms: number, epoch: number, generation: number): void => {
     extras.gpuMs = ms;
     probe.gpuMs = ms;
-    governor.gpu(ms, epoch);
+    if (generation === governorGeneration) governor.gpu(ms, epoch);
   };
   const onGpu = (ms: number | undefined): void => {
     passDrain.settled();
     if (typeof ms !== 'number' || ms <= 0) return;
-    if (gpuSource === 'passes') feedGovernor(ms, gpuEpoch);
+    if (gpuSource === 'passes') feedGovernor(ms, gpuEpoch, gpuGeneration);
     if (benchRecording) benchGpu.push(ms);
   };
   const onGpuFailed = (): void => {
@@ -363,12 +442,24 @@ async function main(): Promise<void> {
   };
   const onSpan = (ms: number | null): void => {
     if (ms === null) return;
-    feedGovernor(ms, spanEpoch);
+    feedGovernor(ms, spanEpoch, spanGeneration);
     if (benchRecording) benchSpan.push(ms);
   };
 
   let switching = false;
   const switchQuality = (level: QualityLevel): void => {
+    // S-43: the player's switch, to a scene that takes presets in place: the render scale now, the scene kept
+    const inPlace = governorOrigin === 'player' ? attached : null;
+    if (inPlace && sandbox) {
+      probe.qualityDecision = governor.decision;
+      probe.quality = level;
+      probe.qualitySwitchesInPlace++;
+      extras.quality = probe.qualityChoice === 'auto' ? `auto→${level}` : level;
+      applyScale(QUALITY_PRESETS[level].renderScale);
+      inPlace.applyQuality(level, QUALITY_PRESETS[level]);
+      governor.sceneReady();
+      return;
+    }
     switching = true;
     probe.qualityDecision = governor.decision;
     createSceneWithTimeout(level)
@@ -388,6 +479,22 @@ async function main(): Promise<void> {
       });
   };
 
+  // S-43: the player's choice (the settings): a new governor for it — a preset holds (dynamic resolution within it), 自動
+  // measures again from the preset in use — and the preset switched in place when the scene can take it
+  requestQuality = (choice: QualityChoice): void => {
+    const level = choice === 'auto' ? governor.level : choice;
+    probe.qualityChoice = choice;
+    probe.qualityDecision = null;
+    probe.qualityVerified = null;
+    governor = makeGovernor(level, choice === 'auto');
+    governorOrigin = 'player';
+    governorGeneration++;
+    if (level !== probe.quality) switchQuality(level);
+    else applyScale(QUALITY_PRESETS[level].renderScale);
+  };
+  if (pendingChoice) requestQuality(pendingChoice);
+  pendingChoice = null;
+
   const frameTimes: number[] = [];
   let maxDrawCalls = 0;
   let maxTriangles = 0;
@@ -406,13 +513,20 @@ async function main(): Promise<void> {
     if (switching || !current || probe.status === 'error') return;
 
     current.update(dt, t);
+    // S-43 (S-42's 提案4): while the scene's picture stands still (the pause holds it), its frames and their GPU time
+    // go to no governor: no new render scale while nothing moves
+    const idle = attached?.idle === true;
+    if (idle) probe.idleFrames++;
     const pollFrame = frameIndex++ % GPU_POLL_EVERY_FRAMES === 0;
-    const sampleGpu = pollFrame && (governor.gpuReliable || stats.visible || benchRecording);
+    const sampleGpu = pollFrame && !idle && (governor.gpuReliable || stats.visible || benchRecording);
     const wantPasses = gpuTiming && params.gpuPasses && (gpuSource === 'passes' || benchRecording);
     backendTiming.trackTimestamp = passDrain.beginFrame(wantPasses, renderer.info.render.calls);
     // The span brackets only the rendering: CPU work in update() is not GPU time.
     const timingSpan = sampleGpu && (spanTimer?.begin() ?? false);
-    if (timingSpan) spanEpoch = governor.epoch;
+    if (timingSpan) {
+      spanEpoch = governor.epoch;
+      spanGeneration = governorGeneration;
+    }
     const cpuStart = sampleGpu ? performance.now() : 0;
     if (current.render) current.render();
     else renderer.render(current.scene, current.camera);
@@ -429,6 +543,8 @@ async function main(): Promise<void> {
     // in use, and no frame writes any while it is in flight (uncapped, a readback outlasted 50+ frames, S-20).
     if (passDrain.endFrame(renderer.info.render.calls, pollFrame)) {
       gpuEpoch = governor.epoch;
+      // a reading of a still frame (the pause) is not the game's: its generation never matches (no governor gets it)
+      gpuGeneration = idle ? -1 : governorGeneration;
       renderer.resolveTimestampsAsync('render').then(onGpu, onGpuFailed);
       // After the call: three checks trackTimestamp when it is made (and warns if off), not later.
       backendTiming.trackTimestamp = passDrain.writing;
@@ -441,7 +557,7 @@ async function main(): Promise<void> {
     extras.gpuReliable = governor.gpuReliable;
     stats.tick(dt, counters, extras);
 
-    const action = governor.frame(dtMs);
+    const action = idle ? null : governor.frame(dtMs);
     probe.qualityVerified = governor.verified;
     probe.gpuReliable = governor.gpuReliable;
     probe.dynresStopped = governor.dynresStopReason;

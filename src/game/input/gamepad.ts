@@ -63,6 +63,31 @@ export interface LookDelta {
   pitch: number;
 }
 
+const NO_BUTTONS: ReadonlySet<string> = new Set();
+
+/**
+ * The codes of the buttons held on the first connected pad (none without one): the screens that read the pad themselves
+ * (the home, the pause, the settings) all read it this way. `previous` gives the triggers their hysteresis.
+ */
+export function readFirstPad(previous: ReadonlySet<string>): ReadonlySet<string> {
+  const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
+  return NO_BUTTONS;
+}
+
+/** 調整値 (S-03): radians per pixel of mouse movement — the settings' マウスの感度 ×1. */
+export const MOUSE_RADIANS_PER_PIXEL = 0.0022;
+/** 仮 (S-43, 設定 > 操作 > マウスの感度): how far the player may scale it. */
+export const MOUSE_SENSITIVITY_RANGE = { min: 0.25, max: 3 } as const;
+
+/** The mouse's radians per pixel for the settings' sensitivity (×, clamped to its range; ×1 if not a number). */
+export function mouseSensitivityFor(scale: number): number {
+  const s = Number.isFinite(scale)
+    ? Math.min(MOUSE_SENSITIVITY_RANGE.max, Math.max(MOUSE_SENSITIVITY_RANGE.min, scale))
+    : 1;
+  return MOUSE_RADIANS_PER_PIXEL * s;
+}
+
 /** Mouse movement in pixels → look delta. Moving right turns right, moving down looks down. */
 export function mouseLookDelta(dx: number, dy: number, sensitivity: number, invertY: boolean): LookDelta {
   return { yaw: -dx * sensitivity, pitch: (invertY ? dy : -dy) * sensitivity };

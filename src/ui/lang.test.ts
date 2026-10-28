@@ -30,6 +30,29 @@ describe('STRINGS', () => {
   });
 });
 
+describe('STRINGS: the settings (S-43)', () => {
+  it('names the tabs as in the design (タブは画質 / 操作 / 音 / 表示とアクセシビリティ)', () => {
+    expect([
+      STRINGS.ja.setTabGraphics,
+      STRINGS.ja.setTabControls,
+      STRINGS.ja.setTabSound,
+      STRINGS.ja.setTabDisplay,
+    ]).toEqual(['画質', '操作', '音', '表示とアクセシビリティ']);
+  });
+
+  it('puts 設定 among the pause’s items, and tells once that nothing can be kept', () => {
+    expect(STRINGS.ja.pauseSettings).toBe('設定');
+    expect(STRINGS.ja.setCannotSave).toBe('この環境では保存できません');
+  });
+
+  it('names the languages each in its own words, the same in both', () => {
+    for (const lang of ['ja', 'en'] as const) {
+      expect(STRINGS[lang].setLangJa).toBe('日本語');
+      expect(STRINGS[lang].setLangEn).toBe('English');
+    }
+  });
+});
+
 describe('STRINGS: the pause (S-42)', () => {
   it('names its items as in the design (画面ごとの設計: ポーズ — つづける / タイトルへ in this slice)', () => {
     expect([STRINGS.ja.pauseResume, STRINGS.ja.pauseTitle]).toEqual(['つづける', 'タイトルへ']);
