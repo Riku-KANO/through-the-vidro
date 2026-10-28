@@ -65,4 +65,6 @@ export interface WorldSettings {
   textScale: number;
   /** コントラスト強化: the world's own frosted labels (the prompts) denser, their edges brighter. */
   contrast: boolean;
+  /** The UI's typeface for that language (英語版: 細めのセリフ体), for the world's own words. */
+  fontFamily: string;
 }

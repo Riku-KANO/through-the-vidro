@@ -820,10 +820,12 @@ for (const backend of backends) {
     // the game's own frosted label (the prompt) follows the text size and the contrast too (720 p: 18 px × 1.2)
     const prompt = await page.locator('[data-ui="prompt"]').evaluate((p) => {
       const cs = getComputedStyle(p);
-      return { fontPx: Number.parseFloat(cs.fontSize), border: cs.borderTopWidth };
+      return { fontPx: Number.parseFloat(cs.fontSize), border: cs.borderTopWidth, font: cs.fontFamily };
     });
     expect(prompt.fontPx).toBeCloseTo(18 * 1.2, 0);
     expect(prompt.border).toBe('2px');
+    // and in English its typeface is the English one (英語版: 細めのセリフ体)
+    expect(prompt.font).toContain('Cormorant');
     // made at 高 and playing at 高: nothing waits for the next time
     expect((await shell(page)).quality).toBe('high');
     expect((await shell(page)).errors ?? []).toEqual([]);

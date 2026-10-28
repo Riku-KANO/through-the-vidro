@@ -3,7 +3,7 @@ import { loadBank } from '../../core/audio/bank';
 import { midiToHz } from '../../core/audio/scale';
 import type { QualityPort } from '../../core/quality';
 import type { DiveWorld } from '../../game/dive-world';
-import { padCodesPressed } from '../../game/input/gamepad';
+import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import type { Lang, StringKey } from '../lang';
 import {
@@ -253,7 +253,8 @@ export class SettingsHost {
       focus: this.focus,
       values: this.values,
       notice,
-      qualityLater: q !== null && q.level !== q.sceneLevel,
+      // (not under 自動: it is made at mid each time and measures again, so nothing of it waits for a next time)
+      qualityLater: q !== null && q.choice !== 'auto' && q.level !== q.sceneLevel,
     });
     if (this.focusPending && this.timeline.interactive) {
       this.focusPending = false;
@@ -438,9 +439,7 @@ export class SettingsHost {
   }
 
   private readPad(previous: ReadonlySet<string>): ReadonlySet<string> {
-    const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
-    return NO_BUTTONS;
+    return readFirstPad(previous);
   }
 
   /** The note of a focus: the tabs climb the scale from D5, the rows of a tab after them (as the home drops). */

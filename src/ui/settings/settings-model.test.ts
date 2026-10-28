@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { VIDRO_VOLUMES } from '../../audio/levels';
 import { MOUSE_RADIANS_PER_PIXEL } from '../../game/input/gamepad';
 import { FOV_DEFAULT, FOV_MAX, FOV_MIN } from '../../game/player/constants';
+import { FONT_STACK } from '../lang';
 import {
   defaultSettings,
   type Settings,
@@ -121,6 +122,8 @@ describe('worldSettingsOf (the world takes them in its own terms)', () => {
     expect(worldSettingsOf(ja).textScale).toBe(1);
     expect(worldSettingsOf({ ...ja, textSize: 'larger' }).textScale).toBe(TEXT_SCALE.larger);
     expect(worldSettingsOf({ ...ja, contrast: true }).contrast).toBe(true);
+    expect(worldSettingsOf({ ...ja, lang: 'en' }).fontFamily).toBe(FONT_STACK.en);
+    expect(worldSettingsOf(ja).fontFamily).toBe(FONT_STACK.ja);
   });
 
   it('turns the sensitivity (×) into radians per pixel of the mouse', () => {

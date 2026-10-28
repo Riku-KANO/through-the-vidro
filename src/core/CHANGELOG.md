@@ -24,7 +24,8 @@
   - `QUALITY_CHOICES`（自動・低・中・高）、`QualityChoice`、`isQualityChoice`
   - `startQuality({ url, saved })`: 殻が最初のプリセットを決める（URL の `?quality` が勝つ。なければプレイヤーの保存した選択、
     自動は中から測る。どちらもなければ中）
-  - `QualityPort`（`choice`・`level`・`request`・`attach`）と `QualityScene`（`applyQuality`・`idle`）、`qualityPortOf(ctx)`:
+  - `QualityPort`（`choice`・`level`・`sceneLevel`〈シーンを作ったときのプリセット。その場の切り替えの後は `level` と違い、
+    違う間はプリセットの一部が次に作るときまで待つ〉・`request`・`attach`）と `QualityScene`（`applyQuality`・`idle`）、`qualityPortOf(ctx)`:
     殻（main.ts）がシーンの文脈に `qualityPort` として渡す口。作り直さずにプリセットを受けられるシーンは `attach` し、遊ぶ途中の
     品質の切り替えで状態を失わない。`idle`（絵が止まっている: ポーズ）の間、殻は governor にフレームも GPU 時間も渡さない
 - 泡沫回廊へ写すとき: `SceneContext` に `qualityPort` を正式に足す（案1 は `core/scene.ts` を S-43 で変えられなかったので

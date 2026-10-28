@@ -63,6 +63,18 @@ export interface LookDelta {
   pitch: number;
 }
 
+const NO_BUTTONS: ReadonlySet<string> = new Set();
+
+/**
+ * The codes of the buttons held on the first connected pad (none without one): the screens that read the pad themselves
+ * (the home, the pause, the settings) all read it this way. `previous` gives the triggers their hysteresis.
+ */
+export function readFirstPad(previous: ReadonlySet<string>): ReadonlySet<string> {
+  const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
+  return NO_BUTTONS;
+}
+
 /** 調整値 (S-03): radians per pixel of mouse movement — the settings' マウスの感度 ×1. */
 export const MOUSE_RADIANS_PER_PIXEL = 0.0022;
 /** 仮 (S-43, 設定 > 操作 > マウスの感度): how far the player may scale it. */

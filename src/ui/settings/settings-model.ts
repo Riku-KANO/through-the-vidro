@@ -3,7 +3,7 @@ import { isQualityChoice, type QualityChoice } from '../../core/quality';
 import type { WorldSettings } from '../../game/dive-world';
 import { MOUSE_SENSITIVITY_RANGE, mouseSensitivityFor } from '../../game/input/gamepad';
 import { FOV_DEFAULT, FOV_MAX, FOV_MIN } from '../../game/player/constants';
-import type { Lang } from '../lang';
+import { FONT_STACK, type Lang } from '../lang';
 
 /**
  * The player's settings (S-43), pure data: what the panel shows and changes, what is kept in the browser, and how the
@@ -111,5 +111,6 @@ export function worldSettingsOf(s: Settings): WorldSettings {
     lang: s.lang,
     textScale: TEXT_SCALE[s.textSize],
     contrast: s.contrast,
+    fontFamily: FONT_STACK[s.lang],
   };
 }

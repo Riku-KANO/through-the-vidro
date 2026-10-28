@@ -8,7 +8,7 @@ import {
 } from '../../audio/pause';
 import { duckStage } from '../../core/audio/engine';
 import { midiToHz } from '../../core/audio/scale';
-import { padCodesPressed } from '../../game/input/gamepad';
+import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import { TRANSITIONS } from '../flow';
 import type { StringKey } from '../lang';
@@ -109,6 +109,8 @@ export class PauseHost {
   private readonly openSettings: (() => void) | null;
   /** The settings are open over the pause. */
   private yielded = false;
+  /** Closing straight from the settings (a second Esc / B): it stays stepped aside until it has cleared. */
+  private stepAsideOut = false;
   private menu: PauseMenu = MENU_START;
   private playing = false;
   private asked = false;
@@ -237,7 +239,9 @@ export class PauseHost {
     // the button that closed them (B) is held now: not a new press for the pause
     this.padHeld = this.readPad(this.padHeld);
     if (back) {
-      // Esc / B pressed again while the panel shrank: one more step back — the game
+      // Esc / B pressed again while the panel shrank: one more step back — the game. The pause stays stepped aside (its
+      // thin frost, no items) while it clears, so it does not flash back up on the way out
+      this.stepAsideOut = true;
       this.close();
       return;
     }
@@ -298,7 +302,8 @@ export class PauseHost {
     view.page = this.menu.page;
     view.focused = phase === 'closed' ? null : focusedItem(this.menu);
     view.interactive = this.timeline.interactive;
-    view.yielded = this.yielded;
+    if (phase === 'closed' || phase === 'opening') this.stepAsideOut = false;
+    view.yielded = this.yielded || this.stepAsideOut;
     this.screen.render(dt, view);
     if (this.focusPending && this.timeline.interactive && !this.yielded) {
       // after the render: the page's buttons are shown now
@@ -443,9 +448,7 @@ export class PauseHost {
 
   /** The buttons held on the first connected pad (src/game/input/gamepad.ts codes). */
   private readPad(previous: ReadonlySet<string>): ReadonlySet<string> {
-    const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const p of pads) if (p?.connected) return padCodesPressed(p.buttons, previous);
-    return NO_BUTTONS;
+    return readFirstPad(previous);
   }
 
   private ring(cue: PauseCue, opts: { rate?: number; gain?: number } = {}): void {

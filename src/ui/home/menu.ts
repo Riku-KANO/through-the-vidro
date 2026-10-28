@@ -146,15 +146,26 @@ export class HomeMenu {
 
   /** Moves the focus as an arrow key would (the pad's 十字, S-43). */
   moveFocus(key: string): void {
-    if (!this.interactive) return;
+    if (!this.interactive || this.refocus()) return;
     const next = nextFocus(this.focusIndex, key, this.drops.length);
     if (next !== this.focusIndex) this.drops[next]?.el.focus({ preventScroll: true });
   }
 
   /** Chooses the focused drop as a click would (the pad's A, S-43). */
   chooseFocused(): void {
-    if (!this.interactive) return;
+    if (!this.interactive || this.refocus()) return;
     this.drops[this.focusIndex]?.el.click();
+  }
+
+  /**
+   * The drop last focused lost the browser's focus (a click elsewhere): the pad's press first lights it again (with its
+   * sound) instead of moving or choosing what is not lit. Returns whether it did.
+   */
+  private refocus(): boolean {
+    const d = this.drops[this.focusIndex];
+    if (!d || document.activeElement === d.el) return false;
+    d.el.focus({ preventScroll: true });
+    return true;
   }
 
   focusItem(item: HomeItem): void {

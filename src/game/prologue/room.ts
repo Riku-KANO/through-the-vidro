@@ -1877,6 +1877,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       text = STRINGS[s.lang];
       // the prompt's frosted label follows the UI's text size and contrast (アクセシビリティ)
       prompt.style.fontSize = `calc(max(18px, 1.85vh) * ${s.textScale})`;
+      prompt.style.fontFamily = s.fontFamily;
       prompt.style.background = s.contrast ? 'rgba(16,22,30,.62)' : 'rgba(255,255,255,.14)';
       prompt.style.border = s.contrast
         ? '2px solid rgba(255,255,255,.82)'
