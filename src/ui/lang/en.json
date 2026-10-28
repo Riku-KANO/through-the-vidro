@@ -57,7 +57,7 @@
   "setReduceFlashes": "Reduce flashing",
   "setSimpleTransitions": "Simple transitions",
   "keysTitle": "Key bindings",
-  "keysHint": "Enter / A to choose, then press the new key · Esc / B to go back",
+  "keysHint": "Enter / A to choose, then press the new key\nEsc / B to go back",
   "keysColKey": "Key",
   "keysColKey2": "Alt key",
   "keysColPad": "Pad",

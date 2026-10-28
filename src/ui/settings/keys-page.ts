@@ -230,8 +230,9 @@ export class KeysPage {
     for (const cell of this.cells) cell.el.classList.toggle('is-focus', cell.el === focusEl);
     // 「キーを押してください」 over the list while a cell waits, naming the action, and how to give it up
     const w = view.waiting;
+    const ask = w ? this.t(w.device === 'gamepad' ? 'keysWaitPad' : 'keysWaitKey') : '';
     const hint = w
-      ? `${this.t(w.device === 'gamepad' ? 'keysWaitPad' : 'keysWaitKey').replace('{action}', this.t(ACTION_KEY[w.action]))}　${this.t('keysWaitNote')}`
+      ? `${ask.replace('{action}', this.t(ACTION_KEY[w.action]))}\n${this.t('keysWaitNote')}`
       : this.t('keysHint');
     if (this.hint.textContent !== hint) this.hint.textContent = hint;
     this.hint.classList.toggle('is-waiting', w !== null);
@@ -253,12 +254,21 @@ export class KeysPage {
 
   /** ホバーすると膨らんで鳴る: the tag swells while the pointer is on it, and rings once the page takes commands. */
   private hoverable(el: HTMLElement, at: KeysFocus, events: KeysPageEvents): void {
-    el.addEventListener('pointerenter', () => {
+    // the pointer's own moves only (a page shown under a resting pointer neither swells nor rings: as the panel's hover)
+    el.addEventListener('pointermove', (e) => {
+      if (el.classList.contains('is-hover') || (e.clientX === this.pointerX && e.clientY === this.pointerY))
+        return;
+      this.pointerX = e.clientX;
+      this.pointerY = e.clientY;
       el.classList.add('is-hover');
       if (this.enabled) events.onHover(at);
     });
     el.addEventListener('pointerleave', () => el.classList.remove('is-hover'));
   }
+
+  /** Where the pointer last moved over the page. */
+  private pointerX = Number.NaN;
+  private pointerY = Number.NaN;
 
   private setEnabled(on: boolean): void {
     if (on === this.enabled) return;

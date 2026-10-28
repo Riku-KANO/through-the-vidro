@@ -450,6 +450,9 @@ for (const backend of backends) {
     expect(Math.abs((box?.x ?? 0) + (box?.width ?? 0) / 2 - W / 2)).toBeLessThan(2);
     expect(Math.abs((box?.y ?? 0) + (box?.height ?? 0) / 2 - H / 2)).toBeLessThan(2);
     expect(box?.width ?? 99).toBeLessThan(14);
+    // (it comes in over 0.15 s)
+    await page.waitForTimeout(400);
+    expect(Number(await dot.evaluate((d) => getComputedStyle(d).opacity))).toBeGreaterThan(0.8);
     await page.screenshot({ path: join(shotDir, 'reticle.png') });
     const still = await walkSampling(page, -1.2, -1.9, 1200);
     expect(still.length).toBeGreaterThan(10);

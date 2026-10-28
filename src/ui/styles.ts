@@ -257,7 +257,8 @@ const CSS = `
 .vd-settings button.vd-settings__open { margin-left: auto; }
 .vd-keys { gap: 0.3em; }
 .vd-keys__title { margin: 0; letter-spacing: 0.12em; }
-.vd-keys__hint { margin: 0 0 0.2em; opacity: 0.8; line-height: 1.35; }
+/* two lines always (how to use it, or what it waits for; how to go back): the pane does not jump while a cell waits */
+.vd-keys__hint { margin: 0 0 0.2em; min-height: 2.7em; opacity: 0.8; line-height: 1.35; white-space: pre-line; }
 .vd-keys__hint.is-waiting { opacity: 1; color: #fff6e6; }
 .vd-keys__list { display: flex; flex-direction: column; gap: 0.14em; max-height: calc(100vh - 12.5em); overflow-y: auto;
   overscroll-behavior: contain; padding: 0.15em 0.2em; scrollbar-width: thin; }

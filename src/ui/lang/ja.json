@@ -57,7 +57,7 @@
   "setReduceFlashes": "点滅を抑える",
   "setSimpleTransitions": "簡易トランジション",
   "keysTitle": "キーの割り当て",
-  "keysHint": "Enter・A で選んで、割り当てるキーを押す　Esc・B で戻る",
+  "keysHint": "Enter・A で選んで、割り当てるキーを押す\nEsc・B で戻る",
   "keysColKey": "キー",
   "keysColKey2": "キー（副）",
   "keysColPad": "パッド",
