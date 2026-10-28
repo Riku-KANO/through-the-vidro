@@ -714,9 +714,30 @@ describe('S-40: 部屋3「煙突の見晴らし」 — a valley between the roof
           expect(hidden(e, lamp), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
           expect(shaded(e, lamp, true), `${lamp} from (${x.toFixed(1)}, ${z})`).toEqual([]);
         }
-      // they stand at the railing's ends, against its walls, over the walls' tops
-      expect(Math.abs(lamp[0] - f.minX)).toBeLessThan(0.3);
+      // over the walls' tops, on the lookout
       expect(lamp[1] - ROOM3_RAILING.box.max[1]).toBeGreaterThan(0.5);
+      expect(lamp[0] >= f.minX && lamp[0] <= f.maxX && lamp[2] >= f.minZ && lamp[2] <= f.maxZ).toBe(true);
+    }
+    // one at the railing's end (its edge over the valley), one at its way in
+    const [edgeLamp, wayLamp] = ROOM3_LOOKOUT.lamps as [Vec3, Vec3];
+    expect(Math.abs(edgeLamp[0] - f.minX)).toBeLessThan(0.3);
+    expect(Math.abs(wayLamp[0] - f.maxX)).toBeLessThan(0.3);
+    // and no post of them stands where one looks from it toward the drop (its posts, in plan, 0.2 m clear of every line from
+    // where the drop is seen peeking)
+    const drop = ROOM3_DROP.at;
+    for (const [x, z] of summitGrid()) {
+      if (!onLookout(x, z)) continue;
+      const eye: Vec3 = [x, SUMMIT_Y + EYE_HEIGHT, z];
+      if (hidden(eye, drop).length > 0 || shaded(eye, drop, false).length > 0) continue;
+      for (const lamp of ROOM3_LOOKOUT.lamps) {
+        const [dx, dz] = [drop[0] - x, drop[2] - z];
+        const t = Math.max(0, Math.min(1, ((lamp[0] - x) * dx + (lamp[2] - z) * dz) / (dx * dx + dz * dz)));
+        const off = Math.hypot(x + t * dx - lamp[0], z + t * dz - lamp[2]);
+        expect(
+          off,
+          `lamp at (${lamp[0]}, ${lamp[2]}) from (${x.toFixed(1)}, ${z.toFixed(1)})`,
+        ).toBeGreaterThan(0.2);
+      }
     }
     // the motes of 部屋2's drop drift from the second flight to it
     const [mx, mz] = motePathAt(MOTE_PATHS[2] as MotePath, 1);
