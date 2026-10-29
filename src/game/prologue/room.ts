@@ -1913,6 +1913,8 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     },
     applyQuality(preset) {
       pipeline.setQuality(preset);
+      // S-45: the bloom as the settings left it, read again after the switch (sensor)
+      probe.access.bloom = pipeline.bloomStrength;
     },
     eyePose(outPos, outTarget, outFog) {
       const e = player.eye;

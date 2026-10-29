@@ -147,7 +147,7 @@ const waitRoom = (page: Page, fn: string, timeout = 10_000) =>
   waitProbe(page, `p.room && (() => { const r = p.room; return ${fn}; })()`, timeout);
 
 async function toHome(page: Page, query: string): Promise<void> {
-  await page.goto(`/?scene=prologue-proto${query}`);
+  await page.goto(`/?scene=prologue-proto&quality=mid${query}`);
   await waitProbe(page, 'p.load.ready === true', 90_000);
   await page.locator('[data-ui="loading-start"]').click();
   await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);

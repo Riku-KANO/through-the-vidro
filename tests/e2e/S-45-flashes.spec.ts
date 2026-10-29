@@ -88,7 +88,7 @@ async function play(
   await page.addInitScript((on) => {
     window.localStorage.setItem('vidro.settings', JSON.stringify({ v: 1, settings: { reduceFlashes: on } }));
   }, calm);
-  await page.goto(`/?scene=prologue-proto&autoplay=1${webgl}`);
+  await page.goto(`/?scene=prologue-proto&autoplay=1&quality=mid${webgl}`);
   const shots: { r: RoomProbe; jpeg: Buffer }[] = [];
   const end = Date.now() + 150_000;
   for (;;) {

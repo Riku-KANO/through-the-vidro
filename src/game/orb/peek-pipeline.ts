@@ -273,6 +273,9 @@ export class PeekPipeline {
     this.pipeline = next;
     this.quality.antialias = preset.antialias;
     this.shrinkUnusedAA();
+    // S-45: the player's settings again on what the preset left (the bloom lives in `grade`, kept across the switch; this
+    // keeps 点滅を抑える's quieter bloom should a later preset make the finishing again)
+    if (this.access) this.setAccess(this.access);
   }
 
   /**
@@ -288,7 +291,10 @@ export class PeekPipeline {
     return this.size;
   }
 
-  /** S-45: the finishing's bloom (its strength is a uniform), when the finishing has one. */
+  /**
+   * S-45: the finishing's bloom (its strength is a uniform), when the finishing has one. S-48: it is the bloom inside `grade`
+   * (made once; the anti-aliasing pipelines only read the display image).
+   */
   private bloomNode: ReturnType<typeof bloom> | null = null;
   /** S-45: the player's settings the frame took last (null: none yet). */
   access: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number } | null = null;

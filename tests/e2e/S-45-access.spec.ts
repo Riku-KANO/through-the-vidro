@@ -42,7 +42,8 @@ interface RoomProbe {
   handPresence: number;
   drawCalls: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
-  access: { headBob: number; distortion: number; calm: boolean; contrast: boolean };
+  access: { headBob: number; distortion: number; calm: boolean; contrast: boolean; bloom: number | null };
+  peekQuality: { antialias: string };
 }
 interface Fade {
   source: string;
@@ -154,7 +155,7 @@ const waitRoom = (page: Page, fn: string, timeout = 10_000) =>
   waitProbe(page, `p.room && (() => { const r = p.room; return ${fn}; })()`, timeout);
 
 async function toHome(page: Page, query: string): Promise<void> {
-  await page.goto(`/?scene=prologue-proto${query}`);
+  await page.goto(`/?scene=prologue-proto&quality=mid${query}`);
   await waitProbe(page, 'p.load.ready === true', 90_000);
   await page.locator('[data-ui="loading-start"]').click();
   await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
@@ -532,6 +533,57 @@ for (const backend of backends) {
     expect(errors).toEqual([]);
   });
 
+  test(`S-45 点滅を抑える keeps the bloom quiet across a switch of quality in play (S-48) [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const errors = collectErrors(page);
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'vidro.settings',
+        JSON.stringify({ v: 1, settings: { reduceFlashes: true } }),
+      );
+    });
+    await playThroughHome(page, `&dynres=0${webgl}`);
+    const r0 = await room(page);
+    expect(r0.access.calm).toBe(true);
+    const calmBloom = r0.access.bloom ?? 0;
+    expect(calmBloom).toBeGreaterThan(0);
+    /** From play: the pause, its 設定, the 画質 tab, the preset `level` (S-48: taken in place), back in play. */
+    const switchTo = async (level: 'low' | 'mid' | 'high'): Promise<number | null> => {
+      await page.evaluate(() => (window.__vidro.sceneProbe as { pause: { ask(): void } }).pause.ask());
+      await waitPause(page, "q.phase === 'open'");
+      await page.locator('[data-pause-item="settings"]').click();
+      await waitSettings(page, "q.phase === 'open' && q.from === 'pause'");
+      await page.locator('[data-ui="settings"] button[data-tab="graphics"]').click();
+      await page.locator(`[data-ui="settings"] [data-row="quality"][data-option="${level}"]`).click();
+      await page.waitForFunction((l) => (window.__vidro as { quality?: string }).quality === l, level);
+      // the preset's own anti-aliasing at the end of the finishing (low FXAA; mid and high SMAA)
+      await waitRoom(page, `r.peekQuality.antialias === '${level === 'low' ? 'fxaa' : 'smaa'}'`);
+      const bloom = (await room(page)).access.bloom;
+      await backToPlay(page);
+      return bloom;
+    };
+    // 点滅を抑える on: the bloom stays as quiet at 低 and at 高 (the finishing's anti-aliasing switched under it)
+    for (const level of ['low', 'high'] as const) {
+      expect(await switchTo(level), `点滅を抑える at ${level}`).toBeCloseTo(calmBloom, 6);
+      await page.waitForTimeout(300);
+      expect((await room(page)).access.bloom, `in play at ${level}`).toBeCloseTo(calmBloom, 6);
+    }
+    // turned off: the full bloom, kept across another switch
+    await displayRow(page, 2);
+    await waitSettings(page, "q.row === 'contrast'");
+    for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowDown');
+    await waitSettings(page, "q.row === 'reduceFlashes'");
+    await page.keyboard.press('ArrowLeft');
+    await waitSettings(page, 'q.values.reduceFlashes === false');
+    await backToPlay(page);
+    const full = (await room(page)).access.bloom ?? 0;
+    expect(full).toBeGreaterThan(calmBloom * 1.5);
+    expect(await switchTo('mid'), 'off, at mid').toBeCloseTo(full, 6);
+    expect(errors).toEqual([]);
+  });
+
   test(`S-45 簡易トランジション: every transition a white fade of 0.3 s, never black [${backend}]`, async ({
     page,
   }) => {
@@ -544,7 +596,7 @@ for (const backend of backends) {
         JSON.stringify({ v: 1, settings: { simpleTransitions: true } }),
       );
     });
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
     await waitProbe(page, 'p.load.ready === true', 90_000);
     expect((await access(page)).simple).toBe(true);
     const seconds = (f: Fade | undefined): number => ((f?.end ?? 0) - (f?.start ?? 0)) / 1000;
@@ -700,7 +752,7 @@ for (const backend of backends) {
         JSON.stringify({ v: 1, settings: { simpleTransitions: true, reduceFlashes: true } }),
       );
     });
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
     await waitProbe(page, 'p.load.ready === true', 90_000);
     await page.locator('[data-ui="loading-start"]').click();
     await waitProbe(page, "p.screen === 'home' && p.transition === null", 10_000);
