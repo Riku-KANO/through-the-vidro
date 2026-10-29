@@ -301,7 +301,7 @@ for (const backend of backends) {
     const writeTrace = () =>
       writeFileSync(join(outDir, `landing-${backend}.json`), JSON.stringify(trace, null, 2));
     try {
-      await page.goto(`/?scene=prologue-proto&debug=1${webgl}`);
+      await page.goto(`/?scene=prologue-proto&quality=mid&debug=1${webgl}`);
       const waitHome = async (fn: string, timeout: number) => {
         const end = Date.now() + timeout;
         for (;;) {

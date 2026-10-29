@@ -220,7 +220,7 @@ for (const backend of backends) {
     mkdirSync(join(root, 'artifacts/S-18'), { recursive: true });
     const errors = collectErrors(page);
     await countContexts(page);
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
     await waitHome(page, 'p.load.ready === true', 90_000);
     expect(await contexts(page), 'nothing before any gesture').toEqual([]);
     // a click elsewhere on the loading screen is a gesture, but not the press: still nothing
@@ -335,7 +335,7 @@ for (const backend of backends) {
     test.setTimeout(120_000);
     const errors = collectErrors(page);
     await countContexts(page);
-    await page.goto(`/?scene=home-dive${webgl}`);
+    await page.goto(`/?scene=home-dive&quality=mid${webgl}`);
     await waitHome(page, 'p.load.ready === true', 60_000);
     const startDrop = page.locator('[data-ui="loading-start"]');
     await expect(startDrop).toBeFocused({ timeout: 10_000 });

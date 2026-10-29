@@ -1,4 +1,4 @@
-import { isQualityChoice, type QualityChoice } from '../../core/quality';
+import { isQualityChoice, isQualityLevel, type QualityChoice, type QualityLevel } from '../../core/quality';
 import { type Settings, sanitizeSettings } from './settings-model';
 
 /**
@@ -82,6 +82,39 @@ export function readSavedQuality(source: StorageSource): QualityChoice | null {
   const { raw } = readRaw(source);
   const q = (raw as { quality?: unknown } | undefined)?.quality;
   return isQualityChoice(q) ? q : null;
+}
+
+/**
+ * S-48: the preset 自動 picked, kept by the shell for the next visit to be built from (選ばれたプリセットを保存し、次に開いた
+ * ときはそのプリセットで作る). Under a key of its own: the shell writes it when 自動 has measured, the settings panel writes
+ * the settings when the player changes one, and neither write may wipe the other's.
+ */
+export const AUTO_PICK_KEY = 'vidro.autoQuality';
+
+/** 自動's pick from an earlier visit, or null (none, unreadable, broken, of another version). */
+export function readAutoPick(source: StorageSource): QualityLevel | null {
+  const storage = storageOf(source);
+  if (!storage) return null;
+  try {
+    const text = storage.getItem(AUTO_PICK_KEY);
+    if (text === null) return null;
+    const parsed = JSON.parse(text) as { v?: unknown; level?: unknown } | null;
+    return parsed?.v === VERSION && isQualityLevel(parsed.level) ? parsed.level : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps 自動's pick; false where the browser would not (遊べる all the same). */
+export function writeAutoPick(source: StorageSource, level: QualityLevel): boolean {
+  const storage = storageOf(source);
+  if (!storage) return false;
+  try {
+    storage.setItem(AUTO_PICK_KEY, JSON.stringify({ v: VERSION, level }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** What one save did, and whether the player should be told now that nothing can be kept (the first failure only). */

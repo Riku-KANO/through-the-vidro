@@ -6,6 +6,7 @@ import type { DiveWorld } from '../../game/dive-world';
 import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import type { Lang, StringKey } from '../lang';
+import { type QualityRowView, qualityRowView } from './quality-row';
 import {
   CONTROLS,
   keyCommand,
@@ -111,6 +112,9 @@ const TICK_HZ = midiToHz(74);
 const PANE_NOTES = { low: 3, high: 5, gapMs: 70 } as const;
 
 type Cue = 'open' | 'close' | 'tick';
+
+/** S-48: the 品質 row while the panel is down (nothing of it is drawn). */
+const QUALITY_ROW_HIDDEN: QualityRowView = { autoLevel: null, later: false };
 
 export class SettingsHost {
   readonly probe: SettingsProbe;
@@ -246,15 +250,17 @@ export class SettingsHost {
     this.noticeLeft = Math.max(0, this.noticeLeft - dt);
     const shown = NOTICE_SECONDS - this.noticeLeft;
     const notice = this.noticeLeft <= 0 ? 0 : Math.min(1, shown / NOTICE_FADE, this.noticeLeft / NOTICE_FADE);
-    const q = this.opts.quality;
+    // S-48: 自動's tag carries the preset in use; the line under 品質 only while the shadows and the glass wait (自動 too:
+    // its pick is kept, and the next visit is built from it)
+    const quality = this.isUp ? qualityRowView(this.opts.quality) : QUALITY_ROW_HIDDEN;
     this.panel.render(dt, {
       open: this.timeline.value,
       interactive: this.timeline.interactive,
       focus: this.focus,
       values: this.values,
       notice,
-      // (not under 自動: it is made at mid each time and measures again, so nothing of it waits for a next time)
-      qualityLater: q !== null && q.choice !== 'auto' && q.level !== q.sceneLevel,
+      qualityLater: quality.later,
+      autoLevel: quality.autoLevel,
     });
     if (this.focusPending && this.timeline.interactive) {
       this.focusPending = false;
@@ -396,7 +402,7 @@ export class SettingsHost {
   private keep(next: Settings, row: SettingsRow | null): void {
     this.unsaved = false;
     const store = this.opts.store;
-    // the quality is kept only once chosen here (until then the shell's: the URL's, or mid)
+    // the quality is kept only once chosen here (until then the shell's: the URL's, or 自動 — S-48)
     const quality = row === 'quality' ? next.quality : store.settings.quality;
     const r = store.save({ ...next, quality });
     if (r.saved) this.probe.saves.kept++;

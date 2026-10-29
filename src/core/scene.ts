@@ -1,5 +1,5 @@
 import type * as THREE from 'three/webgpu';
-import type { QualityLevel, QualityPreset } from './quality';
+import type { QualityLevel, QualityPort, QualityPreset } from './quality';
 import type { Backend } from './renderer';
 
 /**
@@ -14,6 +14,12 @@ export interface SceneContext {
   overlay: HTMLElement;
   quality: QualityPreset;
   qualityLevel: QualityLevel;
+  /**
+   * The shell's quality (S-43, made part of the contract in S-48): what is chosen and in use, the player's requests, and
+   * the port a scene that takes another preset in place attaches to (`QualityPort.attach`). A scene that does not attach is
+   * made again for another preset, with that preset on its context.
+   */
+  qualityPort: QualityPort;
   /** Raw URL params so a scene can read its own debug switches. */
   params: URLSearchParams;
 }

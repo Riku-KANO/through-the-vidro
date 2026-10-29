@@ -231,7 +231,7 @@ const escAt = (page: Page): Promise<number | null> =>
 
 /** Loading → 「はじめる」 → the home → 「はじめる」 → landed and playing. */
 async function playThroughHome(page: Page, query: string): Promise<void> {
-  await page.goto(`/?scene=prologue-proto${query}`);
+  await page.goto(`/?scene=prologue-proto&quality=mid${query}`);
   await waitProbe(page, 'p.load.ready === true', 90_000);
   await page.locator('[data-ui="loading-start"]').click();
   await waitProbe(page, "p.screen === 'home' && p.transition === null", 30_000);
@@ -609,7 +609,7 @@ for (const backend of backends) {
     test.setTimeout(300_000);
     mkdirSync(join(root, 'artifacts/S-42'), { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto&autoplay=1&debug=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid&autoplay=1&debug=1${webgl}`);
     // the moment the light starts across the bridge, ask for the pause as the input would (the autopilot holds it)
     await page.waitForFunction(
       () => {
