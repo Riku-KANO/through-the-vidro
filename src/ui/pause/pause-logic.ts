@@ -1,5 +1,12 @@
 import { glassEase, segment } from '../../core/transition';
-import { fadeArrived, fadeStep, fadeWhite, SIMPLE_FADE_SECONDS } from '../settings/fade';
+import {
+  FadeCourse,
+  type FlashGate,
+  fadeArrived,
+  fadeWhite,
+  gatedStep,
+  SIMPLE_FADE_SECONDS,
+} from '../settings/fade';
 
 /**
  * The pause screen's rules (S-42), pure: no DOM, no GPU, no sound. src/ui/pause/pause-host.ts plays them.
@@ -51,6 +58,14 @@ export class PauseTimeline {
    */
   private simpleValue = false;
   private fadeU = 0;
+  /**
+   * S-45 (発案者の判断 2026-10-29): the simple fade's length (0.5 s with 点滅を抑える as well) and the page's gate of full whites
+   * (settings/fade.ts FlashGate).
+   */
+  fadeSeconds = SIMPLE_FADE_SECONDS;
+  gate: FlashGate | null = null;
+  /** (Esc during the fade turns it back: a top of its white, through the gate as well.) */
+  private readonly course = new FadeCourse();
 
   get phase(): PausePhase {
     return this.phaseValue;
@@ -74,7 +89,11 @@ export class PauseTimeline {
   }
 
   get frost(): number {
-    if (this.simpleValue) return fadeArrived(this.fadeU) && this.fadeU > 0 ? 1 : 0;
+    if (this.simpleValue) {
+      // (at the full white itself, the side it heads to: the cut is under the white both ways)
+      const opening = this.phaseValue === 'opening' || this.phaseValue === 'open';
+      return fadeArrived(this.fadeU, opening) && this.fadeU > 0 ? 1 : 0;
+    }
     return glassEase(this.frostTime / PAUSE_SECONDS.stop);
   }
 
@@ -163,13 +182,16 @@ export class PauseTimeline {
     }
   }
 
-  /** S-45: the simple fade's time, on and back (the same 0.3 s both ways: a fade has no slow stop of its own). */
+  /**
+   * S-45: the simple fade's time, on and back (the same length both ways: a fade has no slow stop of its own); its full white
+   * through the page's gate.
+   */
   private updateFade(dt: number): void {
-    const step = dt / SIMPLE_FADE_SECONDS;
+    const step = dt / this.fadeSeconds;
     switch (this.phaseValue) {
       case 'opening':
       case 'open':
-        this.fadeU = fadeStep(this.fadeU, step);
+        this.fadeU = gatedStep(this.fadeU, step, this.gate, this.course);
         if (this.phaseValue === 'opening' && this.fadeU >= 1 - EPSILON) {
           this.fadeU = 1;
           this.phaseValue = 'open';
@@ -177,7 +199,7 @@ export class PauseTimeline {
         break;
       case 'closing':
       case 'leaving':
-        this.fadeU = fadeStep(this.fadeU, -step);
+        this.fadeU = gatedStep(this.fadeU, -step, this.gate, this.course);
         if (this.fadeU <= EPSILON) {
           this.fadeU = 0;
           this.frostTime = 0;
@@ -194,7 +216,7 @@ export class PauseTimeline {
   holdAt(seconds: number): void {
     if (this.phaseValue !== 'opening') return;
     if (this.simpleValue) {
-      this.fadeU = Math.min(1, Math.max(0, seconds / SIMPLE_FADE_SECONDS));
+      this.fadeU = Math.min(1, Math.max(0, seconds / this.fadeSeconds));
       return;
     }
     const s = Math.min(PAUSE_SECONDS.stop + PAUSE_SECONDS.write, Math.max(0, seconds));

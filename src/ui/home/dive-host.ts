@@ -15,7 +15,15 @@ import { LoadingScreen } from '../loading-screen';
 import { PauseHost } from '../pause/pause-host';
 import { pausableOf } from '../pause/port';
 import type { HomeDiveProbe, PhaseName, PhaseStats } from '../probe';
-import { fadeArrived, fadeStep, fadeWhite, simpleSpeed } from '../settings/fade';
+import {
+  FadeCourse,
+  FlashGate,
+  fadeArrived,
+  fadeSecondsFor,
+  fadeWhite,
+  gatedStep,
+  simpleSpeed,
+} from '../settings/fade';
 import { SettingsHost } from '../settings/settings-host';
 import { defaultSettings } from '../settings/settings-model';
 import { browserStorage, SettingsStore } from '../settings/settings-store';
@@ -134,6 +142,10 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         return pause?.still ?? false;
       },
     }) ?? null;
+  // S-45: the page's one gate of full whites (簡易トランジション with 点滅を抑える: no more than 3 a second)
+  const flashGate = new FlashGate();
+  // (the screens' fade turned back by Esc: a top of its white, through the gate as well)
+  const flowCourse = new FadeCourse();
   // S-43: 設定, from the home's drop and the pause's item, over the picture behind
   const settings = new SettingsHost({
     root: ui.root,
@@ -152,6 +164,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     },
     onLayout: () => menu.invalidate(),
     onPicture: () => pause?.redraw(),
+    flashGate,
     onClosed: (from, back) => {
       // (from the home, a second Esc has nowhere further back to go)
       if (from === 'pause') pause?.settingsClosed(back);
@@ -434,14 +447,25 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       // S-45 簡易トランジション (kept: the loading's from the setting kept before the page opened): the screens' transitions
       // run on their own clock that much faster, to last the white fade of 0.3 s; the access probe's hold stands one there
       const simple = settings.current.simpleTransitions;
-      if (pause) pause.simple = simple;
+      // 発案者の判断 (2026-10-29): with 点滅を抑える as well, every fade is 0.5 s and the tops of its white (its full white, and
+      // where Esc turns it back) pass the page's one gate (no more than 3 a second, however the keys are pressed)
+      const fade = fadeSecondsFor(settings.current.reduceFlashes);
+      flashGate.enabled = simple && settings.current.reduceFlashes;
+      flashGate.tick(dt);
+      if (pause) {
+        pause.simple = simple;
+        pause.setFade(fade, flashGate);
+      }
       let flowDt = feed(dt);
       const running = flow.transition;
       if (simple && running && running.spec.seconds > 0) {
         const s = running.spec.seconds;
         // (landing on the fade's middle for a frame when it would step over it: the screen is all white there)
         const u = running.elapsed / s;
-        flowDt = Math.abs(fadeStep(u, (running.direction * flowDt * simpleSpeed(s)) / s) - u) * s;
+        flowDt =
+          Math.abs(
+            gatedStep(u, (running.direction * flowDt * simpleSpeed(s, fade)) / s, flashGate, flowCourse) - u,
+          ) * s;
         const hold = access.probe.hold;
         if (hold !== null && running.direction === 1)
           flowDt = Math.max(0, Math.min(flowDt, hold * s - running.elapsed));
@@ -466,7 +490,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       // where each transition stands (S-45: under the simple fade, where it came from until the white is full, then where it
       // goes — the dive's flight and the opening's clearing are not played)
       const at = (t: NonNullable<typeof tr>): number =>
-        simple ? (fadeArrived(t.progress) && t.progress > 0 ? 1 : 0) : t.value;
+        simple ? (fadeArrived(t.progress, t.direction === 1) && t.progress > 0 ? 1 : 0) : t.value;
       const openingP =
         tr?.spec.id === TRANSITIONS.loadingToHome.id ? at(tr) : flow.screen === 'loading' ? 0 : 1;
       const diveP = tr?.spec.id === TRANSITIONS.homeToGame.id ? at(tr) : flow.screen === 'game' ? 1 : 0;

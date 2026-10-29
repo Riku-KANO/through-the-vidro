@@ -7,6 +7,7 @@ import { assignBinding, cloneBindings, DEFAULT_BINDINGS } from '../../game/input
 import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import type { Lang, StringKey } from '../lang';
+import { type FlashGate, fadeSecondsFor } from './fade';
 import {
   type Capture,
   captureKey,
@@ -122,6 +123,8 @@ export interface SettingsHostOptions {
    * more step back there (from the pause: back to the game).
    */
   onClosed(from: SettingsFrom, back: boolean): void;
+  /** S-45 (発案者の判断 2026-10-29): the page's gate of full whites (src/ui/settings/fade.ts), shared with the other fades. */
+  flashGate?: FlashGate;
 }
 
 const MAX_SOUNDS = 40;
@@ -310,6 +313,9 @@ export class SettingsHost {
     const was = this.timeline.phase;
     // S-45 簡易トランジション: the pane comes and goes as a white fade (the same 0.3 s)
     this.timeline.simple = this.values.simpleTransitions;
+    // (0.5 s with 点滅を抑える as well, its full white through the page's gate: 発案者の判断 2026-10-29)
+    this.timeline.fadeSeconds = fadeSecondsFor(this.values.reduceFlashes);
+    this.timeline.gate = this.opts.flashGate ?? null;
     // the pad only while the panel is up (open() read which buttons were held already)
     if (this.isUp) this.pollPad();
     const hold = this.probe.hold;

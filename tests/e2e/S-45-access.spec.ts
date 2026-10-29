@@ -57,6 +57,8 @@ interface AccessProbe {
   simple: boolean;
   fades: Fade[];
   hold: number | null;
+  peaks: number[];
+  tops: number[];
 }
 interface SettingsProbe {
   phase: string;
@@ -683,6 +685,98 @@ for (const backend of backends) {
       join(root, `artifacts/S-45/fades-${backend}.json`),
       JSON.stringify({ backend, fades, errors }, null, 2),
     );
+    expect(errors).toEqual([]);
+  });
+
+  test(`S-45 簡易トランジション with 点滅を抑える: 0.5 s fades, Esc mashed, never more than 3 full whites a second [${backend}]`, async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const errors = collectErrors(page);
+    // 発案者の判断 2026-10-29 (判断待ち 3): both on — the white fade is longer, and its full white comes at most 3 times a second
+    await page.addInitScript(() => {
+      window.localStorage.setItem(
+        'vidro.settings',
+        JSON.stringify({ v: 1, settings: { simpleTransitions: true, reduceFlashes: true } }),
+      );
+    });
+    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await waitProbe(page, 'p.load.ready === true', 90_000);
+    await page.locator('[data-ui="loading-start"]').click();
+    await waitProbe(page, "p.screen === 'home' && p.transition === null", 10_000);
+    await page.waitForTimeout(300);
+    await page.locator('[data-item="start"]').click();
+    await waitProbe(page, "p.screen === 'game' && p.transition === null && p.room.playing", 10_000);
+    const seconds = (f: Fade | undefined): number => ((f?.end ?? 0) - (f?.start ?? 0)) / 1000;
+    let a = await access(page);
+    const opening = a.fades.find((f) => f.source === 'loading-home');
+    const dive = a.fades.filter((f) => f.source === 'home-game' && f.end !== null).at(-1);
+    for (const f of [opening, dive]) {
+      expect(f?.peak, `${f?.source} came to full white`).not.toBeNull();
+      // (the record starts at the first white frame, a frame after the fade began)
+      expect(seconds(f), `${f?.source} lasts 0.5 s`).toBeGreaterThan(0.38);
+      expect(seconds(f)).toBeLessThan(0.65);
+    }
+    await page.waitForTimeout(500);
+
+    // Esc mashed for 4 s (the pause opens and closes as fast as it lets itself), then 4 s at a rhythm a full white could
+    // follow (every 0.35 s: without the gate, about 3 whites a second at the edge), then let go
+    const from = await page.evaluate(() => performance.now());
+    const pause0 = await probeOf<{ opened: number; closed: number }>(page, 'pause');
+    for (const [times, gap] of [
+      [80, 50],
+      [12, 350],
+    ] as const) {
+      for (let i = 0; i < times; i++) {
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(gap);
+      }
+    }
+    const to = await page.evaluate(() => performance.now());
+    await page.waitForTimeout(1500);
+    a = await access(page);
+    const within = (ts: number[]): number[] => ts.filter((t) => t >= from && t <= to + 1500);
+    const mostInASecond = (ts: number[]): number => {
+      let most = 0;
+      for (const t0 of ts) most = Math.max(most, ts.filter((t) => t >= t0 && t < t0 + 1000).length);
+      return most;
+    };
+    // the full whites, and every top of the white at all (a fade turned back below its full white flashes as well)
+    const peaks = within(a.peaks);
+    const tops = within(a.tops);
+    const most = mostInASecond(peaks);
+    const mostTops = mostInASecond(tops);
+    const pause1 = await probeOf<{
+      opened: number;
+      closed: number;
+      sounds: { cue: string; rang: boolean }[];
+    }>(page, 'pause');
+    writeFileSync(
+      join(root, `artifacts/S-45/flash-gate-${backend}.json`),
+      JSON.stringify(
+        {
+          backend,
+          peaks: peaks.map((t) => Math.round(t - from)),
+          tops: tops.map((t) => Math.round(t - from)),
+          most,
+          mostTops,
+          pause0,
+          pause1,
+        },
+        null,
+        2,
+      ),
+    );
+    // Esc is still taken (the pause opened and closed again and again), each with its sound at once
+    expect(pause1.opened - pause0.opened).toBeGreaterThan(2);
+    expect(pause1.closed - pause0.closed).toBeGreaterThan(2);
+    expect(pause1.sounds.some((s) => s.cue === 'open' && s.rang)).toBe(true);
+    // it did go white, never more than 3 times in any second
+    expect(peaks.length).toBeGreaterThan(1);
+    expect(most, 'full whites in any one second').toBeLessThanOrEqual(3);
+    expect(mostTops, 'white tops (flashes) in any one second').toBeLessThanOrEqual(3);
+    // and it comes to rest (no white left)
+    expect(a.white).toBe(0);
     expect(errors).toEqual([]);
   });
 }

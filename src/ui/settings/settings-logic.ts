@@ -2,7 +2,7 @@ import { QUALITY_CHOICES } from '../../core/quality';
 import { glassEase } from '../../core/transition';
 import { MOUSE_SENSITIVITY_RANGE } from '../../game/input/gamepad';
 import { FOV_MAX, FOV_MIN } from '../../game/player/constants';
-import { fadeArrived, fadeStep, fadeWhite } from './fade';
+import { FadeCourse, type FlashGate, fadeArrived, fadeWhite, gatedStep, SIMPLE_FADE_SECONDS } from './fade';
 import { type Settings, TEXT_SIZES } from './settings-model';
 
 /**
@@ -445,6 +445,11 @@ export class PanelTimeline {
    * spreading. The time along it is the same either way, so the setting may change while the pane is open.
    */
   simple = false;
+  /** S-45 (発案者の判断 2026-10-29): the simple fade's length (0.5 s with 点滅を抑える as well) and the page's gate of full whites. */
+  fadeSeconds = SIMPLE_FADE_SECONDS;
+  gate: FlashGate | null = null;
+  /** (Esc during the fade turns it back: a top of its white, through the gate as well.) */
+  private readonly course = new FadeCourse();
 
   get phase(): PanelPhase {
     return this.phaseValue;
@@ -452,7 +457,7 @@ export class PanelTimeline {
 
   get value(): number {
     const u = this.t / PANEL_SECONDS;
-    if (this.simple) return fadeArrived(u) && this.t > 0 ? 1 : 0;
+    if (this.simple) return fadeArrived(u, this.phaseValue !== 'closing') && this.t > 0 ? 1 : 0;
     return glassEase(u);
   }
 
@@ -488,7 +493,9 @@ export class PanelTimeline {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
     // S-45: the simple fade lands on its middle (all white) for a frame when it would step over it
     const move = (by: number): number =>
-      this.simple ? fadeStep(this.t / PANEL_SECONDS, by / PANEL_SECONDS) * PANEL_SECONDS : this.t + by;
+      this.simple
+        ? gatedStep(this.t / PANEL_SECONDS, by / this.fadeSeconds, this.gate, this.course) * PANEL_SECONDS
+        : this.t + by;
     if (this.phaseValue === 'opening') {
       this.t = Math.min(PANEL_SECONDS, move(dt));
       if (this.t >= PANEL_SECONDS - 1e-9) {

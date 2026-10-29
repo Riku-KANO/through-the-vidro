@@ -28,7 +28,18 @@ export interface AccessProbe {
   fades: FadeRecord[];
   /** Dev hold (screenshots): a simple fade of the screens (読み込み→ホーム, 潜る) stands at this point of its time (0..1). */
   hold: number | null;
+  /** performance.now() of each time the screen came to full white (the latest 60). */
+  peaks: number[];
+  /**
+   * performance.now() of each top of the screen's white (the latest 60): the frame where it stopped rising and then fell, at any
+   * height — the full whites and the fades turned back below them. Every flash.
+   */
+  tops: number[];
 }
+
+/** A white this full is the full white (settings/fade.ts FULL_WHITE). */
+const FULL = 0.999;
+const MAX_PEAKS = 60;
 
 export interface FadeSource {
   source: string;
@@ -57,10 +68,22 @@ export function createAccessLayer(root: HTMLElement): AccessLayer {
   dot.setAttribute('aria-hidden', 'true');
   // the dot under the white (the white covers all)
   root.append(dot, sheet);
-  const probe: AccessProbe = { reticle: false, white: 0, simple: false, fades: [], hold: null };
+  const probe: AccessProbe = {
+    reticle: false,
+    white: 0,
+    simple: false,
+    fades: [],
+    hold: null,
+    peaks: [],
+    tops: [],
+  };
   const running = new Map<string, FadeRecord>();
   let shownWhite = -1;
   let shownDot = false;
+  let wasFull = false;
+  let was = 0;
+  let wasAt = 0;
+  let rising = false;
   return {
     probe,
     update(fades, reticle, simple) {
@@ -77,7 +100,7 @@ export function createAccessLayer(root: HTMLElement): AccessLayer {
         }
         if (!r) continue;
         if (f.reversed) r.reversed = true;
-        if (f.white >= 0.999) r.peak ??= now;
+        if (f.white >= FULL) r.peak ??= now;
         if (f.white <= 0) {
           r.end = now;
           running.delete(f.source);
@@ -93,6 +116,20 @@ export function createAccessLayer(root: HTMLElement): AccessLayer {
         shownDot = reticle;
         dot.classList.toggle('is-on', reticle);
       }
+      // each coming to full white (from below it) is a flash
+      const full = white >= FULL;
+      if (full && !wasFull) {
+        probe.peaks.push(now);
+        if (probe.peaks.length > MAX_PEAKS) probe.peaks.shift();
+      }
+      wasFull = full;
+      if (white < was && rising) {
+        probe.tops.push(wasAt);
+        if (probe.tops.length > MAX_PEAKS) probe.tops.shift();
+      }
+      if (white !== was) rising = white > was;
+      was = white;
+      wasAt = now;
       probe.white = white;
       probe.reticle = reticle;
       probe.simple = simple;

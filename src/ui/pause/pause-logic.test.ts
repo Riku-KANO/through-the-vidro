@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { glassEase } from '../../core/transition';
+import { CALM_FADE_SECONDS, FlashGate } from '../settings/fade';
 import {
   CONFIRM_ITEMS,
   focusedItem,
@@ -257,6 +258,41 @@ describe('S-45 PauseTimeline 簡易トランジション (遷移のルール 1: 
     t.holdAt(0.15);
     expect(t.white).toBeCloseTo(1, 6);
     expect(t.phase).toBe('opening');
+  });
+
+  it('with 点滅を抑える (発案者の判断 2026-10-29): Esc mashed is answered every time, and the white tops at most 3 times a second', () => {
+    for (const every of [0.03, 0.05, 0.1, 0.2, 0.35]) {
+      const t = new PauseTimeline();
+      const gate = new FlashGate();
+      gate.enabled = true;
+      t.simple = true;
+      t.fadeSeconds = CALM_FADE_SECONDS;
+      t.gate = gate;
+      const dt = 1 / 60;
+      const tops: number[] = [];
+      let was = 0;
+      let rising = false;
+      let next = 0;
+      let answered = 0;
+      for (let now = 0; now < 6; now += dt) {
+        if (now >= next) {
+          // Esc: opens what is closed or closing, closes what is open or opening
+          const opening = t.phase === 'closed' || t.phase === 'closing';
+          if (opening ? t.open() : t.close()) answered++;
+          next += every;
+        }
+        gate.tick(dt);
+        t.update(dt);
+        const w = t.white;
+        if (w < was && rising) tops.push(now);
+        if (w !== was) rising = w > was;
+        was = w;
+      }
+      expect(answered, `every ${every} s`).toBe(Math.ceil(6 / every));
+      for (const t0 of tops)
+        expect(tops.filter((x) => x >= t0 && x < t0 + 1).length, `every ${every} s`).toBeLessThanOrEqual(3);
+      expect(tops.length, `every ${every} s`).toBeGreaterThan(0);
+    }
   });
 });
 

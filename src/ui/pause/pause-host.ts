@@ -12,6 +12,7 @@ import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import { TRANSITIONS } from '../flow';
 import type { StringKey } from '../lang';
+import type { FlashGate } from '../settings/fade';
 import {
   ESC_ECHO_MS,
   focusedItem,
@@ -241,6 +242,15 @@ export class PauseHost {
    */
   set simple(on: boolean) {
     this.timeline.simple = on;
+  }
+
+  /**
+   * S-45 (発案者の判断 2026-10-29): the simple fade's length (0.5 s with 点滅を抑える as well) and the page's gate of full whites
+   * (src/ui/settings/fade.ts), set by the host.
+   */
+  setFade(seconds: number, gate: FlashGate | null): void {
+    this.timeline.fadeSeconds = seconds;
+    this.timeline.gate = gate;
   }
 
   /** S-45: how white the pause's fade makes the screen now. */
