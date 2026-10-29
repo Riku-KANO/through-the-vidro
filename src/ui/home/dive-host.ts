@@ -2,7 +2,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { dot, exp, mix, screenSize, screenUV, smoothstep, uniform, vec2, vec3 } from 'three/tsl';
 import * as THREE from 'three/webgpu';
 import { ownBackdropImage } from '../../core/glass';
-import { qualityPortOf } from '../../core/quality';
+import type { QualityScene } from '../../core/quality';
 import type { SandboxScene, SceneContext } from '../../core/scene';
 import { segment } from '../../core/transition';
 import type { DiveWorld } from '../../game/dive-world';
@@ -134,14 +134,25 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
   // S-43: the shell's quality. This host takes another preset in place (the world keeps everything: where the body
   // stands, the orb, the drops taken, the gates, what the light settled): the shell sets the render scale, the held picture
   // is drawn again. While the pause holds the picture, the shell gives the governor none of its frames.
-  const qualityPort = qualityPortOf(ctx);
-  const detachQuality =
-    qualityPort?.attach({
-      applyQuality: () => pause?.redraw(),
-      get idle() {
-        return pause?.still ?? false;
-      },
-    }) ?? null;
+  const qualityPort = ctx.qualityPort;
+  // S-48: the world takes what it can of the preset at once (the prologue room: the peek image's scale, the anti-aliasing)
+  const worldQuality = world as DiveWorld & Partial<Pick<QualityScene, 'applyQuality'>>;
+  const detachQuality = qualityPort.attach({
+    applyQuality: (level, preset) => {
+      worldQuality.applyQuality?.(level, preset);
+      pause?.redraw();
+    },
+    get idle() {
+      return pause?.still ?? false;
+    },
+    // S-48: the player's 自動 measures while the game itself is drawn (standing in it), not the light home orb
+    get drawsGame() {
+      return playing;
+    },
+    // S-48: the game (the prologue room: a world that takes the preset's own parts), not S-04's placeholder city: the first
+    // time's 自動 runs, and its pick is kept, for the game alone
+    game: typeof worldQuality.applyQuality === 'function',
+  });
   // S-45: the page's one gate of full whites (簡易トランジション with 点滅を抑える: no more than 3 a second)
   const flashGate = new FlashGate();
   // (the screens' fade turned back by Esc: a top of its white, through the gate as well)
@@ -705,7 +716,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       window.__vidro.sceneProbe = {};
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onMove);
-      detachQuality?.();
+      detachQuality();
       access.dispose();
       loading.dispose();
       menu.dispose();

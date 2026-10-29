@@ -95,7 +95,7 @@ for (const backend of backends) {
     test.setTimeout(120_000);
     mkdirSync(shotDir, { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=home-dive&autoplay=1&pause=${pauseParam}${webgl}`);
+    await page.goto(`/?scene=home-dive&quality=mid&autoplay=1&pause=${pauseParam}${webgl}`);
 
     const shots: Record<string, { mean: number; dark: number }> = {};
     const snap = async (name: string): Promise<void> => {
@@ -142,7 +142,7 @@ for (const backend of backends) {
     test.setTimeout(120_000);
     mkdirSync(join(root, 'artifacts/S-04'), { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=home-dive&autoplay=1${webgl}`);
+    await page.goto(`/?scene=home-dive&quality=mid&autoplay=1${webgl}`);
     await waitProbe(page, "p.screen === 'game' && p.transition === null", 60_000);
     await page.waitForTimeout(500);
     const p = await probe(page);
@@ -174,7 +174,7 @@ test.describe('S-04 input', () => {
   }) => {
     test.setTimeout(90_000);
     const errors = collectErrors(page);
-    await page.goto('/?scene=home-dive');
+    await page.goto('/?scene=home-dive&quality=mid');
     await waitProbe(page, 'p.load.ready === true', 60_000);
     const startDrop = page.locator('[data-ui="loading-start"]');
     await expect(startDrop).toBeVisible();
@@ -220,7 +220,7 @@ test.describe('S-04 input', () => {
   }) => {
     test.setTimeout(90_000);
     const errors = collectErrors(page);
-    await page.goto('/?scene=home-dive');
+    await page.goto('/?scene=home-dive&quality=mid');
     await waitProbe(page, 'p.load.ready === true', 60_000);
     // 「はじめる」 floats up once the vessel is full and takes the keyboard focus
     await expect(page.locator('[data-ui="loading-start"]')).toBeFocused({ timeout: 10_000 });

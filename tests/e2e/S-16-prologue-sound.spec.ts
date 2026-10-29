@@ -238,7 +238,7 @@ for (const backend of backends) {
     mkdirSync(shotDir, { recursive: true });
     mkdirSync(join(root, 'artifacts/S-16'), { recursive: true });
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
 
     // 読み込み: silent until the player presses 「はじめる」 (the first gesture). The AudioContext is not even
     // made before it, so the browser has nothing to warn about (autoplay)

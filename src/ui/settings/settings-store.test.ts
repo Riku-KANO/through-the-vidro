@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings } from './settings-model';
 import {
+  AUTO_PICK_KEY,
+  readAutoPick,
   readSavedQuality,
   readSettings,
   SETTINGS_KEY,
   SettingsStore,
   type StorageLike,
+  writeAutoPick,
   writeSettings,
 } from './settings-store';
 
@@ -120,5 +123,51 @@ describe('SettingsStore (保存できない環境でも遊べ、そのときは�
     const store = new SettingsStore(() => new MemoryStorage(), defaults);
     store.save({ ...store.settings, fov: 300 });
     expect(store.settings.fov).toBe(100);
+  });
+});
+
+describe('S-48: 自動’s pick (選ばれたプリセットを保存し、次に開いたときはそのプリセットで作る)', () => {
+  it('nothing picked yet: null; reads back what was kept', () => {
+    const storage = new MemoryStorage();
+    expect(readAutoPick(() => storage)).toBeNull();
+    expect(writeAutoPick(() => storage, 'low')).toBe(true);
+    expect(readAutoPick(() => storage)).toBe('low');
+    expect(writeAutoPick(() => storage, 'high')).toBe(true);
+    expect(readAutoPick(() => storage)).toBe('high');
+  });
+
+  it('kept apart from the settings: neither write wipes the other (the shell and the panel keep them at their own times)', () => {
+    const storage = new MemoryStorage();
+    writeAutoPick(() => storage, 'low');
+    const store = new SettingsStore(() => storage, defaults);
+    store.save({ ...store.settings, fov: 88 });
+    expect(readAutoPick(() => storage)).toBe('low');
+    writeAutoPick(() => storage, 'mid');
+    expect(readSettings(() => storage, defaults).settings.fov).toBe(88);
+    expect(readSavedQuality(() => storage)).toBeNull();
+    expect(storage.map.has(AUTO_PICK_KEY)).toBe(true);
+    expect(AUTO_PICK_KEY).not.toBe(SETTINGS_KEY);
+  });
+
+  it('a broken, foreign or unknown entry reads as none (and does not throw)', () => {
+    const storage = new MemoryStorage();
+    storage.map.set(AUTO_PICK_KEY, '{not json');
+    expect(readAutoPick(() => storage)).toBeNull();
+    storage.map.set(AUTO_PICK_KEY, JSON.stringify({ v: 99, level: 'high' }));
+    expect(readAutoPick(() => storage)).toBeNull();
+    storage.map.set(AUTO_PICK_KEY, JSON.stringify({ v: 1, level: 'ultra' }));
+    expect(readAutoPick(() => storage)).toBeNull();
+  });
+
+  it('where nothing can be kept or read: false and null, never a throw (遊べる)', () => {
+    expect(writeAutoPick(() => new MemoryStorage(true), 'low')).toBe(false);
+    expect(writeAutoPick(() => null, 'low')).toBe(false);
+    expect(
+      writeAutoPick(() => {
+        throw new DOMException('denied', 'SecurityError');
+      }, 'low'),
+    ).toBe(false);
+    expect(readAutoPick(() => new MemoryStorage(false, true))).toBeNull();
+    expect(readAutoPick(() => null)).toBeNull();
   });
 });

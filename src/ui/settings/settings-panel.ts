@@ -1,6 +1,8 @@
+import type { QualityLevel } from '../../core/quality';
 import type { StringKey } from '../lang';
 import type { KeysFocus } from './keys-logic';
 import { KeysPage, type KeysView } from './keys-page';
+import { autoTagWords } from './quality-row';
 import {
   CONTROLS,
   type PanelFocus,
@@ -57,10 +59,15 @@ export interface PanelView {
   values: Settings;
   /** The line telling that nothing can be kept: 0..1 shown. */
   notice: number;
-  /** The preset in use is not the one the scene was made with: part of it waits for the next time (S-43). */
+  /**
+   * The preset in use is not the one the scene was made with: part of it waits for the next time (S-43; S-48: the shadows
+   * and the glass alone, quality-row.ts).
+   */
   qualityLater: boolean;
   /** S-45: the key page, shown in place of the tab's rows (null: not open). */
   keys?: KeysView | null;
+  /** S-48: 自動 is chosen: the preset it uses now, on its tag (自動（高）); else null. */
+  autoLevel: QualityLevel | null;
 }
 
 interface RowParts {
@@ -158,12 +165,16 @@ export class SettingsPanel {
   private readonly keysPage: KeysPage;
   private readonly foot: HTMLElement;
   private keysShown = false;
+  /** S-48: the words in use (the 自動 tag is written again when its preset changes), and the preset it shows. */
+  private t: (k: StringKey) => string;
+  private autoShown: QualityLevel | null = null;
 
   constructor(
     root: HTMLElement,
     t: (k: StringKey) => string,
     private readonly events: PanelEvents,
   ) {
+    this.t = t;
     this.el = document.createElement('div');
     this.el.className = 'vd-settings';
     this.el.dataset.ui = 'settings';
@@ -286,6 +297,14 @@ export class SettingsPanel {
     this.keysPage.relabel(t);
     for (const b of this.el.querySelectorAll<HTMLElement>('[data-keys-open]'))
       b.textContent = t('setKeysOpen');
+    this.t = t;
+    this.writeAutoTag();
+  }
+
+  /** S-48: the 自動 tag's words, with the preset it uses when it is chosen (自動（高）). */
+  private writeAutoTag(): void {
+    const o = this.rows.get('quality')?.options.find((x) => x.value === 'auto');
+    if (o) o.el.textContent = autoTagWords(this.t, this.autoShown);
   }
 
   /** Moves the browser's focus onto the focused tab or row (screen readers and Tab follow). */
@@ -383,6 +402,10 @@ export class SettingsPanel {
       });
     }
     this.qualityLater.hidden = !view.qualityLater;
+    if (view.autoLevel !== this.autoShown) {
+      this.autoShown = view.autoLevel;
+      this.writeAutoTag();
+    }
     const focused = view.interactive ? this.elementOf(view.focus) : null;
     // the rows are written only when what they show changed (the values are replaced on every change, never edited)
     if (focused === this.drawnFocus && view.values === this.drawnValues) return;

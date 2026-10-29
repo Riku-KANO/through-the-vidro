@@ -691,7 +691,7 @@ for (const backend of backends) {
   }) => {
     test.setTimeout(150_000);
     const errors = collectErrors(page);
-    await page.goto(`/?scene=prologue-proto${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid${webgl}`);
     await waitHome(page, 'p.load.ready === true', 90_000);
     expect((await sound(page)).ambience.playing).toBe(false);
     await page.locator('[data-ui="loading-start"]').click();

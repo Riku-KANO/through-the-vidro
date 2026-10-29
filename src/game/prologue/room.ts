@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { drawsGlass, readsBackdrop, withGlassUnculled } from '../../core/glass';
+import type { QualityLevel, QualityPreset } from '../../core/quality';
 import type { SceneContext } from '../../core/scene';
 import { glassEaseInverse } from '../../core/transition';
 import type { FieldSphere } from '../../layers/field';
@@ -283,6 +284,8 @@ export interface RoomProbe {
    * the same; S-44: and the landmarks' (常に見える目印).
    */
   peekFar: { far: number; leftOut: number; leftOutBack: number; keptBack: number; keptLandmarks: number };
+  /** S-48: the peek image's scale and size and the finishing's anti-aliasing, as the preset in use makes them now. */
+  peekQuality: PeekPipeline['quality'];
   triangles: number;
   orbScreen: { x: number; y: number; r: number; visible: boolean };
   /** S-45: the accessibility settings as the room took them (歩行の揺れ, 歪み, 点滅を抑える, コントラスト強化). */
@@ -433,6 +436,8 @@ export interface PrologueRoom extends DiveWorld {
   relock(): void;
   /** S-43: the player's settings (視野角, 覗く, マウスの感度, 上下の反転; the prompt's language, size, contrast), at once. */
   applySettings(settings: WorldSettings): void;
+  /** S-48: another preset in play (core/quality.ts QualityScene): the peek image's scale and the anti-aliasing, at once. */
+  applyQuality(level: QualityLevel, preset: Readonly<QualityPreset>): void;
 }
 
 /** 仮: how long the vidro glows after the light drop reaches it. */
@@ -612,6 +617,8 @@ interface BuiltRoom {
   setHeld(held: boolean): void;
   relock(): void;
   applySettings(settings: WorldSettings): void;
+  /** S-48: the peek image's scale and the anti-aliasing of another preset. */
+  applyQuality(preset: Readonly<QualityPreset>): void;
   /** S-42: where play stands — the eye, a point it looks at, and the haze there. */
   eyePose(outPos: THREE.Vector3, outTarget: THREE.Vector3, outFog: { near: number; far: number }): void;
   update(dt: number, t: number): void;
@@ -709,6 +716,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     triangles: 0,
     fallRescues: 0,
     peekFar: { far: 0, leftOut: 0, leftOutBack: 0, keptBack: 0, keptLandmarks: 0 },
+    peekQuality: { peekScale: 0, antialias: 'none', backWidth: 0, backHeight: 0 },
     orbScreen: { x: 0, y: 0, r: 0, visible: false },
     access: { headBob: 1, distortion: 1, calm: false, contrast: false, bloom: null },
     autoplay: opts.autopilot
@@ -815,6 +823,8 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
   let held = false;
   // S-43: the player's settings, kept for the room once it is built
   let settings: WorldSettings | null = null;
+  // S-48: a preset switched to in play before the room was built
+  let quality: Readonly<QualityPreset> | null = null;
   const eye = { pos: new THREE.Vector3(), target: new THREE.Vector3(), fog: { near: 0, far: 0 } };
   const landing: Pose = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
   dive.pose(1, landing.pos, landing.target);
@@ -862,6 +872,7 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
         b.setPlaying(playing);
         b.setHeld(held);
         if (settings) b.applySettings(settings);
+        if (quality) b.applyQuality(quality);
       });
       return building;
     },
@@ -890,6 +901,10 @@ export function createPrologueRoom(ctx: SceneContext, opts: RoomOptions): Prolog
     applySettings(s) {
       settings = s;
       built?.applySettings(s);
+    },
+    applyQuality(_level, preset) {
+      quality = preset;
+      built?.applyQuality(preset);
     },
     dispose() {
       disposed = true;
@@ -977,6 +992,7 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
     // S-41: the peek image ends where the haze does (peekFarOf; dev: ?peekFar=<m>, for measuring)
     peekFar: () => peekFarOverride ?? peekFarOf(art.fogRange.far.value),
   });
+  probe.peekQuality = pipeline.quality;
 
   probe.workshop = workshopProbe(workshop, workshopTriangles, camera);
   if (trial) probe.trial = { segments: trial.segments.length, off: 0 };
@@ -1894,6 +1910,9 @@ async function buildRoom(ctx: SceneContext, opts: RoomOptions, shell: Shell): Pr
       prompt.style.border = s.contrast
         ? '2px solid rgba(255,255,255,.82)'
         : '1px solid rgba(255,255,255,.28)';
+    },
+    applyQuality(preset) {
+      pipeline.setQuality(preset);
     },
     eyePose(outPos, outTarget, outFog) {
       const e = player.eye;

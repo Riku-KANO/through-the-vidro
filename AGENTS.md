@@ -53,7 +53,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **見た目の確認**: スクリーンショットは必ず Read で開いて目で見る。数値が緑でも絵が設計の柱に反していれば未完了。
 - **シーン固有の検証**: シーンは `window.__vidro.sceneProbe` に状態（例: 覗いているか、実体化半径、プレイヤー位置）を公開できる。
   入力を送って状態を確かめるテストは `tests/e2e/<slice-id>.spec.ts` に書く。
-- **並列時の注意**: ブラウザセンサーのポートは worktree のパスから決まる（`SENSOR_PORT` で上書き可）。パスのハッシュなので並行の worktree と重なることがある（S-43 で 4371 が重なった）。起動で `Port … is already in use` や別の worktree の絵が出たら、`SENSOR_PORT` で別の番号にする。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
+- **並列時の注意**: ブラウザセンサーのポートは worktree のパスのハッシュの番号から、空いている最初の番号（`playwright.config.ts`、S-48。S-43 で並行の worktree と 4371 が重なった）。手で決めるときは `SENSOR_PORT`。ベンチのスクリプト（`scripts/lib/preview-server.mjs`）はまだハッシュの番号のままなので、重なったら `SENSOR_PORT` で別の番号にする。複数のセッションが同時に計測すると GPU を取り合うため、性能の数値は比べない。`scripts/bench-headed.mjs` は前後にほかの Playwright ブラウザを数え、いれば結果に「混雑」と書く。比較や判定に使う計測は `QUIET=1`（混雑なら中止）で、並列のセッションが止まっているときに取る。
 - **長い全検査の前に機械のスリープを止める（S-35）。** Mac がアイドルで Maintenance Sleep に入ると、ブラウザとテストの時計が 15 分ずつ止まり、
   無関係なテストが時間切れで落ちる。`caffeinate -i -s scripts/check.sh --full`。スリープの後は AudioContext の時計が進まないことがある
   （S-22・S-25 の生の音の検査が 0 で落ちる）。
@@ -79,6 +79,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   知らない名前で落ちる。音の表に載せない出来事は別のバスに流す（例: 締めの `room.finale`・`probe.finale`、ヒントの `room.hints`。S-39）。
 - **毎フレーム自分の見え方を決める物を名前で隠して比べるときは、子を隠す（S-41）。** 部屋は雫などの `visible` を毎フレーム決め直すので、
   e2e が物そのものを隠しても次のフレームで戻る（`tests/e2e/S-41-*` の `hookScene`）。
+- **ホームを通る e2e は品質を URL で決める（S-48）。** 決めないと初回の自動が着地の約 10 秒後に測って品質を変える（WebGPU のヘッドレスでは高へ）。自動そのものを確かめる e2e は `autoWindow`・`autoForce` で短く決める（`tests/e2e/S-48-quality.spec.ts`）。
 - **台本（autoplay）を伸ばしたら、まず `prologue/autopilot.test.ts` で Rapier とセッションに通す（S-40）。** 手の届かない所で押すと、
   ブラウザの通しは待ちの上限（10 分）まで止まる。単体なら数秒で分かる。
 - **fpsの扱い**: ヘッドレスのfpsは垂直同期で60に張り付く参考値。重さの比較は `scripts/bench-headed.mjs`（垂直同期なしのフレーム時間）で行い、ゲートの判定は推奨環境の実機での計測（S-07）で行う。
@@ -168,11 +169,17 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
   （`AudioGate.setVolume`）だけが書く。ポーズなど音を下げる演出は `setDuck(owner, channel, value)` か `duckStage(engine, owner)` に書く
   （持ち主ごとに掛け合わせる）。UI の音はゲートの `ui.startVoice`（UI の系統、`uiVoices` に数える）で鳴らし、エンジンの `startVoice` を
   直に使わない。
-- **遊ぶ途中で品質を変えるときは、シーンを作り直さない（S-43）。** 殻（main.ts）がシーンの文脈に `qualityPort` を渡し、作り直さずに
-  受けられるシーン（ホームの殻）は `qualityPortOf(ctx).attach` で `applyQuality` と `idle`（絵が止まっている間。殻は governor にフレームも
-  GPU 時間も渡さない）を知らせる。URL の `?quality=auto` だけは今までどおり作り直す（S-16・S-18 の片付けのセンサー）。品質は URL の
-  `?quality` が勝ち、なければ設定の保存（`readSavedQuality`。`?bench` のときは読まない）。今その場で変わるのは描画の倍率と動的解像度の
-  範囲だけで、ほかは次に作るときから（`QualityPort.sceneLevel`）。
+- **遊ぶ途中で品質を変えるときは、シーンを作り直さない（S-43、S-48）。** 殻（main.ts）がシーンの文脈に `qualityPort`（`SceneContext` の
+  必須の欄）を渡し、作り直さずに受けられるシーン（ホームの殻）は `ctx.qualityPort.attach` で `applyQuality` と `idle`（絵が止まっている間。
+  殻は governor にフレームも GPU 時間も渡さない）を知らせる。URL の `?quality=auto` だけは今までどおり作り直す（S-16・S-18 の片付けの
+  センサー）。品質は URL の `?quality` が勝ち、なければ設定の保存（`readSavedQuality`）、なければ自動（初回。前に自動が選んだプリセット
+  `readAutoPick` から作り、また測る。発案者の判断 2026-10-28）。`?bench` のときは中で固定し、保存を読まず書かない。プレイヤーの自動は
+  ゲームの絵を描いている間（`QualityScene.drawsGame`）だけ測り、決まったら推奨を覚える（`vidro.autoQuality`）。初回の自動と推奨を覚える
+  ことはゲームそのもの（`QualityScene.game`）だけで、開発用の場面は前の推奨で作り、測らない。今その場で変わるのは描画の倍率・動的解像度の
+  範囲・覗く像の倍率・仕上げの AA（`PeekPipeline.setQuality`）で、影の大きさとガラスの描き方は次に作るときから（`waitsForRebuild`）。
+- **一つのノードを二つの `RenderPipeline` の出力に入れない（S-48）。** ブルーム（`BloomNode`）などは組み立てのたびに `setup` が走って
+  内側の材質を作り直すので、出力ごとに組み立てると、使っていなかった方の組み立てが走った次のフレームでパイプラインを作り直す。出力を
+  切り替えたいときは、共有する部分を描画先に描く仕上げと、それを読む仕上げに分ける（`PeekPipeline` の `grade` と `aaPipelines`）。
 - **何が光るかは、ブルームのしきい値ではなく美術で決める（S-17）。** しきい値は線形の輝度 0.9（`PeekPipeline`、負荷シーン）。光として滲ませたい物
   （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
   光源が滲むかは、同じ視点を仕上げのブルームありと `finish=aa` で比べ、その辺りを照らす灯りを黒くして確かめる。点光源は真鍮から離す

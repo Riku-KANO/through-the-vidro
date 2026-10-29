@@ -369,7 +369,7 @@ for (const backend of backends) {
     mkdirSync(join(root, 'artifacts/S-36'), { recursive: true });
     const errors = collectErrors(page);
     await page.addInitScript(installTracer);
-    await page.goto(`/?scene=prologue-proto&autoplay=1&autoplayTo=area1&debug=1${webgl}`);
+    await page.goto(`/?scene=prologue-proto&quality=mid&autoplay=1&autoplayTo=area1&debug=1${webgl}`);
     // S-40: the script plays on through 部屋2 and 部屋3 and down the shortcut
     const done = await waitRoom(page, 'r.autoplay && r.autoplay.done && r.areas.area1.taken === 3', 600_000);
     expect(await page.evaluate(() => window.__vidro.backend)).toBe(backend);
