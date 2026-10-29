@@ -1,4 +1,5 @@
 import type * as THREE from 'three/webgpu';
+import type { Bindings } from './input/bindings';
 
 /**
  * The contract between the home → dive host (src/ui/home/dive-host.ts, S-04) and the game world it dives
@@ -67,4 +68,16 @@ export interface WorldSettings {
   contrast: boolean;
   /** The UI's typeface for that language (英語版: 細めのセリフ体), for the world's own words. */
   fontFamily: string;
+  /** S-45 歩行の揺れ: 0 (none) .. 1 (the weak bob as it was: 歩行時の上下の揺れはごく弱く、設定でオフにできる). */
+  headBob: number;
+  /** S-45 覗いたときの歪みの強さ (3D酔い対策): 0 .. 1 of the refraction and colour fringes through the orb. */
+  distortion: number;
+  /**
+   * S-45 光の点滅や強い閃光を抑えるモード: no flash that brightens the whole screen at once, nothing blinking more than 3 times a
+   * second (the placing wave, the sweep, the drop's light, the bloom, the fire). Whatever lights up later reads it too (S-46's
+   * colour wave): its clues stay in its shape and its sound.
+   */
+  reduceFlashes: boolean;
+  /** S-45 キーの割り当て: the input's bindings, and the keys the world's own words name (ゲーム中の操作表示). */
+  bindings: Bindings;
 }

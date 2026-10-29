@@ -15,10 +15,20 @@ import { LoadingScreen } from '../loading-screen';
 import { PauseHost } from '../pause/pause-host';
 import { pausableOf } from '../pause/port';
 import type { HomeDiveProbe, PhaseName, PhaseStats } from '../probe';
+import {
+  FadeCourse,
+  FlashGate,
+  fadeArrived,
+  fadeSecondsFor,
+  fadeWhite,
+  gatedStep,
+  simpleSpeed,
+} from '../settings/fade';
 import { SettingsHost } from '../settings/settings-host';
 import { defaultSettings } from '../settings/settings-model';
 import { browserStorage, SettingsStore } from '../settings/settings-store';
 import { createUiRoot } from '../styles';
+import { createAccessLayer, type FadeSource } from './access-layer';
 import { diveChoreography, HOME_COMPOSITION, openingChoreography } from './choreography';
 import { createLensUniforms } from './lens';
 import { createMembrane } from './membrane';
@@ -143,6 +153,10 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     // time's 自動 runs, and its pick is kept, for the game alone
     game: typeof worldQuality.applyQuality === 'function',
   });
+  // S-45: the page's one gate of full whites (簡易トランジション with 点滅を抑える: no more than 3 a second)
+  const flashGate = new FlashGate();
+  // (the screens' fade turned back by Esc: a top of its white, through the gate as well)
+  const flowCourse = new FadeCourse();
   // S-43: 設定, from the home's drop and the pause's item, over the picture behind
   const settings = new SettingsHost({
     root: ui.root,
@@ -161,6 +175,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     },
     onLayout: () => menu.invalidate(),
     onPicture: () => pause?.redraw(),
+    flashGate,
     onClosed: (from, back) => {
       // (from the home, a second Esc has nowhere further back to go)
       if (from === 'pause') pause?.settingsClosed(back);
@@ -186,10 +201,18 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
     release: false,
     phases: {},
   };
+  // S-45: the white of the simple fades over everything, and the dot in the middle of the screen (視点の基準)
+  const access = createAccessLayer(ui.root);
+  const fadeSources: [FadeSource, FadeSource, FadeSource, FadeSource] = [
+    { source: TRANSITIONS.loadingToHome.id, white: 0, reversed: false },
+    { source: TRANSITIONS.homeToGame.id, white: 0, reversed: false },
+    { source: 'pause', white: 0 },
+    { source: 'settings', white: 0 },
+  ];
   window.__vidro.sceneProbe = Object.assign(
     probe,
     pause ? { pause: pause.probe } : {},
-    { settings: settings.probe },
+    { settings: settings.probe, access: access.probe },
     opts.probeExtras ?? {},
   ) as unknown as Record<string, unknown>;
 
@@ -432,7 +455,33 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       recordFrame();
       elapsed += dt;
       runAutoplay(dt);
-      flow.update(feed(dt));
+      // S-45 簡易トランジション (kept: the loading's from the setting kept before the page opened): the screens' transitions
+      // run on their own clock that much faster, to last the white fade of 0.3 s; the access probe's hold stands one there
+      const simple = settings.current.simpleTransitions;
+      // 発案者の判断 (2026-10-29): with 点滅を抑える as well, every fade is 0.5 s and the tops of its white (its full white, and
+      // where Esc turns it back) pass the page's one gate (no more than 3 a second, however the keys are pressed)
+      const fade = fadeSecondsFor(settings.current.reduceFlashes);
+      flashGate.enabled = simple && settings.current.reduceFlashes;
+      flashGate.tick(dt);
+      if (pause) {
+        pause.simple = simple;
+        pause.setFade(fade, flashGate);
+      }
+      let flowDt = feed(dt);
+      const running = flow.transition;
+      if (simple && running && running.spec.seconds > 0) {
+        const s = running.spec.seconds;
+        // (landing on the fade's middle for a frame when it would step over it: the screen is all white there)
+        const u = running.elapsed / s;
+        flowDt =
+          Math.abs(
+            gatedStep(u, (running.direction * flowDt * simpleSpeed(s, fade)) / s, flashGate, flowCourse) - u,
+          ) * s;
+        const hold = access.probe.hold;
+        if (hold !== null && running.direction === 1)
+          flowDt = Math.max(0, Math.min(flowDt, hold * s - running.elapsed));
+      }
+      flow.update(flowDt);
       const tr = flow.transition;
       const nowPlaying = flow.screen === 'game' && !tr;
       if (nowPlaying !== playing) {
@@ -449,10 +498,13 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
         menu.focusItem(menu.focused ?? probe.selected ?? 'start');
       hadTransition = tr !== null;
 
-      // where each transition stands
+      // where each transition stands (S-45: under the simple fade, where it came from until the white is full, then where it
+      // goes — the dive's flight and the opening's clearing are not played)
+      const at = (t: NonNullable<typeof tr>): number =>
+        simple ? (fadeArrived(t.progress, t.direction === 1) && t.progress > 0 ? 1 : 0) : t.value;
       const openingP =
-        tr?.spec.id === TRANSITIONS.loadingToHome.id ? tr.value : flow.screen === 'loading' ? 0 : 1;
-      const diveP = tr?.spec.id === TRANSITIONS.homeToGame.id ? tr.value : flow.screen === 'game' ? 1 : 0;
+        tr?.spec.id === TRANSITIONS.loadingToHome.id ? at(tr) : flow.screen === 'loading' ? 0 : 1;
+      const diveP = tr?.spec.id === TRANSITIONS.homeToGame.id ? at(tr) : flow.screen === 'game' ? 1 : 0;
       const op = openingChoreography(openingP);
       const dv = diveChoreography(diveP);
 
@@ -589,6 +641,18 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       probe.dive.distortion = dv.distortion;
       probe.dive.inner = dv.inner;
       probe.paused = paused;
+
+      // S-45: the white of the simple fades (the screens', the pause's, the panel's) and the dot while playing (the same
+      // records each frame: nothing is made per frame)
+      const flowWhite = simple && tr ? fadeWhite(tr.progress) : 0;
+      const [opening, dive, pausing, panel] = fadeSources;
+      opening.white = tr?.spec.id === opening.source ? flowWhite : 0;
+      dive.white = tr?.spec.id === dive.source ? flowWhite : 0;
+      opening.reversed = dive.reversed = tr?.direction === -1;
+      pausing.white = pause?.white ?? 0;
+      panel.white = settings.white;
+      const pauseUp = pause !== null && pause.probe.phase !== 'closed';
+      access.update(fadeSources, settings.current.reticle && playing && !pauseUp && !settings.isUp, simple);
     },
     render() {
       const phase = phaseOf();
@@ -653,6 +717,7 @@ export function createHomeDive(ctx: SceneContext, world: DiveWorld, opts: HomeDi
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointermove', onMove);
       detachQuality();
+      access.dispose();
       loading.dispose();
       menu.dispose();
       settings.dispose();

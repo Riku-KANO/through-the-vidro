@@ -11,10 +11,8 @@ import {
   max,
   min,
   mix,
-  normalView,
   normalWorld,
   positionView,
-  positionViewDirection,
   positionWorld,
   positionWorldDirection,
   pow,
@@ -40,6 +38,7 @@ import type { QualityPreset } from '../../core/quality';
 import type { LayerField } from '../../layers/field';
 import type { Box } from '../../layers/footing';
 import type { LayerKind } from '../../layers/layers';
+import { fireBreath, focusCore, focusRim, WORLD_ACCESS } from '../area/access';
 import { bakedLightGain, FIRE_LIGHT_LAYER } from '../assets/baked-light';
 import { HAND_ORB_RADIUS } from '../orb/hand-pose';
 import type { MeshData } from '../player/walk-lab-field';
@@ -528,11 +527,8 @@ export function buildRoomArt(
   const lampMilk = glass('milky', { glow: { color: 0xffbf80, intensity: 1.5 } });
   const cupMilk = glass('milky', { glow: { color: 0xffd2a0, intensity: 1.1 } });
   const focus = { orb: uniform(0), pedestal: uniform(0), drop: uniform(0) };
-  // a soft warm rim, strongest edge-on, for whatever can be acted on right now
-  const rimLight = (strength: typeof focus.orb) =>
-    vec3(1.0, 0.82, 0.58).mul(
-      pow(float(1).sub(abs(dot(normalView, positionViewDirection))), 2.5).mul(strength),
-    );
+  // a soft warm rim, strongest edge-on, for whatever can be acted on right now (S-45: thicker and brighter with コントラスト強化)
+  const rimLight = (strength: typeof focus.orb) => focusRim(strength);
   const cupNode = cupMilk as THREE.MeshPhysicalNodeMaterial;
   cupNode.emissiveNode = (cupNode.emissiveNode as THREE.Node<'vec3'>).add(rimLight(focus.pedestal).mul(1.6));
   const lanternMilk = glass('milky', { glow: { color: 0xffb46a, intensity: 1.2 } });
@@ -863,7 +859,7 @@ export function buildRoomArt(
         28,
       );
     const coreMat = keep(new THREE.MeshBasicNodeMaterial());
-    coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(focus.drop.mul(0.5).add(1)), 1);
+    coreMat.colorNode = vec4(vec3(2.4, 1.9, 1.25).mul(focusCore(focus.drop)), 1);
     drop.add(mesh(shape(0.55), coreMat));
     drop.add(mesh(shape(1), glass('iridescent', { role: 'drop', placement: 'near', thickness: 0.06 })));
     drop.position.set(...DROP);
@@ -968,11 +964,8 @@ export function buildRoomArt(
     animate(t) {
       ghostTime.value = t;
       // a fire breathes: a few slow, unrelated waves (no strobe). S-37: the fire's light baked apart (the floor and the
-      // furniture round the furnace) breathes with it
-      const breath =
-        1 +
-        FIRE_FLICKER *
-          (0.5 * Math.sin(t * 2.3) + 0.3 * Math.sin(t * 5.9 + 1.3) + 0.2 * Math.sin(t * 11.7 + 0.4));
+      // furniture round the furnace) breathes with it. S-45: with 点滅を抑える, only its slowest wave, shallower
+      const breath = fireBreath(t, FIRE_FLICKER, WORLD_ACCESS.calm.value > 0.5);
       fire.intensity = FIRE_INTENSITY * breath;
       bakedFire.value = breath;
       for (let i = 0; i < MOTES; i++) {

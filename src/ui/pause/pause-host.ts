@@ -12,6 +12,7 @@ import { readFirstPad } from '../../game/input/gamepad';
 import type { AudioGate } from '../audio-gate';
 import { TRANSITIONS } from '../flow';
 import type { StringKey } from '../lang';
+import type { FlashGate } from '../settings/fade';
 import {
   ESC_ECHO_MS,
   focusedItem,
@@ -75,6 +76,8 @@ export interface PauseProbe {
   hold: number | null;
   /** The settings are open over the pause (S-43): its keys and pad are the panel's. */
   yielded: boolean;
+  /** S-45 簡易トランジション: how white the pause's fade makes the screen now (0 under the frost's own). */
+  white: number;
   /** Asks for the pause as the world's input would (tests: the autopilot holds the input). */
   ask(): void;
 }
@@ -178,6 +181,7 @@ export class PauseHost {
       away: 0,
       hold: null,
       yielded: false,
+      white: 0,
       ask() {
         host.request();
       },
@@ -230,6 +234,28 @@ export class PauseHost {
   /** The time stands under the pause (the shell gives no GPU time to its governor then: S-43). */
   get still(): boolean {
     return this.frozen;
+  }
+
+  /**
+   * S-45 簡易トランジション: the pause opens and closes as a white fade of 0.3 s (遷移のルール 1). Set by the host from the
+   * settings (it may change while the pause is open: the settings over it).
+   */
+  set simple(on: boolean) {
+    this.timeline.simple = on;
+  }
+
+  /**
+   * S-45 (発案者の判断 2026-10-29): the simple fade's length (0.5 s with 点滅を抑える as well) and the page's gate of full whites
+   * (src/ui/settings/fade.ts), set by the host.
+   */
+  setFade(seconds: number, gate: FlashGate | null): void {
+    this.timeline.fadeSeconds = seconds;
+    this.timeline.gate = gate;
+  }
+
+  /** S-45: how white the pause's fade makes the screen now. */
+  get white(): number {
+    return this.timeline.white;
   }
 
   /** The settings opened from the pause have closed: the items are written again, on 設定 (来たときの動きの逆再生). */
@@ -324,6 +350,7 @@ export class PauseHost {
     p.ducked = this.timeline.frost;
     p.away = this.awayAmount;
     p.yielded = this.yielded;
+    p.white = this.timeline.white;
   }
 
   dispose(): void {

@@ -91,7 +91,7 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 | `src/core/` | 共通部品（描画の初期化、品質プリセット、計測、ガラス材質、遷移の曲線、音の仕組み `core/audio`）。案2と共有。ゲーム固有の規則や調整値は持たない | 変更は CHANGELOG に記録 |
 | `src/layers/` | 表と裏の層、実体化 | S-02 |
 | `src/game/` | 手の玉、プレイヤー、入力、ギミック、進行、セーブ | S-02, S-03 |
-| `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主）、ポーズ（`pause/`）、設定（`settings/`、保存は `settings-store.ts`） | S-04, S-18, S-42, S-43 |
+| `src/ui/` | DOMの画面と言語ファイル、AudioGate（ページの音のエンジンの持ち主）、ポーズ（`pause/`）、設定（`settings/`、保存は `settings-store.ts`、キーの割り当て `keys-*`、簡易トランジション `fade.ts`） | S-04, S-18, S-42, S-43, S-45 |
 | `src/audio/` | このゲームの音の規則と調整値（音階、大きさ→音程、部屋の残響、ガラスの鳴り、ぽぺん、音量の初期値）、エンジンの作り方（`createVidroEngine`）、足音と環境音の合成のレシピ・予定表・調整値、炉の音・扉の風鈴と吹き込み。生成音楽は M1以降 | S-09, S-21, S-22, S-25 |
 | `src/scenes/<name>.scene.ts` | M0の検証用シーン。ファイルを足すだけで一覧とセンサーに載る | 各スライス |
 | `src/core/assets/` | glb の読み込み（GLTFLoader ＋ meshopt ＋ KTX2、材質をノードの材質へ）、焼いた光の受け口（`lightmap.ts`）。案2と共有 | 変更は CHANGELOG に記録 |
@@ -180,6 +180,15 @@ URLスイッチ: `scene` `bench=<秒>` `warmup=<秒>` `quality=low|mid|high|auto
 - **一つのノードを二つの `RenderPipeline` の出力に入れない（S-48）。** ブルーム（`BloomNode`）などは組み立てのたびに `setup` が走って
   内側の材質を作り直すので、出力ごとに組み立てると、使っていなかった方の組み立てが走った次のフレームでパイプラインを作り直す。出力を
   切り替えたいときは、共有する部分を描画先に描く仕上げと、それを読む仕上げに分ける（`PeekPipeline` の `grade` と `aaPipelines`）。
+- **世界の光や閃光を足すときは、点滅を抑える設定に従う（S-45）。** `WorldSettings.reduceFlashes`（部屋の中では uniform の
+  `WORLD_ACCESS.calm`、`src/game/area/access.ts`）を読み、オンのときは画面の平均の明るさを急に 10 % 以上上げない・1 秒に 3 回を超えて
+  明滅させない。光で伝えていた手がかりは形と音で残す（e2e は `tests/e2e/S-45-flashes.spec.ts` の窓の上がり幅）。調べられる物の縁の光は
+  `focusRim` で作る（コントラスト強化で太く明るくなる）。どれも uniform で切り替え、シェーダを作り直さない。
+- **新しい動作は、キーの割り当てに載せる（S-45）。** `REBINDABLE`（割り当ての一覧）、言語の `keyAct*`、押し続ける動作なら `HELD_ACTIONS`
+  （ホイールを入れない）に足す。操作表示の言葉は割り当てたキーから作る（`controlWords`）。Esc とパッドの Start・B は固定。
+- **新しい遷移は、簡易トランジションに従う（S-45）。** `src/ui/settings/fade.ts` の `fadeStep`・`fadeWhite`・`fadeArrived` で白いフェードに
+  置き換え、白をホームの殻の `access-layer` に渡す。時間は `gatedStep(u, du, ページの FlashGate, その遷移の FadeCourse)` で進め、長さは
+  `fadeSecondsFor(点滅を抑える)`（0.3 秒。点滅を抑えるもオンなら 0.5 秒で、白の頂は 1 秒に 3 回まで。発案者の判断 2026-10-29）。
 - **何が光るかは、ブルームのしきい値ではなく美術で決める（S-17）。** しきい値は線形の輝度 0.9（`PeekPipeline`、負荷シーン）。光として滲ませたい物
   （光源、光の雫）は合成の後でこれを超える明るさで描き、照らされた面と空はこれより下に置く。
   光源が滲むかは、同じ視点を仕上げのブルームありと `finish=aa` で比べ、その辺りを照らす灯りを黒くして確かめる。点光源は真鍮から離す

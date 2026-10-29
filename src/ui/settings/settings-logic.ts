@@ -2,6 +2,7 @@ import { QUALITY_CHOICES } from '../../core/quality';
 import { glassEase } from '../../core/transition';
 import { MOUSE_SENSITIVITY_RANGE } from '../../game/input/gamepad';
 import { FOV_MAX, FOV_MIN } from '../../game/player/constants';
+import { FadeCourse, type FlashGate, fadeArrived, fadeWhite, gatedStep, SIMPLE_FADE_SECONDS } from './fade';
 import { type Settings, TEXT_SIZES } from './settings-model';
 
 /**
@@ -26,24 +27,47 @@ export type SettingsRow =
   | 'ui'
   | 'lang'
   | 'textSize'
-  | 'contrast';
+  | 'contrast'
+  // S-45
+  | 'keys'
+  | 'headBob'
+  | 'reticle'
+  | 'distortion'
+  | 'reduceFlashes'
+  | 'simpleTransitions';
 
-/** What each tab holds (this slice's settings; キーの割り当て and the rest of accessibility come with S-45). */
+/**
+ * What each tab holds. S-45: キーの割り当て last under 操作 (a page of its own), and the rest of accessibility (3D酔い対策:
+ * 歩行の揺れ, 視点の基準の点, 覗いたときの歪み; 点滅を抑える; 簡易トランジション) after コントラスト強化.
+ */
 export const SETTINGS_ROWS: Readonly<Record<SettingsTab, readonly SettingsRow[]>> = {
   graphics: ['quality', 'fov'],
-  controls: ['peekMode', 'sensitivity', 'invertY'],
+  controls: ['peekMode', 'sensitivity', 'invertY', 'keys'],
   sound: ['master', 'sfx', 'ambience', 'ui'],
-  display: ['lang', 'textSize', 'contrast'],
+  display: [
+    'lang',
+    'textSize',
+    'contrast',
+    'headBob',
+    'reticle',
+    'distortion',
+    'reduceFlashes',
+    'simpleTransitions',
+  ],
 };
 
 export type Control =
   | { kind: 'choice'; options: readonly string[] }
   /** `step`: a key or the pad's press; `fine`: the pointer's resolution. */
   | { kind: 'slider'; min: number; max: number; step: number; fine: number }
-  | { kind: 'toggle' };
+  | { kind: 'toggle' }
+  /** S-45: a row that opens a page of its own (キーの割り当て) on Enter / A or a click. */
+  | { kind: 'page' };
 
 /** 仮 (S-43): the steps of the sliders. */
 const VOLUME_SLIDER: Control = { kind: 'slider', min: 0, max: 1, step: 0.05, fine: 0.01 };
+/** 仮 (S-45): 歩行の揺れ and 覗いたときの歪み, 0..100 % of what they were, a quarter a step. */
+const SHARE_SLIDER: Control = { kind: 'slider', min: 0, max: 1, step: 0.25, fine: 0.05 };
 
 export const CONTROLS: Readonly<Record<SettingsRow, Control>> = {
   quality: { kind: 'choice', options: QUALITY_CHOICES },
@@ -65,6 +89,12 @@ export const CONTROLS: Readonly<Record<SettingsRow, Control>> = {
   lang: { kind: 'choice', options: ['ja', 'en'] },
   textSize: { kind: 'choice', options: TEXT_SIZES },
   contrast: { kind: 'toggle' },
+  keys: { kind: 'page' },
+  headBob: SHARE_SLIDER,
+  reticle: { kind: 'toggle' },
+  distortion: SHARE_SLIDER,
+  reduceFlashes: { kind: 'toggle' },
+  simpleTransitions: { kind: 'toggle' },
 };
 
 export type RowValue = string | number | boolean;
@@ -93,6 +123,19 @@ export function rowValue(s: Settings, row: SettingsRow): RowValue {
       return s.textSize;
     case 'contrast':
       return s.contrast;
+    case 'keys':
+      // (a page, not a value: it never changes by a step)
+      return 'keys';
+    case 'headBob':
+      return s.headBob;
+    case 'reticle':
+      return s.reticle;
+    case 'distortion':
+      return s.distortion;
+    case 'reduceFlashes':
+      return s.reduceFlashes;
+    case 'simpleTransitions':
+      return s.simpleTransitions;
   }
 }
 
@@ -120,6 +163,18 @@ function withValue(s: Settings, row: SettingsRow, value: RowValue): Settings {
       return { ...s, textSize: value as Settings['textSize'] };
     case 'contrast':
       return { ...s, contrast: value as boolean };
+    case 'keys':
+      return s;
+    case 'headBob':
+      return { ...s, headBob: value as number };
+    case 'reticle':
+      return { ...s, reticle: value as boolean };
+    case 'distortion':
+      return { ...s, distortion: value as number };
+    case 'reduceFlashes':
+      return { ...s, reduceFlashes: value as boolean };
+    case 'simpleTransitions':
+      return { ...s, simpleTransitions: value as boolean };
   }
 }
 
@@ -153,6 +208,8 @@ export interface PanelStep {
   tabChanged: boolean;
   /** One step back: the panel closes (Esc / B). */
   close: boolean;
+  /** S-45: the row's own page opens (キーの割り当て). */
+  page?: 'keys';
 }
 
 export function rowAt(focus: PanelFocus): SettingsRow | null {
@@ -190,6 +247,8 @@ function nudge(s: Settings, row: SettingsRow, dir: -1 | 1): RowValue {
       return snap(c, (now as number) + dir * c.step, c.step === c.fine ? c.step : c.fine);
     case 'toggle':
       return dir > 0;
+    case 'page':
+      return now;
   }
 }
 
@@ -203,6 +262,7 @@ function press(s: Settings, row: SettingsRow): RowValue {
       return c.options[(i + 1) % c.options.length] ?? String(now);
     }
     case 'slider':
+    case 'page':
       return now;
     case 'toggle':
       return !now;
@@ -253,6 +313,8 @@ export function stepPanel(focus: PanelFocus, s: Settings, command: PanelCommand)
     case 'choose':
       if (!row)
         return rows.length > 0 ? step({ tab: focus.tab, row: 0 }, s, { moved: true }) : step(focus, s);
+      // S-45: a page's row opens its page
+      if (CONTROLS[row].kind === 'page') return step(focus, s, { page: 'keys' });
       return set(focus, s, row, press(s, row));
   }
 }
@@ -378,13 +440,30 @@ export type PanelPhase = 'closed' | 'opening' | 'open' | 'closing';
 export class PanelTimeline {
   private phaseValue: PanelPhase = 'closed';
   private t = 0;
+  /**
+   * S-45 簡易トランジション (fade.ts): the same 0.3 s as a white fade — the pane all there from the fade's middle, nothing
+   * spreading. The time along it is the same either way, so the setting may change while the pane is open.
+   */
+  simple = false;
+  /** S-45 (発案者の判断 2026-10-29): the simple fade's length (0.5 s with 点滅を抑える as well) and the page's gate of full whites. */
+  fadeSeconds = SIMPLE_FADE_SECONDS;
+  gate: FlashGate | null = null;
+  /** (Esc during the fade turns it back: a top of its white, through the gate as well.) */
+  private readonly course = new FadeCourse();
 
   get phase(): PanelPhase {
     return this.phaseValue;
   }
 
   get value(): number {
-    return glassEase(this.t / PANEL_SECONDS);
+    const u = this.t / PANEL_SECONDS;
+    if (this.simple) return fadeArrived(u, this.phaseValue !== 'closing') && this.t > 0 ? 1 : 0;
+    return glassEase(u);
+  }
+
+  /** S-45: how white the screen is under the simple fade (0 under the glass's own). */
+  get white(): number {
+    return this.simple ? fadeWhite(this.t / PANEL_SECONDS) : 0;
   }
 
   /** It takes commands once it is all there. */
@@ -412,14 +491,19 @@ export class PanelTimeline {
 
   update(dt: number): void {
     if (!(dt > 0) || !Number.isFinite(dt)) return;
+    // S-45: the simple fade lands on its middle (all white) for a frame when it would step over it
+    const move = (by: number): number =>
+      this.simple
+        ? gatedStep(this.t / PANEL_SECONDS, by / this.fadeSeconds, this.gate, this.course) * PANEL_SECONDS
+        : this.t + by;
     if (this.phaseValue === 'opening') {
-      this.t = Math.min(PANEL_SECONDS, this.t + dt);
+      this.t = Math.min(PANEL_SECONDS, move(dt));
       if (this.t >= PANEL_SECONDS - 1e-9) {
         this.t = PANEL_SECONDS;
         this.phaseValue = 'open';
       }
     } else if (this.phaseValue === 'closing') {
-      this.t = Math.max(0, this.t - dt);
+      this.t = Math.max(0, move(-dt));
       if (this.t <= 1e-9) {
         this.t = 0;
         this.phaseValue = 'closed';

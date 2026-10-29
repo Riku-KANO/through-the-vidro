@@ -1,5 +1,7 @@
 import type { QualityLevel } from '../../core/quality';
 import type { StringKey } from '../lang';
+import type { KeysFocus } from './keys-logic';
+import { KeysPage, type KeysView } from './keys-page';
 import { autoTagWords } from './quality-row';
 import {
   CONTROLS,
@@ -29,7 +31,9 @@ export type PanelTarget =
   | { kind: 'tab'; tab: number }
   | { kind: 'option'; row: SettingsRow; value: RowValue }
   | { kind: 'row'; row: SettingsRow }
-  | { kind: 'back' };
+  | { kind: 'back' }
+  /** S-45: a row's button that opens its page (キーの割り当て). */
+  | { kind: 'page'; row: SettingsRow };
 
 export interface PanelEvents {
   /** The pointer reached something that answers (ホバーすると膨らんで鳴る). */
@@ -40,6 +44,10 @@ export interface PanelEvents {
   onSlide(row: SettingsRow, fraction: number, done: boolean): void;
   /** The browser moved the focus (Tab) onto a tab or a row. */
   onFocus(focus: PanelFocus): void;
+  /** S-45: a cell or a button of the key page was clicked, the pointer reached one, the browser focused one (Tab). */
+  onKeysPick?(at: KeysFocus): void;
+  onKeysHover?(at: KeysFocus): void;
+  onKeysFocus?(at: KeysFocus): void;
 }
 
 export interface PanelView {
@@ -56,6 +64,8 @@ export interface PanelView {
    * and the glass alone, quality-row.ts).
    */
   qualityLater: boolean;
+  /** S-45: the key page, shown in place of the tab's rows (null: not open). */
+  keys?: KeysView | null;
   /** S-48: 自動 is chosen: the preset it uses now, on its tag (自動（高）); else null. */
   autoLevel: QualityLevel | null;
 }
@@ -90,6 +100,12 @@ const ROW_KEY: Readonly<Record<SettingsRow, StringKey>> = {
   lang: 'setLang',
   textSize: 'setTextSize',
   contrast: 'setContrast',
+  keys: 'setKeysRow',
+  headBob: 'setHeadBob',
+  reticle: 'setReticle',
+  distortion: 'setDistortion',
+  reduceFlashes: 'setReduceFlashes',
+  simpleTransitions: 'setSimpleTransitions',
 };
 
 /** The words of each option of the choices. */
@@ -109,6 +125,8 @@ const OPTION_KEY: Readonly<Record<string, StringKey>> = {
 
 /** Time a chosen option stays sunk (細部の振る舞い: 選ぶと弾けずに沈み込む). */
 const PRESS_SECONDS = 0.38;
+/** 仮 (S-45): how long a waiting cell shakes its head at a key it does not take. */
+const REFUSE_SECONDS = 0.26;
 
 /** How a slider's value reads. */
 function formatValue(row: SettingsRow, s: Settings): string {
@@ -140,8 +158,13 @@ export class SettingsPanel {
   private pointerY = Number.NaN;
   private sliding: { row: SettingsRow; track: HTMLElement; pointer: number } | null = null;
   private readonly pressed = new Map<HTMLElement, number>();
+  private readonly refused = new Map<HTMLElement, number>();
   /** Last values written to the DOM, by element and property. */
   private readonly last = new Map<HTMLElement, Map<string, string>>();
+  /** S-45: the key page and whether it is shown (in place of the tab's rows and the foot). */
+  private readonly keysPage: KeysPage;
+  private readonly foot: HTMLElement;
+  private keysShown = false;
   /** S-48: the words in use (the 自動 tag is written again when its preset changes), and the preset it shows. */
   private t: (k: StringKey) => string;
   private autoShown: QualityLevel | null = null;
@@ -222,7 +245,14 @@ export class SettingsPanel {
     this.notice.setAttribute('role', 'status');
     this.notice.textContent = t('setCannotSave');
     foot.append(this.back, this.keys);
-    this.body.append(foot);
+    // S-45: the key page, on the same pane in place of the tab's rows (and of this foot: it has its own 戻る)
+    this.keysPage = new KeysPage(t, {
+      onPick: (at) => this.events.onKeysPick?.(at),
+      onHover: (at) => this.events.onKeysHover?.(at),
+      onFocus: (at) => this.events.onKeysFocus?.(at),
+    });
+    this.foot = foot;
+    this.body.append(this.keysPage.el, foot);
     // the notice hangs under the pane (outside the body's clip), on its own frost, only while it is shown
     this.notice.hidden = true;
     this.el.append(this.glass, this.body, this.notice);
@@ -264,6 +294,9 @@ export class SettingsPanel {
     this.keys.textContent = t('setKeys');
     this.notice.textContent = t('setCannotSave');
     this.qualityLater.textContent = t('setQualityLater');
+    this.keysPage.relabel(t);
+    for (const b of this.el.querySelectorAll<HTMLElement>('[data-keys-open]'))
+      b.textContent = t('setKeysOpen');
     this.t = t;
     this.writeAutoTag();
   }
@@ -277,6 +310,30 @@ export class SettingsPanel {
   /** Moves the browser's focus onto the focused tab or row (screen readers and Tab follow). */
   focus(focus: PanelFocus): void {
     this.elementOf(focus)?.focus({ preventScroll: true });
+  }
+
+  /** S-45: the same on the key page. */
+  focusKeys(at: KeysFocus): void {
+    this.keysPage.focus(at);
+  }
+
+  /** S-45: a cell or a button of the key page sinks for a moment (選ぶと沈み込む). */
+  pressKeys(at: KeysFocus): void {
+    const el = this.keysPage.elementOf(at);
+    if (!el) return;
+    el.classList.add('is-pressed');
+    this.pressed.set(el, PRESS_SECONDS);
+  }
+
+  /** S-45: the cell that waits shakes its head a little (a key it does not take: 入力には必ず動きで応える). */
+  refuseKeys(at: KeysFocus): void {
+    const el = this.keysPage.elementOf(at);
+    if (!el) return;
+    // (restarted: the class off, a layout read, on again)
+    el.classList.remove('is-refused');
+    void el.offsetWidth;
+    el.classList.add('is-refused');
+    this.refused.set(el, REFUSE_SECONDS);
   }
 
   /** The option (or the tab) chosen sinks for a moment. */
@@ -298,6 +355,13 @@ export class SettingsPanel {
         this.pressed.delete(el);
       } else this.pressed.set(el, next);
     }
+    for (const [el, left] of this.refused) {
+      const next = left - dt;
+      if (next <= 0) {
+        el.classList.remove('is-refused');
+        this.refused.delete(el);
+      } else this.refused.set(el, next);
+    }
     if (!up) {
       if (this.sliding) this.sliding = null;
       this.setHover(null);
@@ -308,6 +372,24 @@ export class SettingsPanel {
     this.set(this.el, '--open', view.open.toFixed(3));
     this.notice.hidden = view.notice <= 0;
     this.set(this.notice, '--notice', view.notice.toFixed(3));
+
+    // S-45: the key page in place of the tab's rows and the foot (the tabs stay, 操作 shown)
+    const keys = view.keys ?? null;
+    if ((keys !== null) !== this.keysShown) {
+      this.keysShown = keys !== null;
+      this.foot.hidden = this.keysShown;
+      this.el.classList.toggle('is-keys', this.keysShown);
+      this.shownTab = -1;
+      this.drawnFocus = undefined;
+    }
+    this.keysPage.render(keys);
+    if (keys) {
+      this.pages.forEach((p) => {
+        p.el.hidden = true;
+      });
+      for (const tb of this.tabs) tb.el.classList.remove('is-focus');
+      return;
+    }
 
     if (view.focus.tab !== this.shownTab) {
       this.shownTab = view.focus.tab;
@@ -399,6 +481,19 @@ export class SettingsPanel {
       control.append(track, value);
       parts.track = track;
       parts.value = value;
+    } else if (c.kind === 'page') {
+      // S-45: a frosted tag that opens the row's page (キーの割り当て → 変える)
+      el.setAttribute('role', 'group');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'vd-settings__chip vd-settings__open';
+      b.dataset.keysOpen = '';
+      b.tabIndex = -1;
+      b.textContent = t('setKeysOpen');
+      b.addEventListener('click', () => {
+        if (this.enabled) this.events.onPick({ kind: 'page', row });
+      });
+      control.appendChild(b);
     } else {
       el.setAttribute('role', 'group');
       const options: { value: RowValue; key: StringKey }[] =
@@ -452,6 +547,8 @@ export class SettingsPanel {
         return this.rows.get(target.row)?.el ?? null;
       case 'back':
         return this.back;
+      case 'page':
+        return this.rows.get(target.row)?.el.querySelector<HTMLElement>('[data-keys-open]') ?? null;
     }
   }
 
@@ -476,6 +573,9 @@ export class SettingsPanel {
         if (parts.track === track) return { el: track, target: { kind: 'row', row: parts.row } };
     }
     if (el.closest('[data-settings-back]')) return { el: this.back, target: { kind: 'back' } };
+    const open = el.closest<HTMLElement>('[data-keys-open]');
+    const openRow = open?.closest<HTMLElement>('[data-row]')?.dataset.row;
+    if (open && openRow === 'keys') return { el: open, target: { kind: 'page', row: openRow } };
     return null;
   }
 

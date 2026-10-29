@@ -244,6 +244,7 @@ export class PeekPipeline {
       const block = at(-1, -1).add(at(1, -1)).add(at(-1, 1)).add(at(1, 1)).mul(0.25);
       const glow = bloom(block, BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD);
       glow.setResolutionScale(BLOOM_RESOLUTION);
+      this.bloomNode = glow;
       this.finishing.push(stored, glow);
       hdr = vec4(stored.rgb.add(glow.rgb), 1);
     }
@@ -272,6 +273,9 @@ export class PeekPipeline {
     this.pipeline = next;
     this.quality.antialias = preset.antialias;
     this.shrinkUnusedAA();
+    // S-45: the player's settings again on what the preset left (the bloom lives in `grade`, kept across the switch; this
+    // keeps 点滅を抑える's quieter bloom should a later preset make the finishing again)
+    if (this.access) this.setAccess(this.access);
   }
 
   /**
@@ -285,6 +289,31 @@ export class PeekPipeline {
   /** Render size in pixels (drawing buffer). */
   get renderSize(): Readonly<THREE.Vector2> {
     return this.size;
+  }
+
+  /**
+   * S-45: the finishing's bloom (its strength is a uniform), when the finishing has one. S-48: it is the bloom inside `grade`
+   * (made once; the anti-aliasing pipelines only read the display image).
+   */
+  private bloomNode: ReturnType<typeof bloom> | null = null;
+  /** S-45: the player's settings the frame took last (null: none yet). */
+  access: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number } | null = null;
+
+  /**
+   * S-45 (UI/UX設計 > アクセシビリティ, 3D酔い対策): the player's settings as the frame takes them — 覗いたときの歪みの強さ and
+   * コントラスト強化 in the orb's composite, 点滅を抑える as a quieter bloom (`calmBloom` of its strength). Uniforms only: no
+   * pipeline is made again.
+   */
+  setAccess(a: { distortion: number; contrast: boolean; calm: boolean; calmBloom: number }): void {
+    // (kept: a finishing made again later — S-48's setQuality — takes them again with setAccess(this.access))
+    this.access = a;
+    this.composite.setAccess(a);
+    if (this.bloomNode) this.bloomNode.strength.value = BLOOM_STRENGTH * (a.calm ? a.calmBloom : 1);
+  }
+
+  /** S-45 (sensor): the bloom's strength now (null without a bloom). */
+  get bloomStrength(): number | null {
+    return this.bloomNode ? (this.bloomNode.strength.value as number) : null;
   }
 
   /**

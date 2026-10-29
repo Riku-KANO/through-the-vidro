@@ -628,9 +628,10 @@ for (const backend of backends) {
     expect(g1.volumes?.ambience).toBeCloseTo(g1.sliders.ambience * (PAUSE_DUCK.ambience ?? 1), 6);
 
     // ---- 操作: 覗く 押すたびに切り替え; the mouse's sensitivity — the world takes them ----
-    // Q, from 音's last row: 操作's last (上下の反転); up twice to 覗く
+    // Q, from 音's last row: 操作's last (キーの割り当て, S-45); up three times to 覗く
     await page.keyboard.press('KeyQ');
-    await waitSettings(page, "q.tab === 'controls' && q.row === 'invertY'");
+    await waitSettings(page, "q.tab === 'controls' && q.row === 'keys'");
+    await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowUp');
     await page.keyboard.press('ArrowUp');
     await waitSettings(page, "q.row === 'peekMode'");

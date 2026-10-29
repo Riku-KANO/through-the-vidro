@@ -31,11 +31,37 @@ describe('the tabs and rows (画面ごとの設計: 設定 — タブは画質 /
     expect(SETTINGS_TABS).toEqual(['graphics', 'controls', 'sound', 'display']);
   });
 
-  it('puts the settings of this slice under them', () => {
+  it('puts the settings under them (S-45: the key page last under 操作, the rest of accessibility after コントラスト強化)', () => {
     expect(SETTINGS_ROWS.graphics).toEqual(['quality', 'fov']);
-    expect(SETTINGS_ROWS.controls).toEqual(['peekMode', 'sensitivity', 'invertY']);
+    expect(SETTINGS_ROWS.controls).toEqual(['peekMode', 'sensitivity', 'invertY', 'keys']);
     expect(SETTINGS_ROWS.sound).toEqual(['master', 'sfx', 'ambience', 'ui']);
-    expect(SETTINGS_ROWS.display).toEqual(['lang', 'textSize', 'contrast']);
+    expect(SETTINGS_ROWS.display).toEqual([
+      'lang',
+      'textSize',
+      'contrast',
+      'headBob',
+      'reticle',
+      'distortion',
+      'reduceFlashes',
+      'simpleTransitions',
+    ]);
+  });
+
+  it('S-45: 歩行の揺れ and 覗いたときの歪み are sliders 0..100 % (100 = as before); the point, the flashes and the fades toggles', () => {
+    for (const row of ['headBob', 'distortion'] as const) {
+      const c = CONTROLS[row];
+      expect(c.kind).toBe('slider');
+      if (c.kind === 'slider') {
+        expect(c.min).toBe(0);
+        expect(c.max).toBe(1);
+      }
+      expect(rowValue(base, row)).toBe(1);
+    }
+    for (const row of ['reticle', 'reduceFlashes', 'simpleTransitions'] as const) {
+      expect(CONTROLS[row].kind).toBe('toggle');
+      expect(rowValue(base, row)).toBe(false);
+    }
+    expect(CONTROLS.keys.kind).toBe('page');
   });
 
   it('品質 is 自動・低・中・高; 視野角 60〜100 度', () => {
@@ -88,7 +114,7 @@ describe('stepPanel: moving (キーボード・パッド操作)', () => {
     expect(s.focus.row).toBe(2);
     expect(stepPanel({ tab: 0, row: 1 }, base, 'prevTab').focus).toEqual({ tab: 3, row: 1 });
     // fewer rows on the new tab: the last of them
-    expect(stepPanel({ tab: 2, row: 3 }, base, 'nextTab').focus).toEqual({ tab: 3, row: 2 });
+    expect(stepPanel({ tab: 3, row: 6 }, base, 'nextTab').focus).toEqual({ tab: 0, row: 1 });
     expect(stepPanel({ tab: 0, row: -1 }, base, 'nextTab').focus).toEqual({ tab: 1, row: -1 });
   });
 
@@ -161,6 +187,33 @@ describe('stepPanel: changing (変更は即時反映)', () => {
     expect(rowValue(base, 'fov')).toBe(70);
     expect(rowValue(base, 'contrast')).toBe(false);
     expect(rowValue(base, 'ui')).toBe(1);
+  });
+
+  it('S-45: the new rows step as the others do', () => {
+    const bob = { tab: 3, row: 3 };
+    const less = stepPanel(bob, base, 'left');
+    expect(less.changed).toBe('headBob');
+    expect(less.settings.headBob).toBeLessThan(1);
+    expect(less.settings.headBob).toBeGreaterThan(0);
+    expect(stepPanel(bob, { ...base, headBob: 0 }, 'left').changed).toBeNull();
+    expect(setSlider(base, 'distortion', 0).distortion).toBe(0);
+    const flashes = stepPanel({ tab: 3, row: 6 }, base, 'choose');
+    expect(flashes.changed).toBe('reduceFlashes');
+    expect(flashes.settings.reduceFlashes).toBe(true);
+    expect(stepPanel({ tab: 3, row: 7 }, base, 'right').settings.simpleTransitions).toBe(true);
+    expect(stepPanel({ tab: 3, row: 4 }, base, 'right').settings.reticle).toBe(true);
+  });
+
+  it('S-45: the key page’s row opens its page on Enter / A; left / right change nothing there', () => {
+    const keys = { tab: 1, row: 3 };
+    expect(rowAt(keys)).toBe('keys');
+    const s = stepPanel(keys, base, 'choose');
+    expect(s.page).toBe('keys');
+    expect(s.changed).toBeNull();
+    expect(s.close).toBe(false);
+    expect(stepPanel(keys, base, 'right').changed).toBeNull();
+    expect(stepPanel(keys, base, 'right').page).toBeUndefined();
+    expect(stepPanel({ tab: 1, row: 2 }, base, 'choose').page).toBeUndefined();
   });
 });
 
@@ -289,5 +342,58 @@ describe('PanelTimeline (トランジション設計: 設定パネル — 曇り
     t.open();
     run(t, 0.3);
     expect(t.open()).toBe(false);
+  });
+
+  it('S-45 簡易トランジション: a white fade of 0.3 s, the pane all there from its middle (no spreading)', () => {
+    const t = new PanelTimeline();
+    t.simple = true;
+    expect(t.white).toBe(0);
+    t.open();
+    run(t, 0.075);
+    expect(t.value).toBe(0);
+    expect(t.white).toBeCloseTo(0.5, 2);
+    run(t, 0.08);
+    expect(t.value).toBe(1);
+    expect(t.white).toBeGreaterThan(0.9);
+    expect(t.interactive).toBe(false);
+    run(t, 0.15);
+    expect(t.phase).toBe('open');
+    expect(t.white).toBe(0);
+    expect(t.interactive).toBe(true);
+    // closing: the same fade, the pane gone from its middle
+    t.close();
+    run(t, 0.16);
+    expect(t.value).toBe(0);
+    expect(t.white).toBeGreaterThan(0.85);
+    run(t, 0.15);
+    expect(t.phase).toBe('closed');
+    expect(t.white).toBe(0);
+  });
+
+  it('S-45 簡易トランジション: answers at once (white within 0.1 s), and plays back from where it is (Esc は常に)', () => {
+    const t = new PanelTimeline();
+    t.simple = true;
+    t.open();
+    run(t, 0.05);
+    const w = t.white;
+    expect(w).toBeGreaterThan(0.2);
+    t.close();
+    expect(t.white).toBeCloseTo(w, 9);
+    run(t, 0.06);
+    expect(t.phase).toBe('closed');
+    expect(t.value).toBe(0);
+  });
+
+  it('S-45: switched to simple while open, it closes by the white fade; the glass fade has no white', () => {
+    const t = new PanelTimeline();
+    t.open();
+    run(t, 0.3);
+    expect(t.white).toBe(0);
+    t.simple = true;
+    expect(t.value).toBe(1);
+    t.close();
+    run(t, 0.2);
+    expect(t.value).toBe(0);
+    expect(t.white).toBeGreaterThan(0);
   });
 });
